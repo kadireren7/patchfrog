@@ -1,0 +1,73 @@
+name: patchfrog
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: patchfrog
+      POSTGRES_PASSWORD: patchfrog
+      POSTGRES_DB: patchfrog
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U patchfrog"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://patchfrog:patchfrog@postgres:5432/patchfrog
+      REDIS_URL: redis://redis:6379/0
+    # To use GITHUB_PRIVATE_KEY_PATH instead of an inline GITHUB_PRIVATE_KEY,
+    # bind-mount the real key file read-only and point the env var at its
+    # in-container path (the file's host permissions must allow the
+    # container's non-root "patchfrog" user to read it):
+    #   volumes:
+    #     - /absolute/path/to/your-github-app-key.pem:/run/secrets/github-app-key.pem:ro
+    #   environment:
+    #     GITHUB_PRIVATE_KEY_PATH: /run/secrets/github-app-key.pem
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: worker
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://patchfrog:patchfrog@postgres:5432/patchfrog
+      REDIS_URL: redis://redis:6379/0
+    # See the `api` service above for the GITHUB_PRIVATE_KEY_PATH bind-mount
+    # pattern — this is the process that actually calls the GitHub API with it.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

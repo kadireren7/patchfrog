@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.python-version
+build/
+dist/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Testing / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Docker
+docker/volumes/
+docker/data/
+# Machine-local overrides (e.g. a real GITHUB_PRIVATE_KEY_PATH bind mount) —
+# never commit a local filesystem layout to a public repo.
+docker-compose.override.yml
+
+# Local databases
+*.sqlite3
+*.db
+
+# Secrets
+*.pem
+*.key
+secrets/

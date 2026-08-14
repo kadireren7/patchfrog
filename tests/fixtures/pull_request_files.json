@@ -1,0 +1,24 @@
+[
+  {
+    "filename": "ft_strdup.c",
+    "status": "added",
+    "additions": 14,
+    "deletions": 0,
+    "patch": "@@ -0,0 +1,14 @@\n+#include \"libft.h\"\n+\n+char\t*ft_strdup(const char *s1)\n+{\n+\tchar\t*dup;\n+\tsize_t\ti;\n+\n+\tdup = malloc(ft_strlen(s1) + 1);\n+\tif (!dup)\n+\t\treturn (NULL);\n+\ti = 0;\n+\twhile (s1[i])\n+\t{\n+\t\tdup[i] = s1[i];\n+\t\ti++;\n+\t}\n+\treturn (dup);\n+}"
+  },
+  {
+    "filename": "Makefile",
+    "status": "modified",
+    "additions": 1,
+    "deletions": 1,
+    "patch": "@@ -10,4 +10,4 @@ SRCS =\tft_strlen.c \\\n-\tft_strcpy.c\n+\tft_strcpy.c ft_strdup.c"
+  },
+  {
+    "filename": "libft.h",
+    "previous_filename": "libft.h",
+    "status": "renamed",
+    "additions": 0,
+    "deletions": 0,
+    "patch": null
+  }
+]

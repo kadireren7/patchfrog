@@ -1,0 +1,31 @@
+{
+  "action": "synchronize",
+  "number": 14,
+  "before": "8ad712fa9c1e4b6d8f0a2b3c4d5e6f708192a3b4",
+  "after": "9be823fb0d2f5c7e9a1b3c4d5e6f708192a3b4c5",
+  "pull_request": {
+    "number": 14,
+    "title": "Add libft ft_strdup implementation",
+    "body": "Implements ft_strdup per the 42 libft spec.",
+    "state": "open",
+    "html_url": "https://github.com/kadireren7/libft/pull/14",
+    "user": { "login": "kadireren7" },
+    "base": {
+      "ref": "main",
+      "sha": "111aaa2222bbb3333ccc4444ddd5555eeee6666"
+    },
+    "head": {
+      "ref": "feature/ft-strdup",
+      "sha": "9be823fb0d2f5c7e9a1b3c4d5e6f708192a3b4c5"
+    }
+  },
+  "repository": {
+    "id": 987654321,
+    "name": "libft",
+    "full_name": "kadireren7/libft",
+    "owner": { "login": "kadireren7" }
+  },
+  "installation": {
+    "id": 55667788
+  }
+}
