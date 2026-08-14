@@ -11,6 +11,9 @@ currently implements Phase 1 only: the GitHub ingestion foundation. See
 
 Repository: https://github.com/kadireren7/patchfrog
 
+> This PR exists to live-validate the Phase 1 ingestion pipeline end-to-end
+> against a real GitHub App installation.
+
 ## Current Phase: Phase 1 — GitHub Ingestion Foundation ✅
 
 Phase 1 establishes the production-minded foundation later phases build on:
