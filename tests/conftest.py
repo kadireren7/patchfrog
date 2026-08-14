@@ -8,6 +8,13 @@ never real credentials.
 The test RSA key is generated in-memory rather than committed to the repo
 as a ``.pem`` file — even a throwaway test-only key is best kept out of
 source control, and secret-scanning tooling can't tell the difference.
+
+Also disables ``Settings``' ``.env``-file loading for the whole test
+session. Without this, a developer's real local ``.env`` (e.g. containing
+``GITHUB_PRIVATE_KEY_PATH`` for live GitHub App testing) would be read
+*alongside* the env vars set below, tripping the "set only one of
+GITHUB_PRIVATE_KEY / GITHUB_PRIVATE_KEY_PATH" validator — the test suite
+must be hermetic regardless of what's sitting in the repo root.
 """
 
 from __future__ import annotations
@@ -21,7 +28,11 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from patchfrog.config.settings import Settings
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+Settings.model_config["env_file"] = None
 
 
 def _generate_test_private_key_pem() -> str:
@@ -36,13 +47,14 @@ def _generate_test_private_key_pem() -> str:
 
 _TEST_PRIVATE_KEY_PEM = _generate_test_private_key_pem()
 
-os.environ.setdefault("APP_ENV", "test")
-os.environ.setdefault("LOG_LEVEL", "INFO")
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("GITHUB_APP_ID", "123456")
-os.environ.setdefault("GITHUB_PRIVATE_KEY", _TEST_PRIVATE_KEY_PEM)
-os.environ.setdefault("GITHUB_WEBHOOK_SECRET", "test-webhook-secret")
+os.environ["APP_ENV"] = "test"
+os.environ["LOG_LEVEL"] = "INFO"
+os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
+os.environ["REDIS_URL"] = "redis://localhost:6379/0"
+os.environ["GITHUB_APP_ID"] = "123456"
+os.environ["GITHUB_PRIVATE_KEY"] = _TEST_PRIVATE_KEY_PEM
+os.environ.pop("GITHUB_PRIVATE_KEY_PATH", None)
+os.environ["GITHUB_WEBHOOK_SECRET"] = "test-webhook-secret"
 
 
 def load_fixture(name: str) -> Any:
