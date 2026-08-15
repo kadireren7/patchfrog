@@ -24,6 +24,19 @@ class LanguageParser(Protocol):
     def parse_file(self, *, relative_path: str, content: bytes) -> ParsedFile: ...
 
 
+PARSER_VERSION = 1
+"""Bump whenever any language parser's *extraction logic* changes.
+
+The content-addressed parse cache (:mod:`patchfrog.indexing.parse_cache`,
+:class:`~patchfrog.persistence.models.parsed_file_cache.ParsedFileCacheModel`)
+is keyed on this alongside content hash and language. Without it, a parser
+bugfix (e.g. the header-guard extraction fix) would never take effect for
+any file whose content hasn't otherwise changed — its stale, pre-fix parse
+would be served from cache indefinitely. A grammar/Tree-sitter dependency
+upgrade that changes extracted structure should also bump this.
+"""
+
+
 def content_hash(data: bytes) -> str:
     """A stable content hash used for symbols and file-change detection."""
 

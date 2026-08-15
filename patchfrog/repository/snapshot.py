@@ -122,7 +122,25 @@ class RepositorySnapshotProvider:
         For developer/CLI use against a repository already on disk (e.g.
         self-validating PatchFrog against its own checkout). The returned
         snapshot never deletes ``root_path`` on cleanup.
+
+        Refuses a dirty working tree: an index is a promise that its
+        content matches exactly one commit SHA (see
+        :mod:`patchfrog.indexing.service`'s transaction/versioning
+        design) — indexing on-disk content that includes uncommitted
+        changes to tracked files while labeling the result with the last
+        *clean* commit's SHA would silently break that promise. Untracked
+        files don't affect this check; they're never indexed either way.
         """
+
+        status = run_git(
+            ["-C", str(root_path), "status", "--porcelain", "--untracked-files=no"]
+        )
+        if status.strip():
+            raise GitError(
+                "Refusing to index a dirty working tree (uncommitted changes to "
+                "tracked files) — commit or stash first. Indexing dirty content "
+                "under the last clean commit's SHA would mislabel the index."
+            )
 
         commit_sha = run_git(["-C", str(root_path), "rev-parse", "HEAD"]).strip()
         return RepositorySnapshot(

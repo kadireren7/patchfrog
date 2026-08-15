@@ -106,7 +106,15 @@ class RepositoryResolver:
                 ref = SymbolRef(pf.path, sym.qualified_name)
                 self._symbol_by_qualified[(pf.path, sym.qualified_name)] = sym
                 self._symbols_by_name[sym.name].append(ref)
-                self._symbols_by_name_in_file[(pf.path, sym.name)].append(ref)
+                if sym.kind is not SymbolKind.METHOD:
+                    # Tier 2 (below) matches by plain name within a file
+                    # with no evidence about a call's receiver — safe for a
+                    # bare function call, but a method call's target
+                    # depends entirely on the receiver's type, which
+                    # same-file-name matching cannot establish. A same-file
+                    # method call is only ever resolved via tier 1's scoped
+                    # `self`/`this` match, never by coincidence of name.
+                    self._symbols_by_name_in_file[(pf.path, sym.name)].append(ref)
 
         self._module_index = _build_python_module_index(parsed_files)
         self._all_paths = {pf.path for pf in parsed_files}
@@ -194,10 +202,39 @@ class RepositoryResolver:
             if ri.resolved_file_path is not None
         }
         narrowed = [c for c in repo_candidates if c.file_path in included_paths]
-        pool = narrowed or repo_candidates
+        pool = self._collapse_declarations_onto_definition(narrowed or repo_candidates)
         if len(pool) == 1:
             return ResolvedCall(pf.path, call, ResolutionStatus.RESOLVED, pool[0])
         return ResolvedCall(pf.path, call, ResolutionStatus.AMBIGUOUS)
+
+    def _collapse_declarations_onto_definition(self, candidates: list[SymbolRef]) -> list[SymbolRef]:
+        """A C/C++ function's prototype (in a header) and its definition (in
+        a ``.c``/``.cpp`` file) are two distinct top-level symbols, but the
+        *same repository function* — they must not read as two ambiguous
+        candidates. Collapse the pool down to the one definition only when
+        it's unambiguous which definition the declarations belong to
+        (exactly one candidate has ``visibility == "definition"`` and every
+        other candidate is a bare ``"declaration"``). If two or more
+        candidates are themselves definitions, that is genuine ambiguity —
+        e.g. two same-named ``static`` functions in different files with no
+        import evidence to disambiguate — and is left untouched."""
+
+        if len(candidates) < 2:
+            return candidates
+        definitions = [
+            c
+            for c in candidates
+            if self._symbol_by_qualified[(c.file_path, c.qualified_name)].visibility == "definition"
+        ]
+        if len(definitions) != 1:
+            return candidates
+        non_definitions = [c for c in candidates if c not in definitions]
+        if all(
+            self._symbol_by_qualified[(c.file_path, c.qualified_name)].visibility == "declaration"
+            for c in non_definitions
+        ):
+            return definitions
+        return candidates
 
 
 def _build_python_module_index(parsed_files: list[ParsedFile]) -> dict[str, str]:

@@ -196,9 +196,10 @@ def upgrade() -> None:
         "parsed_file_cache",
         sa.Column("content_hash", sa.String(length=64), nullable=False),
         sa.Column("language", _LANGUAGE, nullable=False),
+        sa.Column("parser_version", sa.Integer(), nullable=False),
         sa.Column("payload", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.PrimaryKeyConstraint("content_hash", "language"),
+        sa.PrimaryKeyConstraint("content_hash", "language", "parser_version"),
     )
 
 

@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from patchfrog.repository.snapshot import RepositorySnapshot
+from patchfrog.repository.git import GitError
+from patchfrog.repository.snapshot import RepositorySnapshot, RepositorySnapshotProvider
+from tests.support.git_repo import commit_all, init_git_repo
 
 
 def test_resolve_path_rejects_traversal_outside_root(tmp_path: Path) -> None:
@@ -54,3 +56,48 @@ def test_context_manager_cleans_up_owned_snapshot(tmp_path: Path) -> None:
         assert root.exists()
 
     assert not root.exists()
+
+
+def test_acquire_local_refuses_a_dirty_working_tree(tmp_path: Path) -> None:
+    """A local index is labeled with a commit SHA — indexing uncommitted
+    changes under the last clean commit's SHA would silently mislabel it.
+    """
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "a.py").write_text("def foo():\n    pass\n")
+    init_git_repo(root)
+    commit_all(root, "initial")
+    (root / "a.py").write_text("def foo():\n    pass\ndef uncommitted():\n    pass\n")  # dirty
+
+    with pytest.raises(GitError, match="dirty working tree"):
+        RepositorySnapshotProvider().acquire_local(root_path=root, repository_full_name="test/repo")
+
+
+def test_acquire_local_ignores_untracked_files(tmp_path: Path) -> None:
+    """Untracked files never affect indexed content (see the inventory,
+    which only reads `git ls-files`), so they must not block acquisition."""
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "a.py").write_text("def foo():\n    pass\n")
+    init_git_repo(root)
+    commit_sha = commit_all(root, "initial")
+    (root / "untracked.py").write_text("def other():\n    pass\n")
+
+    snapshot = RepositorySnapshotProvider().acquire_local(root_path=root, repository_full_name="test/repo")
+
+    assert snapshot.commit_sha == commit_sha
+
+
+def test_acquire_local_succeeds_on_a_clean_tree(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "a.py").write_text("def foo():\n    pass\n")
+    init_git_repo(root)
+    commit_sha = commit_all(root, "initial")
+
+    snapshot = RepositorySnapshotProvider().acquire_local(root_path=root, repository_full_name="test/repo")
+
+    assert snapshot.commit_sha == commit_sha
+    assert snapshot.owns_root is False

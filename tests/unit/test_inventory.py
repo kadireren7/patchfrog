@@ -69,3 +69,54 @@ def test_inventory_marks_generated_files() -> None:
 
     assert _looks_generated(b"// DO NOT EDIT: this file is auto-generated\nint x;\n")
     assert not _looks_generated(b"int x = 1;\n")
+
+
+def test_inventory_skips_symlink_escaping_the_checkout_root_without_crashing(tmp_path: Path) -> None:
+    """A malicious repository-controlled symlink must not read outside the
+    checkout root, and must not crash the whole indexing run either."""
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "normal.py").write_text("x = 1\n")
+    outside_secret = tmp_path / "outside_secret.txt"
+    outside_secret.write_text("should never be read")
+    (root / "evil_link.py").symlink_to(outside_secret)
+    init_git_repo(root)
+    commit_all(root, "initial")
+
+    snapshot = snapshot_at_head(root, "test/repo")
+    entries = build_inventory(snapshot)  # must not raise
+
+    paths = {e.relative_path for e in entries}
+    assert paths == {"normal.py"}
+
+
+def test_inventory_skips_relative_traversal_symlink_without_crashing(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "normal.py").write_text("x = 1\n")
+    (root / "traversal_link.py").symlink_to(Path("../../../../etc/passwd"))
+    init_git_repo(root)
+    commit_all(root, "initial")
+
+    snapshot = snapshot_at_head(root, "test/repo")
+    entries = build_inventory(snapshot)  # must not raise
+
+    paths = {e.relative_path for e in entries}
+    assert paths == {"normal.py"}
+
+
+def test_inventory_never_follows_a_symlink_even_when_its_target_is_inside_the_repo(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "normal.py").write_text("x = 1\n")
+    (root / "internal_link.py").symlink_to(Path("normal.py"))
+    init_git_repo(root)
+    commit_all(root, "initial")
+
+    snapshot = snapshot_at_head(root, "test/repo")
+    paths = {e.relative_path for e in build_inventory(snapshot)}
+
+    assert paths == {"normal.py"}  # not indexed again under the symlink's path

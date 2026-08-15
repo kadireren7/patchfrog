@@ -40,6 +40,7 @@ from patchfrog.intelligence.resolution import (
     ResolvedImport,
 )
 from patchfrog.intelligence.tests import infer_test_relationships
+from patchfrog.parsing.base import PARSER_VERSION
 from patchfrog.parsing.registry import ParserRegistry, default_registry
 from patchfrog.persistence.models.code_index import (
     CallReferenceModel,
@@ -265,6 +266,17 @@ class RepositoryIndexingService:
         statuses: dict[str, tuple[FileIndexStatus, str | None]] = {}
         counts = _ParseCounts()
 
+        # One round trip for every file's cache lookup, instead of one
+        # query per file — the dominant cost of an otherwise-cheap
+        # mostly-unchanged incremental run against hundreds/thousands of
+        # files (see ParsedFileCacheRepository.get_many).
+        cache_keys = [
+            (entry.content_hash, entry.language, PARSER_VERSION)
+            for entry in inventory
+            if entry.language is not None and self._registry.get(entry.language) is not None
+        ]
+        cache_hits = await self._cache_repo.get_many(session, keys=cache_keys)
+
         for entry in inventory:
             if entry.language is None:
                 statuses[entry.relative_path] = (FileIndexStatus.SKIPPED, None)
@@ -274,15 +286,24 @@ class RepositoryIndexingService:
                 statuses[entry.relative_path] = (FileIndexStatus.SKIPPED, None)
                 continue
 
-            cached_payload = await self._cache_repo.get(
-                session, content_hash=entry.content_hash, language=entry.language
-            )
+            cached_payload = cache_hits.get((entry.content_hash, entry.language, PARSER_VERSION))
+            cached_parsed: ParsedFile | None = None
             if cached_payload is not None:
-                parsed_by_path[entry.relative_path] = deserialize_parsed_file(
-                    relative_path=entry.relative_path,
-                    language=entry.language,
-                    payload=cached_payload,
-                )
+                try:
+                    cached_parsed = deserialize_parsed_file(
+                        relative_path=entry.relative_path,
+                        language=entry.language,
+                        payload=cached_payload,
+                    )
+                except (ValueError, KeyError, TypeError) as exc:
+                    # A corrupt/unexpectedly-shaped cache row must not fail
+                    # the whole run — treat it as a cache miss and re-parse.
+                    log.warning(
+                        "parse_cache_entry_corrupt", path=entry.relative_path, error=str(exc)
+                    )
+
+            if cached_parsed is not None:
+                parsed_by_path[entry.relative_path] = cached_parsed
                 statuses[entry.relative_path] = (FileIndexStatus.PARSED, None)
                 counts.files_reused += 1
                 continue
@@ -300,6 +321,7 @@ class RepositoryIndexingService:
                 session,
                 content_hash=entry.content_hash,
                 language=entry.language,
+                parser_version=PARSER_VERSION,
                 payload=serialize_parsed_file(parsed),
             )
             parsed_by_path[entry.relative_path] = parsed

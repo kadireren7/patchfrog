@@ -65,9 +65,25 @@ def build_inventory(snapshot: RepositorySnapshot) -> list[FileInventoryEntry]:
         if _is_denylisted(relative_path):
             continue
 
-        absolute_path = snapshot.resolve_path(relative_path)
-        if not absolute_path.is_file() or absolute_path.is_symlink():
-            continue  # gitlinks (submodules), symlinks — never followed
+        # Checked *before* resolving: a git-tracked symlink (mode 120000)
+        # must never be followed, whether it points inside the repo or
+        # escapes it. Checking the unresolved path first also means a
+        # symlink deliberately crafted to escape the checkout root (e.g.
+        # `../../../etc/passwd`) is skipped here rather than reaching
+        # `resolve_path`'s traversal guard at all.
+        raw_path = snapshot.root_path / relative_path
+        if raw_path.is_symlink():
+            continue
+
+        try:
+            absolute_path = snapshot.resolve_path(relative_path)
+        except ValueError:
+            # Defense in depth: some other non-symlink path escaped the
+            # checkout root. A malicious/malformed repository must not be
+            # able to crash the whole indexing run over one bad path.
+            continue
+        if not absolute_path.is_file():
+            continue  # gitlinks (submodules), non-regular files
 
         try:
             size_bytes = absolute_path.stat().st_size

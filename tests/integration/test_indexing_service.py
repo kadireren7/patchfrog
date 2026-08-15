@@ -18,6 +18,7 @@ from patchfrog.persistence.models.code_index import (
     RepositoryEdgeModel,
     SymbolModel,
 )
+from patchfrog.persistence.models.parsed_file_cache import ParsedFileCacheModel
 from patchfrog.persistence.models.repository_index import IndexStatus, RepositoryIndexModel
 from patchfrog.persistence.repositories import RepositoryEdgeRepository, RepositoryRepository
 from tests.support.git_repo import commit_all, materialize_fixture_repo
@@ -340,6 +341,55 @@ async def test_one_file_parser_failure_does_not_fail_the_whole_index(
         ).scalars().all()
         assert len(failed_files) == summary.files_total
         assert all(f.error_message == "boom" for f in failed_files)
+
+
+async def test_corrupt_parse_cache_entry_is_treated_as_a_miss_not_a_run_failure(
+    tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    snapshot = materialize_fixture_repo(tmp_path / "repo", "python_basic")
+    repository_id = await _create_repository(session_factory, full_name="test/python_basic")
+    service = RepositoryIndexingService(session_factory=session_factory)
+
+    await service.index_local_repository(
+        repository_id=repository_id, root_path=snapshot.root_path, repository_full_name="test/python_basic"
+    )
+
+    async with session_factory() as session:
+        cache_rows = (await session.execute(select(ParsedFileCacheModel))).scalars().all()
+        assert cache_rows  # sanity: the first run actually populated the cache
+        for row in cache_rows:
+            row.payload = "{not valid json"
+        await session.commit()
+
+    # Touch one file so this is a real incremental run, not a same-SHA no-op.
+    (snapshot.root_path / "src" / "extra.py").write_text("def extra():\n    pass\n")
+    commit_all(snapshot.root_path, "add extra.py")
+
+    summary = await service.index_local_repository(
+        repository_id=repository_id, root_path=snapshot.root_path, repository_full_name="test/python_basic"
+    )
+
+    # Every file's cache entry was corrupted, so every file (all Python,
+    # all supported in this fixture) must have been re-parsed fresh rather
+    # than served corrupt/empty data, and none should count as reused.
+    assert summary.files_failed == 0
+    assert summary.files_reused == 0
+    assert summary.files_parsed == summary.files_total
+    assert summary.symbols_extracted > 0
+
+    async with session_factory() as session:
+        index_row = (
+            await session.execute(
+                select(RepositoryIndexModel).where(
+                    RepositoryIndexModel.repository_id == repository_id, RepositoryIndexModel.is_active.is_(True)
+                )
+            )
+        ).scalar_one()
+        assert index_row.status is IndexStatus.SUCCEEDED
+        symbols = (
+            await session.execute(select(SymbolModel).where(SymbolModel.repository_index_id == index_row.id))
+        ).scalars().all()
+        assert any(s.qualified_name == "Cache.get" for s in symbols)  # real structure recovered, not garbage
 
 
 async def test_failed_run_does_not_corrupt_previous_active_index(

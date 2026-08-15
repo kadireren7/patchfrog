@@ -23,6 +23,7 @@ from patchfrog.indexing.models import IndexingSummary
 from patchfrog.indexing.service import RepositoryIndexingService
 from patchfrog.persistence.database import create_engine, create_session_factory
 from patchfrog.persistence.repositories import RepositoryRepository
+from patchfrog.repository.git import GitError
 
 logger = structlog.get_logger(__name__)
 
@@ -78,8 +79,23 @@ async def _index_local(*, repository_path: Path, full_name: str) -> IndexingSumm
 
 def _run_index(args: argparse.Namespace) -> int:
     repository_path: Path = args.repository
+    if not repository_path.is_dir():
+        print(f"error: not a directory: {repository_path}", file=sys.stderr)
+        return 1
+    if not (repository_path / ".git").exists():
+        print(f"error: not a git repository (no .git found): {repository_path}", file=sys.stderr)
+        return 1
+
     full_name = args.full_name or _default_full_name(repository_path)
-    summary = asyncio.run(_index_local(repository_path=repository_path, full_name=full_name))
+    try:
+        summary = asyncio.run(_index_local(repository_path=repository_path, full_name=full_name))
+    except GitError as exc:
+        # Expected, user-actionable failures (dirty worktree, no commits
+        # yet, git not usable, ...) — a clean one-line message, not a
+        # Python traceback.
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
     print(
         f"indexed {full_name}: files_total={summary.files_total} "
         f"files_parsed={summary.files_parsed} files_reused={summary.files_reused} "

@@ -50,10 +50,48 @@ def test_unique_same_file_match_resolves() -> None:
 
 
 def test_ambiguous_same_file_match_is_not_guessed() -> None:
-    a = ParsedSymbol(
-        name="helper", qualified_name="A.helper", kind=SymbolKind.METHOD, span=_SPAN,
-        signature=None, parent_qualified_name="A", visibility=None, content_hash="h",
+    a = _symbol("helper")
+    b = ParsedSymbol(
+        name="helper", qualified_name="helper2", kind=SymbolKind.FUNCTION, span=_SPAN,
+        signature=None, parent_qualified_name=None, visibility=None, content_hash="h",
     )
+    call = ParsedCall(callee_name="helper", caller_qualified_name=None, line=1, column=0)
+    pf = ParsedFile(path="mod.py", language=Language.PYTHON, symbols=(a, b), calls=(call,))
+
+    resolved = RepositoryResolver([pf]).resolve_calls()
+
+    assert resolved[0].status is ResolutionStatus.AMBIGUOUS
+    assert resolved[0].resolved is None
+
+
+def test_method_call_is_never_resolved_by_same_file_name_coincidence() -> None:
+    """A call like ``other_thing.run()`` must never be resolved just because
+    exactly one method named "run" happens to exist in the same file — there
+    is zero evidence ``other_thing`` is an instance of that method's class.
+    This is a real bug this test reproduces: same-file plain-name matching
+    is only sound for free functions, never for methods, since a method
+    call's target depends entirely on the receiver's (unknown) type.
+    """
+
+    run_method = _symbol("run", kind=SymbolKind.METHOD, parent="A")
+    call = ParsedCall(callee_name="run", caller_qualified_name="Unrelated.use_other_object", line=5, column=8)
+    pf = ParsedFile(
+        path="x.py", language=Language.PYTHON,
+        symbols=(_symbol("A", kind=SymbolKind.CLASS), run_method, _symbol("Unrelated", kind=SymbolKind.CLASS)),
+        calls=(call,),
+    )
+
+    resolved = RepositoryResolver([pf]).resolve_calls()
+
+    assert resolved[0].status is ResolutionStatus.UNRESOLVED
+    assert resolved[0].resolved is None
+
+
+def test_two_same_named_methods_in_one_file_called_bare_are_unresolved_not_ambiguous() -> None:
+    # Not AMBIGUOUS either — neither candidate is even eligible without
+    # scoped (self/this) evidence, so there's nothing to be ambiguous
+    # *between*.
+    a = _symbol("helper", kind=SymbolKind.METHOD, parent="A")
     b = ParsedSymbol(
         name="helper", qualified_name="B.helper", kind=SymbolKind.METHOD, span=_SPAN,
         signature=None, parent_qualified_name="B", visibility=None, content_hash="h",
@@ -63,7 +101,7 @@ def test_ambiguous_same_file_match_is_not_guessed() -> None:
 
     resolved = RepositoryResolver([pf]).resolve_calls()
 
-    assert resolved[0].status is ResolutionStatus.AMBIGUOUS
+    assert resolved[0].status is ResolutionStatus.UNRESOLVED
     assert resolved[0].resolved is None
 
 
@@ -113,3 +151,48 @@ def test_external_import_is_never_resolved() -> None:
     resolved = RepositoryResolver([pf]).resolve_imports()
 
     assert resolved[0].resolved_file_path is None
+
+
+def _c_function(name: str, path: str, *, visibility: str) -> ParsedSymbol:
+    return ParsedSymbol(
+        name=name, qualified_name=name, kind=SymbolKind.FUNCTION, span=_SPAN, signature=None,
+        parent_qualified_name=None, visibility=visibility, content_hash=path,
+    )
+
+
+def test_prototype_and_definition_collapse_to_one_repo_wide_candidate() -> None:
+    """A header's function prototype and its .c definition are the *same*
+    repository function, not two ambiguous candidates — a call site with no
+    #include evidence connecting it to either must still resolve, not
+    falsely report ambiguity between a declaration and its own definition.
+    """
+
+    header = ParsedFile(path="a.h", language=Language.C, symbols=(_c_function("add", "a.h", visibility="declaration"),))
+    source = ParsedFile(path="a.c", language=Language.C, symbols=(_c_function("add", "a.c", visibility="definition"),))
+    caller = ParsedFile(
+        path="c.c", language=Language.C,
+        calls=(ParsedCall(callee_name="add", caller_qualified_name=None, line=1, column=0),),
+    )
+
+    resolved = RepositoryResolver([header, source, caller]).resolve_calls()
+
+    assert resolved[0].status is ResolutionStatus.RESOLVED
+    assert resolved[0].resolved is not None
+    assert resolved[0].resolved.file_path == "a.c"  # resolves to the definition, not the prototype
+
+
+def test_two_genuine_definitions_with_the_same_name_stay_ambiguous() -> None:
+    # Unlike the declaration/definition pair above, two *definitions* really
+    # are two different candidate functions -- collapsing them would be a
+    # false resolution, not a precision improvement.
+    source_a = ParsedFile(path="a.c", language=Language.C, symbols=(_c_function("add", "a.c", visibility="definition"),))
+    source_b = ParsedFile(path="b.c", language=Language.C, symbols=(_c_function("add", "b.c", visibility="definition"),))
+    caller = ParsedFile(
+        path="c.c", language=Language.C,
+        calls=(ParsedCall(callee_name="add", caller_qualified_name=None, line=1, column=0),),
+    )
+
+    resolved = RepositoryResolver([source_a, source_b, caller]).resolve_calls()
+
+    assert resolved[0].status is ResolutionStatus.AMBIGUOUS
+    assert resolved[0].resolved is None
