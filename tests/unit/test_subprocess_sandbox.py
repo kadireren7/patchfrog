@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -127,6 +128,7 @@ async def test_timeout_kills_the_whole_process_group(tmp_path: Path) -> None:
 
 
 async def test_captured_stdout_is_bounded_not_buffered_unbounded() -> None:
+    start = time.monotonic()
     result = await run_sandboxed(
         [
             sys.executable,
@@ -134,11 +136,34 @@ async def test_captured_stdout_is_bounded_not_buffered_unbounded() -> None:
             "import sys; sys.stdout.write('a' * (10 * 1024 * 1024))",
         ],
         cwd=Path.cwd(),
-        timeout_seconds=15,
+        timeout_seconds=30,
     )
+    elapsed = time.monotonic() - start
 
     assert result.stdout_truncated is True
     assert len(result.stdout.encode()) <= MAX_CAPTURED_OUTPUT_BYTES
+    # A capped stream must not cost the caller anywhere near the full
+    # timeout budget: hitting the cap on stdout leaves stderr genuinely
+    # unable to reach EOF on its own (the process, no longer being
+    # drained, can never exit naturally) -- this must resolve via the
+    # short grace-period + kill path, not by waiting out `timeout_seconds`.
+    assert elapsed < 15.0
+
+
+async def test_many_fast_successful_runs_are_never_misclassified_as_timed_out() -> None:
+    """Regression for a race in the streams-drained-early-exit path: a
+    process's stdout/stderr pipes can hit real EOF a handful of
+    microseconds *before* the OS reaps it and process.wait() resolves.
+    Reacting to that gap as if the process were stuck falsely marked
+    plenty of fast, entirely successful runs as timed out."""
+
+    for _ in range(20):
+        result = await run_sandboxed(
+            [sys.executable, "-c", "print('ok')"], cwd=Path.cwd(), timeout_seconds=10
+        )
+        assert result.timed_out is False
+        assert result.exit_code == 0
+        assert result.stdout.strip() == "ok"
 
 
 async def test_missing_binary_raises_analyzer_subprocess_error() -> None:

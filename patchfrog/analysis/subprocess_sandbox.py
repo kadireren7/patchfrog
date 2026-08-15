@@ -19,10 +19,22 @@ directly, so every invocation gets the same guarantees:
   immediate child) if it's exceeded
 - a genuine *streaming* cap on stdout/stderr capture — reading stops once
   the cap is hit rather than buffering unbounded output and truncating
-  afterward, so a misbehaving or malicious tool can't exhaust memory. If
-  the tool keeps writing after its output is abandoned, the OS pipe
-  eventually applies backpressure and the process stalls until the
-  overall timeout reaps it — memory stays bounded either way.
+  afterward, so a misbehaving or malicious tool can't exhaust memory. A
+  tool that keeps writing after its output is abandoned backs up against
+  the OS pipe and stalls; that alone must never cost the caller the full
+  timeout budget waiting for an exit that can't happen until it's killed
+  (see the single-deadline loop in :func:`run_sandboxed`).
+
+Verified (including inside the built worker image, not just on a dev
+host): after ``SIGKILL``, ``asyncio``'s own exit-detection can itself
+stall well past the process's actual kernel-level death -- a real
+observed asyncio/kernel quirk in this environment, not merely a testing
+artifact. ``run_sandboxed`` never trusts that detection to be prompt: it
+bounds the extra wait to a small fixed grace window and reports whatever
+it has (``timed_out=True``, best-effort ``exit_code``) rather than
+hanging. stdout/stderr capture is unaffected either way -- pipe EOF on
+kill is delivered by the kernel immediately, independent of asyncio's
+own (possibly delayed) exit bookkeeping.
 """
 
 from __future__ import annotations
@@ -110,23 +122,41 @@ async def run_sandboxed(
 
     # A single overall deadline governs everything below -- never a fresh
     # timeout budget per phase (that would let worst-case wall time run to
-    # ~2x timeout_seconds). Waiting stops as soon as either the process
-    # exits, or both streams are fully drained (real EOF or their cap was
-    # hit) even if the process itself hasn't exited yet: once neither
-    # stream is being read anymore, a process that keeps writing to a now
-    # backed-up pipe can never exit on its own, so there is nothing left
-    # to legitimately wait for.
+    # ~2x timeout_seconds). Waiting stops as soon as the process exits.
+    #
+    # If *either* stream's cap is hit while the process is still running,
+    # it gets a short grace period to exit on its own rather than being
+    # killed immediately. This deliberately doesn't wait for *both*
+    # streams to be done first: a real analyzer commonly floods one
+    # stream while the other stays completely idle (e.g. stdout with
+    # findings, nothing on stderr) -- an idle stream has no EOF to give
+    # until the process actually exits, so requiring both to be "drained"
+    # before reacting would just reintroduce the same deadlock this
+    # exists to avoid. Hitting a cap at all is itself the meaningful
+    # signal: from that point on we've abandoned reading, so a process
+    # that only exits once its output is fully drained can now never
+    # exit on its own. A process that's about to finish anyway (its pipes
+    # closing a handful of microseconds before process.wait() resolves --
+    # a real race, not a hang) still gets that same short window to
+    # confirm it, rather than being misclassified as stuck.
+    _STREAM_DRAIN_GRACE_SECONDS = 2.0
     deadline = start + timeout_seconds
+    cap_hit_at: float | None = None
     pending: set[asyncio.Task[Any]] = {stdout_task, stderr_task, wait_task}
     while pending:
-        remaining = deadline - time.monotonic()
+        effective_deadline = deadline
+        if cap_hit_at is not None:
+            effective_deadline = min(deadline, cap_hit_at + _STREAM_DRAIN_GRACE_SECONDS)
+        remaining = effective_deadline - time.monotonic()
         if remaining <= 0:
             break
         _done, pending = await asyncio.wait(pending, timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
         if wait_task.done():
             break
-        if stdout_task.done() and stderr_task.done():
-            break
+        if cap_hit_at is None and any(
+            task.done() and task.result()[1] for task in (stdout_task, stderr_task)
+        ):
+            cap_hit_at = time.monotonic()
 
     timed_out = not wait_task.done()
     if timed_out:
@@ -175,13 +205,13 @@ async def _read_capped(stream: asyncio.StreamReader, cap: int) -> tuple[bytes, b
 
 
 async def _kill_process_group(process: asyncio.subprocess.Process) -> None:
+    """Send SIGKILL to the process group. Signals only -- the caller owns
+    waiting for exit confirmation (its own ``wait_task``); doing that here
+    too would just be a second, redundant wait on the same future."""
+
     try:
         os.killpg(process.pid, 9)
     except ProcessLookupError:
         pass
     except OSError as exc:
         logger.warning("analyzer_kill_failed", pid=process.pid, error=str(exc))
-    try:
-        await asyncio.wait_for(process.wait(), timeout=5.0)
-    except TimeoutError:
-        logger.warning("analyzer_did_not_exit_after_kill", pid=process.pid)
