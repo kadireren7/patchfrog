@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+from patchfrog.persistence.models.analysis import (
+    AnalysisRunModel,
+    AnalysisRunStatus,
+    AnalyzerExecutionModel,
+    FindingModel,
+    FindingSourceModel,
+    FindingStatus,
+)
 from patchfrog.persistence.models.base import Base
 from patchfrog.persistence.models.code_index import (
     CallReferenceModel,
@@ -19,9 +27,15 @@ from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.persistence.models.repository_index import IndexStatus, RepositoryIndexModel
 
 __all__ = [
+    "AnalysisRunModel",
+    "AnalysisRunStatus",
+    "AnalyzerExecutionModel",
     "Base",
     "CallReferenceModel",
     "FileIndexStatus",
+    "FindingModel",
+    "FindingSourceModel",
+    "FindingStatus",
     "ImportReferenceModel",
     "IndexStatus",
     "IndexedFileModel",

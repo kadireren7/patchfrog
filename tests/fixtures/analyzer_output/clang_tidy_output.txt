@@ -1,0 +1,13 @@
+/repo/src/cache.cpp:15:10: warning: 'x' used after it was moved [bugprone-use-after-move]
+    return x.value();
+           ^
+/repo/src/cache.cpp:8:5: note: move occurred here
+    auto y = std::move(x);
+    ^
+/repo/src/cache.cpp:22:3: warning: use nullptr [modernize-use-nullptr]
+  ptr = 0;
+  ^
+/repo/src/cache.cpp:30:1: error: use of undeclared identifier 'undefined_symbol' [clang-diagnostic-error]
+undefined_symbol();
+^
+3 warnings and 1 error generated.

@@ -1,0 +1,31 @@
+{
+  "version": "1.173.0",
+  "results": [
+    {
+      "check_id": "tmp.rules.patchfrog-python-eval-usage",
+      "path": "/repo/bad.py",
+      "start": {"line": 2, "col": 12, "offset": 32},
+      "end": {"line": 2, "col": 28, "offset": 48},
+      "extra": {
+        "message": "eval() on data that may be attacker-influenced can execute arbitrary code.",
+        "metadata": {"category": "security", "confidence": "MEDIUM", "cwe": "CWE-95"},
+        "severity": "ERROR",
+        "engine_kind": "OSS"
+      }
+    },
+    {
+      "check_id": "tmp.rules.patchfrog-python-bare-except",
+      "path": "/repo/bad.py",
+      "start": {"line": 7, "col": 5, "offset": 60},
+      "end": {"line": 10, "col": 13, "offset": 110},
+      "extra": {
+        "message": "Bare except clauses swallow all exceptions, including KeyboardInterrupt/SystemExit.",
+        "metadata": {"category": "correctness", "confidence": "HIGH"},
+        "severity": "WARNING",
+        "engine_kind": "OSS"
+      }
+    }
+  ],
+  "errors": [],
+  "paths": {"scanned": ["/repo/bad.py"]}
+}

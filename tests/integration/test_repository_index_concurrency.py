@@ -7,6 +7,14 @@ directly and skips (rather than failing) if that isn't reachable, so it
 stays opt-in for CI/dev environments without Docker running while still
 being a real, non-mocked reproduction where it *is* available.
 
+Deliberately does *not* create schema via ``Base.metadata.create_all`` —
+doing that against a real dev database once silently created tables
+outside Alembic's tracking, which then made a later ``alembic upgrade``
+fail with "relation already exists". Schema here comes from migrations,
+same as production; this test expects ``alembic upgrade head`` to have
+already been run against the target database and skips if the schema
+it needs isn't there yet, rather than ever creating it itself.
+
 Bug this guards against: two concurrent indexing runs for the same
 repository both compute ``next_version = MAX(index_version) + 1``
 before either commits, so both attempt to insert the same
@@ -27,11 +35,10 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from patchfrog.indexing.service import RepositoryIndexingService
-from patchfrog.persistence.models import Base
 from patchfrog.persistence.models.repository_index import RepositoryIndexModel
 from patchfrog.persistence.repositories import RepositoryRepository
 from tests.support.git_repo import materialize_fixture_repo
@@ -40,11 +47,14 @@ _POSTGRES_URL = "postgresql+asyncpg://patchfrog:patchfrog@localhost:5432/patchfr
 
 
 async def _postgres_available() -> AsyncEngine | None:
+    """Connectivity + migrated-schema check only — never creates schema
+    itself. See the module docstring for why."""
+
     engine = create_async_engine(_POSTGRES_URL)
     try:
         async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all, checkfirst=True)
-    except OperationalError:
+            await conn.execute(text("SELECT 1 FROM repository_indexes LIMIT 1"))
+    except (OperationalError, ProgrammingError):
         await engine.dispose()
         return None
     return engine

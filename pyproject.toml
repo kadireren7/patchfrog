@@ -22,6 +22,16 @@ dependencies = [
     "tree-sitter-python>=0.23,<1.0",
     "tree-sitter-c>=0.23,<1.0",
     "tree-sitter-cpp>=0.23,<1.0",
+    # Static analysis engine (Phase 3): ruff and semgrep are invoked as
+    # analyzer subprocesses at runtime, not just used to lint PatchFrog's
+    # own source — both must be present outside a dev install too.
+    # cppcheck/clang-tidy are external system binaries, not Python
+    # packages, and are discovered at runtime by each adapter's own
+    # discover() (see patchfrog.analysis.analyzers.cppcheck/clang_tidy)
+    # rather than declared here.
+    "ruff>=0.7,<1.0",
+    "semgrep>=1.100,<2.0",
+    "PyYAML>=6.0,<7.0",
 ]
 
 [project.optional-dependencies]
@@ -29,16 +39,19 @@ dev = [
     "pytest>=8.3,<9.0",
     "pytest-asyncio>=0.24,<1.0",
     "pytest-cov>=5.0,<6.0",
-    "ruff>=0.7,<1.0",
     "mypy>=1.13,<2.0",
     "respx>=0.21,<1.0",
     "aiosqlite>=0.20,<1.0",
     "types-redis",
+    "types-PyYAML",
 ]
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+patchfrog = ["analysis/analyzers/semgrep_rules/*.yml"]
 
 [tool.setuptools.packages.find]
 include = ["patchfrog*", "apps*"]

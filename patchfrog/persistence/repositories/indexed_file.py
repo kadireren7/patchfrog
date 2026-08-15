@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from patchfrog.domain.code import Language
 from patchfrog.persistence.models.code_index import IndexedFileModel
 
 
@@ -34,3 +35,16 @@ class IndexedFileRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def distinct_languages(
+        self, session: AsyncSession, *, repository_index_id: uuid.UUID
+    ) -> frozenset[Language]:
+        result = await session.execute(
+            select(IndexedFileModel.language)
+            .where(
+                IndexedFileModel.repository_index_id == repository_index_id,
+                IndexedFileModel.language.is_not(None),
+            )
+            .distinct()
+        )
+        return frozenset(lang for lang in result.scalars().all() if lang is not None)

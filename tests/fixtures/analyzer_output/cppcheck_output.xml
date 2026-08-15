@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<results version="2">
+  <cppcheck version="2.13.0"/>
+  <errors>
+    <error id="nullPointer" severity="error" msg="Null pointer dereference: ptr" verbose="Null pointer dereference: ptr" cwe="476">
+      <location file="/repo/src/cache.c" line="42" column="5"/>
+    </error>
+    <error id="memleak" severity="error" msg="Memory leak: buf" verbose="Memory leak: buf">
+      <location file="/repo/src/cache.c" line="10" column="1"/>
+    </error>
+    <error id="unusedFunction" severity="style" msg="The function 'helper' is never used." verbose="The function 'helper' is never used.">
+      <location file="/repo/src/cache.c" line="5" column="1"/>
+    </error>
+    <error id="missingIncludeSystem" severity="information" msg="Include file not found" verbose="Include file not found">
+    </error>
+  </errors>
+</results>
