@@ -1,0 +1,65 @@
+# PatchFrog's bundled, hand-written Semgrep ruleset.
+#
+# Deliberately small and self-contained — no registry/network rule
+# downloads, so analysis stays deterministic and tests never depend on
+# network access. `python-bare-except` intentionally overlaps with ruff's
+# E722, giving the deduplication layer a real cross-analyzer duplicate to
+# work with rather than only a hypothetical one.
+rules:
+  - id: patchfrog-python-eval-usage
+    languages: [python]
+    severity: ERROR
+    message: "eval() on data that may be attacker-influenced can execute arbitrary code."
+    metadata:
+      category: security
+      confidence: MEDIUM
+      cwe: "CWE-95"
+    patterns:
+      - pattern: eval(...)
+
+  - id: patchfrog-python-bare-except
+    languages: [python]
+    severity: WARNING
+    message: "Bare except clauses swallow all exceptions, including KeyboardInterrupt/SystemExit."
+    metadata:
+      category: correctness
+      confidence: HIGH
+    patterns:
+      - pattern: |
+          try:
+              ...
+          except:
+              ...
+
+  - id: patchfrog-c-unsafe-strcpy
+    languages: [c, cpp]
+    severity: ERROR
+    message: "strcpy() performs no bounds checking and can overflow the destination buffer."
+    metadata:
+      category: memory_safety
+      confidence: HIGH
+      cwe: "CWE-120"
+    patterns:
+      - pattern: strcpy($DST, $SRC)
+
+  - id: patchfrog-c-unsafe-gets
+    languages: [c, cpp]
+    severity: ERROR
+    message: "gets() cannot bound the input size and can overflow the destination buffer."
+    metadata:
+      category: memory_safety
+      confidence: HIGH
+      cwe: "CWE-120"
+    patterns:
+      - pattern: gets($DST)
+
+  - id: patchfrog-c-system-call
+    languages: [c, cpp]
+    severity: WARNING
+    message: "system() with non-constant input risks command injection."
+    metadata:
+      category: security
+      confidence: LOW
+      cwe: "CWE-78"
+    patterns:
+      - pattern: system($CMD)

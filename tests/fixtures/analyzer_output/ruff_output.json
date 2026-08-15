@@ -1,0 +1,41 @@
+[
+  {
+    "cell": null,
+    "code": "F401",
+    "end_location": {"column": 10, "row": 1},
+    "filename": "/repo/bad.py",
+    "fix": {"applicability": "safe", "edits": [], "message": "Remove unused import: `os`"},
+    "location": {"column": 8, "row": 1},
+    "message": "`os` imported but unused",
+    "name": "unused-import",
+    "noqa_row": 1,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  },
+  {
+    "cell": null,
+    "code": "E722",
+    "end_location": {"column": 11, "row": 9},
+    "filename": "/repo/bad.py",
+    "fix": null,
+    "location": {"column": 5, "row": 9},
+    "message": "Do not use bare `except`",
+    "name": "bare-except",
+    "noqa_row": 9,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/bare-except"
+  },
+  {
+    "cell": null,
+    "code": "S110",
+    "end_location": {"column": 13, "row": 10},
+    "filename": "/repo/bad.py",
+    "fix": null,
+    "location": {"column": 5, "row": 9},
+    "message": "`try`-`except`-`pass` detected, consider logging the exception",
+    "name": "try-except-pass",
+    "noqa_row": 9,
+    "severity": "error",
+    "url": "https://docs.astral.sh/ruff/rules/try-except-pass"
+  }
+]
