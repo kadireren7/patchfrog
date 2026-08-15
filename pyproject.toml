@@ -18,6 +18,10 @@ dependencies = [
     "httpx>=0.27,<1.0",
     "pyjwt[crypto]>=2.9,<3.0",
     "structlog>=24.4,<25.0",
+    "tree-sitter>=0.23,<1.0",
+    "tree-sitter-python>=0.23,<1.0",
+    "tree-sitter-c>=0.23,<1.0",
+    "tree-sitter-cpp>=0.23,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -42,11 +46,12 @@ include = ["patchfrog*", "apps*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-ra"
+addopts = "-ra --ignore=tests/fixtures/repos"
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+extend-exclude = ["tests/fixtures/repos"]
 
 [tool.ruff.lint]
 select = [
@@ -64,7 +69,7 @@ strict = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
-exclude = ["migrations/", "\\.venv/"]
+exclude = ["migrations/", "\\.venv/", "tests/fixtures/repos/"]
 
 [[tool.mypy.overrides]]
 module = "celery.*"

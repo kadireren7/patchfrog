@@ -1,0 +1,36 @@
+from __future__ import annotations
+
+import uuid
+from collections.abc import Sequence
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from patchfrog.persistence.models.code_index import IndexedFileModel
+
+
+class IndexedFileRepository:
+    """Persistence operations for :class:`IndexedFileModel`."""
+
+    async def bulk_create(self, session: AsyncSession, models: Sequence[IndexedFileModel]) -> None:
+        session.add_all(models)
+        await session.flush()
+
+    async def list_for_index(
+        self, session: AsyncSession, *, repository_index_id: uuid.UUID
+    ) -> list[IndexedFileModel]:
+        result = await session.execute(
+            select(IndexedFileModel).where(IndexedFileModel.repository_index_id == repository_index_id)
+        )
+        return list(result.scalars().all())
+
+    async def get_by_path(
+        self, session: AsyncSession, *, repository_index_id: uuid.UUID, relative_path: str
+    ) -> IndexedFileModel | None:
+        result = await session.execute(
+            select(IndexedFileModel).where(
+                IndexedFileModel.repository_index_id == repository_index_id,
+                IndexedFileModel.relative_path == relative_path,
+            )
+        )
+        return result.scalar_one_or_none()

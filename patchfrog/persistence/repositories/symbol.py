@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import uuid
+from collections.abc import Sequence
+
+from sqlalchemy import and_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from patchfrog.persistence.models.code_index import SymbolModel
+
+
+class SymbolRepository:
+    """Persistence operations for :class:`SymbolModel`."""
+
+    async def bulk_create(self, session: AsyncSession, models: Sequence[SymbolModel]) -> None:
+        session.add_all(models)
+        await session.flush()
+
+    async def symbols_in_file(
+        self, session: AsyncSession, *, indexed_file_id: uuid.UUID
+    ) -> list[SymbolModel]:
+        result = await session.execute(
+            select(SymbolModel)
+            .where(SymbolModel.indexed_file_id == indexed_file_id)
+            .order_by(SymbolModel.start_line)
+        )
+        return list(result.scalars().all())
+
+    async def find_by_name(
+        self, session: AsyncSession, *, repository_index_id: uuid.UUID, name: str
+    ) -> list[SymbolModel]:
+        result = await session.execute(
+            select(SymbolModel).where(
+                SymbolModel.repository_index_id == repository_index_id,
+                SymbolModel.name == name,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def find_by_qualified_name(
+        self, session: AsyncSession, *, repository_index_id: uuid.UUID, qualified_name: str
+    ) -> list[SymbolModel]:
+        result = await session.execute(
+            select(SymbolModel).where(
+                SymbolModel.repository_index_id == repository_index_id,
+                SymbolModel.qualified_name == qualified_name,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def symbol_containing_line(
+        self, session: AsyncSession, *, indexed_file_id: uuid.UUID, line: int
+    ) -> SymbolModel | None:
+        """The innermost symbol whose span contains ``line``, if any.
+
+        "Innermost" is approximated as the candidate with the smallest
+        line span — correct as long as symbol spans are properly nested,
+        which every language parser here guarantees (a child symbol's
+        span is always produced from a descendant Tree-sitter node).
+        """
+
+        result = await session.execute(
+            select(SymbolModel)
+            .where(
+                SymbolModel.indexed_file_id == indexed_file_id,
+                and_(SymbolModel.start_line <= line, SymbolModel.end_line >= line),
+            )
+            .order_by((SymbolModel.end_line - SymbolModel.start_line).asc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def get_by_id(self, session: AsyncSession, *, symbol_id: uuid.UUID) -> SymbolModel | None:
+        return await session.get(SymbolModel, symbol_id)
