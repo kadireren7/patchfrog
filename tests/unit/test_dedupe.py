@@ -110,6 +110,20 @@ def test_primary_pick_is_deterministic_by_severity_then_confidence_then_analyzer
     assert groups[0].primary.finding.source_analyzer == "semgrep"
 
 
+def test_same_analyzer_different_rules_at_overlapping_location_do_not_merge() -> None:
+    """Two genuinely distinct issues from one tool (e.g. ruff's F401 unused
+    import and F811 redefinition on the same line) must not be silently
+    collapsed into a single finding -- there's no independent second
+    opinion corroborating a merge the way there is across analyzers."""
+
+    unused_import = _enriched(analyzer="ruff", rule_id="F401", span=SourceSpan(10, 10, 1, 5))
+    redefinition = _enriched(analyzer="ruff", rule_id="F811", span=SourceSpan(10, 10, 1, 5))
+
+    groups = deduplicate([unused_import, redefinition])
+
+    assert len(groups) == 2
+
+
 def test_one_finding_with_symbol_one_without_can_still_merge() -> None:
     """A missing symbol on one side isn't itself disqualifying -- only an
     actual mismatch between two *known* symbols blocks a merge."""

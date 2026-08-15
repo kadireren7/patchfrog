@@ -32,6 +32,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import structlog
 
@@ -101,23 +102,48 @@ async def run_sandboxed(
     except OSError as exc:
         raise AnalyzerSubprocessError(f"failed to start {args[0]!r}: {exc}") from exc
 
-    timed_out = False
-    stdout, stdout_truncated = b"", False
-    stderr, stderr_truncated = b"", False
-    try:
-        assert process.stdout is not None
-        assert process.stderr is not None
-        (stdout, stdout_truncated), (stderr, stderr_truncated) = await asyncio.wait_for(
-            asyncio.gather(
-                _read_capped(process.stdout, MAX_CAPTURED_OUTPUT_BYTES),
-                _read_capped(process.stderr, MAX_CAPTURED_OUTPUT_BYTES),
-            ),
-            timeout=timeout_seconds,
-        )
-        await asyncio.wait_for(process.wait(), timeout=timeout_seconds)
-    except TimeoutError:
-        timed_out = True
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stdout_task = asyncio.ensure_future(_read_capped(process.stdout, MAX_CAPTURED_OUTPUT_BYTES))
+    stderr_task = asyncio.ensure_future(_read_capped(process.stderr, MAX_CAPTURED_OUTPUT_BYTES))
+    wait_task = asyncio.ensure_future(process.wait())
+
+    # A single overall deadline governs everything below -- never a fresh
+    # timeout budget per phase (that would let worst-case wall time run to
+    # ~2x timeout_seconds). Waiting stops as soon as either the process
+    # exits, or both streams are fully drained (real EOF or their cap was
+    # hit) even if the process itself hasn't exited yet: once neither
+    # stream is being read anymore, a process that keeps writing to a now
+    # backed-up pipe can never exit on its own, so there is nothing left
+    # to legitimately wait for.
+    deadline = start + timeout_seconds
+    pending: set[asyncio.Task[Any]] = {stdout_task, stderr_task, wait_task}
+    while pending:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        _done, pending = await asyncio.wait(pending, timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
+        if wait_task.done():
+            break
+        if stdout_task.done() and stderr_task.done():
+            break
+
+    timed_out = not wait_task.done()
+    if timed_out:
         await _kill_process_group(process)
+
+    # After the process exits (naturally or via kill), a read task still
+    # mid-flight finishes almost immediately -- the pipe's write end is
+    # now closed, so a blocked read() gets EOF rather than hanging.
+    # Whatever each task already captured is kept either way, never
+    # discarded just because the *other* stream was the slow one.
+    stdout, stdout_truncated = await stdout_task
+    stderr, stderr_truncated = await stderr_task
+    if not wait_task.done():
+        try:
+            await asyncio.wait_for(wait_task, timeout=5.0)
+        except TimeoutError:
+            logger.warning("analyzer_did_not_exit_after_kill", pid=process.pid)
 
     duration_ms = (time.monotonic() - start) * 1000
     exit_code = process.returncode if process.returncode is not None else -1

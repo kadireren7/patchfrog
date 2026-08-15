@@ -79,6 +79,13 @@ def _is_duplicate_pair(a: EnrichedFinding, b: EnrichedFinding) -> bool:
         return False
     if not _spans_overlap(a.finding.span, b.finding.span):
         return False
+    if a.finding.source_analyzer == b.finding.source_analyzer and a.finding.rule_id != b.finding.rule_id:
+        # The same tool reporting two different rules at an overlapping
+        # location is almost always two distinct real issues (e.g. ruff's
+        # F401 "unused import" and F811 "redefinition" on one line), not
+        # one issue seen twice -- unlike the cross-analyzer case, there's
+        # no independent second opinion here to corroborate a merge.
+        return False
     return not (
         a.symbol_qualified_name is not None
         and b.symbol_qualified_name is not None
