@@ -54,7 +54,20 @@ from patchfrog.domain.code import (
 
 _SEPARATOR = {Language.PYTHON: ".", Language.C: "", Language.CPP: "::"}
 
-_RESOLVABLE_CALL_TARGET_KINDS = {SymbolKind.FUNCTION, SymbolKind.METHOD}
+_RESOLVABLE_CALL_TARGET_KINDS = {
+    SymbolKind.FUNCTION,
+    SymbolKind.METHOD,
+    # A bare `ClassName(...)` constructor call is a plain identifier call
+    # syntactically identical to a bare function call (see
+    # `_callee_name` in each language parser) — it carries the exact
+    # same name-resolution soundness, with no receiver-type ambiguity to
+    # worry about (unlike `obj.method()`, see the METHOD exclusion from
+    # same-file matching below). Excluding classes/structs here was
+    # found to leave ~15% of a real repository's unresolved calls as
+    # unnecessarily unresolved constructor calls.
+    SymbolKind.CLASS,
+    SymbolKind.STRUCT,
+}
 _RELATIVE_IMPORT_RE = re.compile(r"^(\.+)(.*)$")
 
 

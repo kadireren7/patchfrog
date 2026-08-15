@@ -196,3 +196,36 @@ def test_two_genuine_definitions_with_the_same_name_stay_ambiguous() -> None:
 
     assert resolved[0].status is ResolutionStatus.AMBIGUOUS
     assert resolved[0].resolved is None
+
+
+def test_constructor_call_resolves_like_a_plain_function_call() -> None:
+    """A bare `ClassName()` constructor call has the exact same
+    name-resolution soundness as a bare function call — no receiver to
+    be uncertain about — and must not be left unresolved just because
+    classes were excluded from the resolvable-target-kinds set."""
+
+    cls = _symbol("Cache", kind=SymbolKind.CLASS)
+    call = ParsedCall(callee_name="Cache", caller_qualified_name=None, line=1, column=0)
+    pf = ParsedFile(path="x.py", language=Language.PYTHON, symbols=(cls,), calls=(call,))
+
+    resolved = RepositoryResolver([pf]).resolve_calls()
+
+    assert resolved[0].status is ResolutionStatus.RESOLVED
+    assert resolved[0].resolved is not None
+    assert resolved[0].resolved.qualified_name == "Cache"
+
+
+def test_two_same_named_classes_in_different_files_stay_ambiguous_as_constructors() -> None:
+    cls_a = _symbol("Cache", kind=SymbolKind.CLASS)
+    file_a = ParsedFile(path="a.py", language=Language.PYTHON, symbols=(cls_a,))
+    cls_b = _symbol("Cache", kind=SymbolKind.CLASS)
+    file_b = ParsedFile(path="b.py", language=Language.PYTHON, symbols=(cls_b,))
+    caller = ParsedFile(
+        path="c.py", language=Language.PYTHON,
+        calls=(ParsedCall(callee_name="Cache", caller_qualified_name=None, line=1, column=0),),
+    )
+
+    resolved = RepositoryResolver([file_a, file_b, caller]).resolve_calls()
+
+    assert resolved[0].status is ResolutionStatus.AMBIGUOUS
+    assert resolved[0].resolved is None
