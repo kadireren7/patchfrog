@@ -40,10 +40,20 @@ class AnalysisQueryService:
         return await self._run_repo.get_by_id(session, run_id=run_id)
 
     async def get_succeeded_run(
-        self, session: AsyncSession, *, repository_id: uuid.UUID, commit_sha: str, config_fingerprint: str
+        self,
+        session: AsyncSession,
+        *,
+        repository_id: uuid.UUID,
+        commit_sha: str,
+        config_fingerprint: str,
+        toolchain_fingerprint: str,
     ) -> AnalysisRunModel | None:
         return await self._run_repo.get_succeeded(
-            session, repository_id=repository_id, commit_sha=commit_sha, config_fingerprint=config_fingerprint
+            session,
+            repository_id=repository_id,
+            commit_sha=commit_sha,
+            config_fingerprint=config_fingerprint,
+            toolchain_fingerprint=toolchain_fingerprint,
         )
 
     async def get_findings_for_run(

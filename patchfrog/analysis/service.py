@@ -25,6 +25,7 @@ from pathlib import Path
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from patchfrog.analysis.analyzers.base import Analyzer
 from patchfrog.analysis.analyzers.registry import AnalyzerRegistry, default_registry
 from patchfrog.analysis.changed_lines import build_changed_lines_by_file
 from patchfrog.analysis.config import AnalysisConfig, load_analysis_config
@@ -40,6 +41,7 @@ from patchfrog.analysis.domain import (
 from patchfrog.analysis.enrichment import FindingEnricher
 from patchfrog.analysis.execution import run_analyzers
 from patchfrog.analysis.selection import select_analyzers
+from patchfrog.analysis.toolchain import discover_toolchain
 from patchfrog.diff.models import DiffFile
 from patchfrog.domain.code import Language
 from patchfrog.parsing.detect import detect_language
@@ -183,6 +185,25 @@ class StaticAnalysisService:
         config_fingerprint = config.fingerprint()
         log = logger.bind(repository_id=str(repository_id), commit_sha=commit_sha)
 
+        changed_files = frozenset(d.path for d in diff_files)
+        changed_lines_by_file = build_changed_lines_by_file(diff_files)
+        languages = await self._determine_languages(
+            changed_files=changed_files, repository_index_id=repository_index_id
+        )
+        selected = select_analyzers(self._registry, config=config, languages=languages)
+
+        # Discovered *before* the idempotency check, not just before
+        # execution: the effective toolchain (analyzer versions, bundled
+        # ruleset content, engine version) is part of the run's identity,
+        # not only something recorded after the fact -- reusing a prior
+        # canonical run must depend on knowing whether today's toolchain
+        # still matches it, which requires discovering it up front. This
+        # is the same cheap `--version`-only discovery each adapter's own
+        # `analyze()` does internally, just run once, concurrently, ahead
+        # of time.
+        toolchain = await discover_toolchain(selected)
+        toolchain_fingerprint = toolchain.fingerprint()
+
         async with self._session_factory() as session:
             run, is_new = await self._run_repo.get_or_create_running(
                 session,
@@ -190,6 +211,7 @@ class StaticAnalysisService:
                 repository_index_id=repository_index_id,
                 commit_sha=commit_sha,
                 config_fingerprint=config_fingerprint,
+                toolchain_fingerprint=toolchain_fingerprint,
                 pull_request_id=pull_request_id,
             )
             await session.commit()
@@ -207,7 +229,12 @@ class StaticAnalysisService:
                 repository_id=repository_id,
                 repository_index_id=repository_index_id,
                 config=config,
-                diff_files=diff_files,
+                config_fingerprint=config_fingerprint,
+                toolchain_fingerprint=toolchain_fingerprint,
+                selected=selected,
+                languages=languages,
+                changed_files=changed_files,
+                changed_lines_by_file=changed_lines_by_file,
                 start=start,
                 log=log,
             )
@@ -229,19 +256,15 @@ class StaticAnalysisService:
         repository_id: uuid.UUID,
         repository_index_id: uuid.UUID,
         config: AnalysisConfig,
-        diff_files: list[DiffFile],
+        config_fingerprint: str,
+        toolchain_fingerprint: str,
+        selected: dict[str, Analyzer],
+        languages: frozenset[Language],
+        changed_files: frozenset[str],
+        changed_lines_by_file: dict[str, frozenset[int]],
         start: float,
         log: structlog.stdlib.BoundLogger,
     ) -> AnalysisRunSummary:
-        config_fingerprint = config.fingerprint()
-        changed_files = frozenset(d.path for d in diff_files)
-        changed_lines_by_file = build_changed_lines_by_file(diff_files)
-        languages = await self._determine_languages(
-            changed_files=changed_files, repository_index_id=repository_index_id
-        )
-
-        selected = select_analyzers(self._registry, config=config, languages=languages)
-
         context = AnalysisContext(
             repository_id=repository_id,
             repository_index_id=repository_index_id,
@@ -267,6 +290,7 @@ class StaticAnalysisService:
                 repository_id=repository_id,
                 commit_sha=snapshot.commit_sha,
                 config_fingerprint=config_fingerprint,
+                toolchain_fingerprint=toolchain_fingerprint,
             )
             if existing is not None:
                 await self._run_repo.mark_failed(

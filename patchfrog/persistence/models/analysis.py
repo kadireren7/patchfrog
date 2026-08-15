@@ -61,9 +61,20 @@ class AnalysisRunModel(Base):
     :meth:`patchfrog.analysis.service.StaticAnalysisService` for the
     "analysis commit SHA == repository index commit SHA" invariant this
     supports. A partial unique index enforces that only one *succeeded*
-    run may exist per ``(repository_id, commit_sha, config_fingerprint)``
-    — repeated identical requests reuse it rather than duplicating data;
-    a failed/partial attempt never blocks a fresh retry.
+    run may exist per ``(repository_id, commit_sha, config_fingerprint,
+    toolchain_fingerprint)`` — repeated identical requests reuse it rather
+    than duplicating data; a failed/partial attempt never blocks a fresh
+    retry.
+
+    ``config_fingerprint`` and ``toolchain_fingerprint`` are deliberately
+    two separate columns, not one combined value: the former is
+    configuration *intent* (:meth:`patchfrog.analysis.config.AnalysisConfig.fingerprint`,
+    unaffected by what happens to be installed), the latter is the
+    *effective* toolchain actually discovered/used
+    (:meth:`patchfrog.analysis.toolchain.ToolchainSnapshot.fingerprint` —
+    analyzer versions, bundled ruleset content, engine version). Canonical
+    run reuse requires both to match; keeping them apart lets either be
+    inspected/queried independently.
     """
 
     __tablename__ = "analysis_runs"
@@ -76,6 +87,7 @@ class AnalysisRunModel(Base):
             "repository_id",
             "commit_sha",
             "config_fingerprint",
+            "toolchain_fingerprint",
             unique=True,
             postgresql_where=text("status = 'succeeded'"),
             sqlite_where=text("status = 'succeeded'"),
@@ -90,6 +102,7 @@ class AnalysisRunModel(Base):
     )
     commit_sha: Mapped[str] = mapped_column(String(40))
     config_fingerprint: Mapped[str] = mapped_column(String(64))
+    toolchain_fingerprint: Mapped[str] = mapped_column(String(64))
     status: Mapped[AnalysisRunStatus] = mapped_column(enum_column(AnalysisRunStatus, length=16))
 
     analyzers_succeeded: Mapped[int] = mapped_column(Integer, default=0)

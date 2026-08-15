@@ -13,16 +13,26 @@ from patchfrog.persistence.models.analysis import AnalysisRunModel, AnalysisRunS
 class AnalysisRunRepository:
     """Persistence operations for :class:`AnalysisRunModel`.
 
-    Identity for idempotency/concurrency purposes is
-    ``(repository_id, commit_sha, config_fingerprint)`` — repeated
+    Identity for idempotency/concurrency purposes is ``(repository_id,
+    commit_sha, config_fingerprint, toolchain_fingerprint)`` — repeated
     requests with that same identity reuse an existing *succeeded* run
-    rather than duplicating one. The initial creation, the pre-write claim,
-    and the final success transition are all guarded by a
-    transaction-scoped PostgreSQL advisory lock keyed by that identity (the
-    same pattern Phase 2's audit established for ``repository_indexes``): a
-    concurrent duplicate request waits its turn instead of racing the
-    partial unique index on ``status = 'succeeded'``. On SQLite (tests),
-    this is a no-op — no real concurrency to protect against there.
+    rather than duplicating one. ``config_fingerprint`` is configuration
+    *intent* (:meth:`patchfrog.analysis.config.AnalysisConfig.fingerprint`);
+    ``toolchain_fingerprint`` is the *effective* toolchain actually
+    discovered/used (:meth:`patchfrog.analysis.toolchain.ToolchainSnapshot.fingerprint`
+    — analyzer versions, bundled ruleset content, engine version). Both
+    must match for a prior run to be reused: identical config against a
+    different analyzer version (or a changed bundled ruleset) is a
+    different identity, since analyzer behavior/findings can change
+    without the repository or config changing at all.
+
+    The initial creation, the pre-write claim, and the final success
+    transition are all guarded by a transaction-scoped PostgreSQL advisory
+    lock keyed by that identity (the same pattern Phase 2's audit
+    established for ``repository_indexes``): a concurrent duplicate
+    request waits its turn instead of racing the partial unique index on
+    ``status = 'succeeded'``. On SQLite (tests), this is a no-op — no real
+    concurrency to protect against there.
 
     ``claim_for_write`` must run before any findings/executions are added
     to the persistence transaction — checking only at the final
@@ -32,23 +42,36 @@ class AnalysisRunRepository:
     """
 
     async def _lock_identity(
-        self, session: AsyncSession, *, repository_id: uuid.UUID, commit_sha: str, config_fingerprint: str
+        self,
+        session: AsyncSession,
+        *,
+        repository_id: uuid.UUID,
+        commit_sha: str,
+        config_fingerprint: str,
+        toolchain_fingerprint: str,
     ) -> None:
         if session.bind is None or session.bind.dialect.name != "postgresql":
             return
-        key_material = f"{repository_id}:{commit_sha}:{config_fingerprint}"
+        key_material = f"{repository_id}:{commit_sha}:{config_fingerprint}:{toolchain_fingerprint}"
         digest = hashlib.sha256(key_material.encode()).digest()[:8]
         lock_key = int.from_bytes(digest, "big") & 0x7FFFFFFFFFFFFFFF
         await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
 
     async def get_succeeded(
-        self, session: AsyncSession, *, repository_id: uuid.UUID, commit_sha: str, config_fingerprint: str
+        self,
+        session: AsyncSession,
+        *,
+        repository_id: uuid.UUID,
+        commit_sha: str,
+        config_fingerprint: str,
+        toolchain_fingerprint: str,
     ) -> AnalysisRunModel | None:
         result = await session.execute(
             select(AnalysisRunModel).where(
                 AnalysisRunModel.repository_id == repository_id,
                 AnalysisRunModel.commit_sha == commit_sha,
                 AnalysisRunModel.config_fingerprint == config_fingerprint,
+                AnalysisRunModel.toolchain_fingerprint == toolchain_fingerprint,
                 AnalysisRunModel.status == AnalysisRunStatus.SUCCEEDED,
             )
         )
@@ -62,6 +85,7 @@ class AnalysisRunRepository:
         repository_id: uuid.UUID,
         commit_sha: str,
         config_fingerprint: str,
+        toolchain_fingerprint: str,
     ) -> AnalysisRunModel | None:
         """Acquire this identity's advisory lock and decide whether ``run_id``
         gets to persist its results.
@@ -78,10 +102,18 @@ class AnalysisRunRepository:
         """
 
         await self._lock_identity(
-            session, repository_id=repository_id, commit_sha=commit_sha, config_fingerprint=config_fingerprint
+            session,
+            repository_id=repository_id,
+            commit_sha=commit_sha,
+            config_fingerprint=config_fingerprint,
+            toolchain_fingerprint=toolchain_fingerprint,
         )
         existing = await self.get_succeeded(
-            session, repository_id=repository_id, commit_sha=commit_sha, config_fingerprint=config_fingerprint
+            session,
+            repository_id=repository_id,
+            commit_sha=commit_sha,
+            config_fingerprint=config_fingerprint,
+            toolchain_fingerprint=toolchain_fingerprint,
         )
         if existing is not None and existing.id != run_id:
             return existing
@@ -95,6 +127,7 @@ class AnalysisRunRepository:
         repository_index_id: uuid.UUID,
         commit_sha: str,
         config_fingerprint: str,
+        toolchain_fingerprint: str,
         pull_request_id: uuid.UUID | None = None,
     ) -> tuple[AnalysisRunModel, bool]:
         """Return ``(run, is_new)``.
@@ -105,10 +138,18 @@ class AnalysisRunRepository:
         """
 
         await self._lock_identity(
-            session, repository_id=repository_id, commit_sha=commit_sha, config_fingerprint=config_fingerprint
+            session,
+            repository_id=repository_id,
+            commit_sha=commit_sha,
+            config_fingerprint=config_fingerprint,
+            toolchain_fingerprint=toolchain_fingerprint,
         )
         existing = await self.get_succeeded(
-            session, repository_id=repository_id, commit_sha=commit_sha, config_fingerprint=config_fingerprint
+            session,
+            repository_id=repository_id,
+            commit_sha=commit_sha,
+            config_fingerprint=config_fingerprint,
+            toolchain_fingerprint=toolchain_fingerprint,
         )
         if existing is not None:
             return existing, False
@@ -119,6 +160,7 @@ class AnalysisRunRepository:
             pull_request_id=pull_request_id,
             commit_sha=commit_sha,
             config_fingerprint=config_fingerprint,
+            toolchain_fingerprint=toolchain_fingerprint,
             status=AnalysisRunStatus.RUNNING,
             started_at=datetime.now(UTC),
         )
@@ -154,12 +196,14 @@ class AnalysisRunRepository:
             repository_id=model.repository_id,
             commit_sha=model.commit_sha,
             config_fingerprint=model.config_fingerprint,
+            toolchain_fingerprint=model.toolchain_fingerprint,
         )
         existing = await self.get_succeeded(
             session,
             repository_id=model.repository_id,
             commit_sha=model.commit_sha,
             config_fingerprint=model.config_fingerprint,
+            toolchain_fingerprint=model.toolchain_fingerprint,
         )
         if existing is not None and existing.id != model.id:
             model.status = AnalysisRunStatus.FAILED

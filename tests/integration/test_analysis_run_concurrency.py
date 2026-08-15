@@ -7,12 +7,15 @@ Skips (rather than failing) if a migrated Postgres isn't reachable at
 docstring for why).
 
 Guards against: two concurrent analysis requests for the exact same
-``(repository_id, commit_sha, config_fingerprint)`` identity both racing
-past the idempotency check and running analyzers/persisting findings
-twice. ``AnalysisRunRepository.get_or_create_running`` and
-``mark_succeeded`` serialize on that identity via a transaction-scoped
+``(repository_id, commit_sha, config_fingerprint, toolchain_fingerprint)``
+identity both racing past the idempotency check and running analyzers/
+persisting findings twice. ``AnalysisRunRepository.get_or_create_running``
+and ``mark_succeeded`` serialize on that identity via a transaction-scoped
 ``pg_advisory_xact_lock``, so only one run ever becomes the canonical
-``succeeded`` row for that identity.
+``succeeded`` row for that identity. (This test uses the real ruff/
+semgrep environment, so both concurrent requests naturally discover the
+same toolchain; see ``test_toolchain_identity.py`` for the toolchain-
+fingerprint-specific identity/reuse/concurrency cases.)
 """
 
 from __future__ import annotations
