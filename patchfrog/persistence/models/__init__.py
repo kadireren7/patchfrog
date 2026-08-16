@@ -17,6 +17,11 @@ from patchfrog.persistence.models.code_index import (
     RepositoryEdgeModel,
     SymbolModel,
 )
+from patchfrog.persistence.models.context import (
+    ContextBundleModel,
+    ContextBundleStatus,
+    ContextItemModel,
+)
 from patchfrog.persistence.models.parsed_file_cache import ParsedFileCacheModel
 from patchfrog.persistence.models.pull_request import PullRequestModel
 from patchfrog.persistence.models.pull_request_ingestion import (
@@ -32,6 +37,9 @@ __all__ = [
     "AnalyzerExecutionModel",
     "Base",
     "CallReferenceModel",
+    "ContextBundleModel",
+    "ContextBundleStatus",
+    "ContextItemModel",
     "FileIndexStatus",
     "FindingModel",
     "FindingSourceModel",
