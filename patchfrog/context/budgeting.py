@@ -88,26 +88,37 @@ class ContextBudgeter:
                 start_line=candidate.start_line,
                 end_line=candidate.end_line,
                 max_lines=line_cap,
+                anchor_line=candidate.anchor_line,
             )
             if snippet is None:
                 dropped_budget += 1
                 continue
 
-            content = snippet.content
-            truncated = snippet.truncated
-            tokens = estimate_tokens(content)
+            tokens = estimate_tokens(snippet.content)
             if tokens > token_cap:
-                # Trim further, proportionally, to fit the token cap --
-                # a second, stricter line-count pass rather than mid-line
-                # truncation, so a trimmed item never ends on a partial line.
-                lines = content.split("\n")
-                target_line_count = max(1, int(len(lines) * (token_cap / tokens)))
-                content = "\n".join(lines[:target_line_count])
-                tokens = estimate_tokens(content)
-                truncated = True
+                # Trim further, proportionally, to fit the token cap -- by
+                # re-extracting with a stricter line cap rather than
+                # slicing the already-extracted text, so the anchor-aware
+                # windowing above is reused instead of duplicated: a naive
+                # prefix-trim here could re-drop the very anchor line the
+                # first pass took care to keep.
+                current_lines = snippet.end_line - snippet.start_line + 1
+                stricter_line_cap = max(1, int(current_lines * (token_cap / tokens)))
+                snippet = self._snippets.extract(
+                    snapshot,
+                    relative_path=candidate.file_path,
+                    start_line=candidate.start_line,
+                    end_line=candidate.end_line,
+                    max_lines=stricter_line_cap,
+                    anchor_line=candidate.anchor_line,
+                )
+                if snippet is None:
+                    dropped_budget += 1
+                    continue
+                tokens = estimate_tokens(snippet.content)
 
-            line_count = content.count("\n") + 1 if content else 0
-            if line_count < _MIN_USEFUL_LINES or tokens < 1:
+            line_count = snippet.end_line - snippet.start_line + 1
+            if line_count < _MIN_USEFUL_LINES or tokens < 1 or not snippet.content:
                 dropped_budget += 1
                 continue
 
@@ -118,16 +129,16 @@ class ContextBudgeter:
                     symbol_id=candidate.symbol_id,
                     symbol_name=candidate.symbol_name,
                     qualified_name=candidate.qualified_name,
-                    start_line=candidate.start_line,
-                    end_line=min(candidate.end_line, candidate.start_line + line_count - 1),
-                    content=content,
+                    start_line=snippet.start_line,
+                    end_line=snippet.end_line,
+                    content=snippet.content,
                     relationship=candidate.relationship,
                     distance=candidate.distance,
                     score=scored.score,
                     score_breakdown=scored.breakdown,
                     estimated_tokens=tokens,
                     reason=candidate.reason,
-                    truncated=truncated,
+                    truncated=snippet.truncated,
                 )
             )
             remaining_tokens -= tokens

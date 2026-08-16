@@ -330,3 +330,69 @@ async def test_repeated_generation_is_deterministically_ordered(
     first_order = [(i.kind.value, i.file_path, i.start_line) for i in first.items]
     second_order = [(i.kind.value, i.file_path, i.start_line) for i in second.items]
     assert first_order == second_order
+
+
+async def test_finding_deep_inside_a_large_function_survives_tight_budget_trimming(
+    tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """Regression, full pipeline: ``src/huge.py`` in the fixture is a
+    600-line function whose "finding" line (a real, deterministic marker)
+    sits at line 551, far past any reasonable per-item line/token cap.
+    The target item in the persisted bundle must still contain it."""
+
+    snapshot = materialize_fixture_repo(tmp_path / "repo", "context_python")
+    repository_id = await _create_repository(session_factory, full_name="test/context-large-symbol")
+    await _index(session_factory, repository_id=repository_id, root_path=snapshot.root_path, full_name="test/context-large-symbol")
+
+    finding_line = None
+    for i, line in enumerate((snapshot.root_path / "src" / "huge.py").read_text().splitlines(), start=1):
+        if "unreachable but flagged by finding" in line:
+            finding_line = i
+            break
+    assert finding_line is not None and finding_line > 500  # sanity: genuinely deep inside the function
+
+    service = ContextService(session_factory=session_factory)
+    bundle = await service.build_context_local(
+        repository_id=repository_id,
+        root_path=snapshot.root_path,
+        repository_full_name="test/context-large-symbol",
+        target_type=ContextTargetType.LINE,
+        file_path="src/huge.py",
+        line=finding_line,
+        config=ContextConfig(max_tokens=600, max_lines=60, max_lines_per_item=60, max_tokens_per_item=600),
+    )
+
+    target_item = bundle.items[0]
+    assert target_item.kind is ContextItemKind.TARGET_SYMBOL
+    assert target_item.truncated is True
+    assert target_item.start_line <= finding_line <= target_item.end_line
+    assert "unreachable but flagged by finding" in target_item.content
+    assert bundle.total_tokens_estimate <= 600
+    assert bundle.total_lines <= 60
+
+
+async def test_ordinary_small_symbol_context_is_unaffected_by_the_anchor_fix(
+    tmp_path: Path, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """The common case -- a small target symbol that fits entirely within
+    its budget -- must produce identical, whole, non-truncated output."""
+
+    snapshot = materialize_fixture_repo(tmp_path / "repo", "context_python")
+    repository_id = await _create_repository(session_factory, full_name="test/context-small-symbol")
+    await _index(session_factory, repository_id=repository_id, root_path=snapshot.root_path, full_name="test/context-small-symbol")
+
+    service = ContextService(session_factory=session_factory)
+    bundle = await service.build_context_local(
+        repository_id=repository_id,
+        root_path=snapshot.root_path,
+        repository_full_name="test/context-small-symbol",
+        target_type=ContextTargetType.LINE,
+        file_path="src/cache.py",
+        line=8,
+    )
+
+    target_item = bundle.items[0]
+    assert target_item.kind is ContextItemKind.TARGET_SYMBOL
+    assert target_item.truncated is False
+    assert target_item.start_line == 4  # def cache_insert(...) -- unchanged from before the fix
+    assert target_item.end_line == 8

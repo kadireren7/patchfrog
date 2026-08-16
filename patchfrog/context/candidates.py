@@ -119,6 +119,13 @@ class ContextCandidateGenerator:
                 distance=0,
                 reason="the target symbol itself",
                 changed_lines_by_file=changed_lines_by_file,
+                # The actual target/finding line, not just "the symbol's
+                # span starts here" -- for a large symbol, budget-driven
+                # trimming must keep *this* line, wherever it falls within
+                # the span, not just the top of it. None (a SYMBOL-type
+                # target with no specific line) falls back to the default
+                # keep-the-start-of-the-range trimming.
+                anchor_line=target_line,
             )
 
         line = target_line if target_line is not None else 1
@@ -137,6 +144,7 @@ class ContextCandidateGenerator:
             distance=0,
             reason="target line has no containing symbol (module-level code)",
             is_on_changed_line=any(line_no in changed for line_no in range(window_start, window_end + 1)),
+            anchor_line=line,
         )
 
     def _symbol_candidate(
@@ -149,6 +157,7 @@ class ContextCandidateGenerator:
         distance: int,
         reason: str,
         changed_lines_by_file: dict[str, frozenset[int]],
+        anchor_line: int | None = None,
     ) -> ContextCandidate:
         changed = changed_lines_by_file.get(file.relative_path, frozenset())
         return ContextCandidate(
@@ -163,6 +172,7 @@ class ContextCandidateGenerator:
             distance=distance,
             reason=reason,
             is_on_changed_line=any(line in changed for line in range(symbol.start_line, symbol.end_line + 1)),
+            anchor_line=anchor_line,
         )
 
     async def _file_for_symbol(self, session: AsyncSession, symbol: SymbolModel) -> IndexedFileModel | None:

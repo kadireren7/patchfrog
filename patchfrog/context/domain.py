@@ -122,6 +122,14 @@ class ContextCandidate:
     distance: int
     reason: str
     is_on_changed_line: bool = False
+    #: The specific line that must survive trimming, if this candidate's
+    #: span exceeds its budget cap -- e.g. the actual finding/target line,
+    #: as opposed to just "the symbol's span starts here." ``None`` means
+    #: no particular line matters more than any other (the default
+    #: keep-the-start-of-the-range trimming is fine): callers/callees are
+    #: shown as "the definition," not anchored to a specific point of
+    #: interest within it.
+    anchor_line: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

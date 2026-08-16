@@ -29,6 +29,7 @@ def _scored(
     file_path: str,
     start_line: int,
     end_line: int,
+    anchor_line: int | None = None,
 ) -> ScoredCandidate:
     candidate = ContextCandidate(
         kind=kind,
@@ -41,6 +42,7 @@ def _scored(
         relationship=relationship,
         distance=0 if kind is ContextItemKind.TARGET_SYMBOL else 1,
         reason="test",
+        anchor_line=anchor_line,
     )
     return ScoredCandidate(candidate=candidate, score=score, breakdown=(ScoreComponent("x", score),))
 
@@ -197,3 +199,101 @@ def test_many_tiny_candidates_fill_budget_deterministically(tmp_path: Path) -> N
 
     assert [(i.start_line, i.end_line) for i in result_a.items] == [(i.start_line, i.end_line) for i in result_b.items]
     assert result_a.total_lines <= 20
+
+
+def test_anchor_line_survives_line_cap_trimming_of_a_large_target(tmp_path: Path) -> None:
+    """Regression: a finding/target line deep inside a 600-line function
+    must not be silently dropped just because the whole function doesn't
+    fit the per-item line budget."""
+
+    _write_file(tmp_path, "huge.py", 600)
+    target = _scored(
+        kind=ContextItemKind.TARGET_SYMBOL, relationship=ContextRelationship.TARGET_SYMBOL,
+        score=1.0, file_path="huge.py", start_line=1, end_line=600, anchor_line=551,
+    )
+    budgeter = ContextBudgeter()
+
+    result = budgeter.build(
+        _snapshot(tmp_path), kept=(target,), max_tokens=4000, max_lines=400, max_tokens_per_item=800,
+        max_lines_per_item=120, target_reservation_fraction=0.35, max_items_per_relationship=3,
+    )
+
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert item.truncated is True
+    assert item.start_line <= 551 <= item.end_line
+    assert "line 551" in item.content
+    assert item.end_line - item.start_line + 1 <= 140  # 400 * 0.35 target reservation
+
+
+def test_anchor_line_survives_token_cap_second_trim_pass(tmp_path: Path) -> None:
+    """Regression for the second (token-based) trim pass specifically:
+    even when the line-capped extraction still exceeds the token budget
+    and gets re-trimmed further, the anchor line must still survive."""
+
+    _write_file(tmp_path, "huge.py", 600)
+    target = _scored(
+        kind=ContextItemKind.TARGET_SYMBOL, relationship=ContextRelationship.TARGET_SYMBOL,
+        score=1.0, file_path="huge.py", start_line=1, end_line=600, anchor_line=551,
+    )
+    budgeter = ContextBudgeter()
+
+    # A token cap tight enough (relative to the line cap) to force the
+    # second re-trim pass in ContextBudgeter.build.
+    result = budgeter.build(
+        _snapshot(tmp_path), kept=(target,), max_tokens=200, max_lines=400, max_tokens_per_item=200,
+        max_lines_per_item=120, target_reservation_fraction=0.35, max_items_per_relationship=3,
+    )
+
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert item.truncated is True
+    assert item.start_line <= 551 <= item.end_line
+    assert "line 551" in item.content
+    assert result.total_tokens <= 200
+
+
+def test_non_anchored_large_item_still_keeps_prefix_as_before(tmp_path: Path) -> None:
+    """Ordinary (non-anchored) large candidates -- e.g. a caller/callee
+    shown as "the definition" with no specific point of interest -- are
+    unaffected by the anchor-aware trimming path."""
+
+    _write_file(tmp_path, "huge.py", 600)
+    caller = _scored(
+        kind=ContextItemKind.CALLER, relationship=ContextRelationship.DIRECT_CALLER,
+        score=0.5, file_path="huge.py", start_line=1, end_line=600,
+    )
+    budgeter = ContextBudgeter()
+
+    result = budgeter.build(
+        _snapshot(tmp_path), kept=(caller,), max_tokens=4000, max_lines=400, max_tokens_per_item=800,
+        max_lines_per_item=120, target_reservation_fraction=0.35, max_items_per_relationship=3,
+    )
+
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert item.start_line == 1
+    assert item.end_line == 120
+
+
+def test_small_symbol_within_budget_is_unaffected_by_anchor(tmp_path: Path) -> None:
+    """A small symbol that already fits entirely within its cap is
+    returned whole regardless of where the anchor line falls -- the
+    windowing logic only ever activates when trimming is required."""
+
+    _write_file(tmp_path, "small.py", 20)
+    target = _scored(
+        kind=ContextItemKind.TARGET_SYMBOL, relationship=ContextRelationship.TARGET_SYMBOL,
+        score=1.0, file_path="small.py", start_line=1, end_line=20, anchor_line=18,
+    )
+    budgeter = ContextBudgeter()
+
+    result = budgeter.build(
+        _snapshot(tmp_path), kept=(target,), max_tokens=4000, max_lines=400, max_tokens_per_item=800,
+        max_lines_per_item=120, target_reservation_fraction=0.35, max_items_per_relationship=3,
+    )
+
+    assert len(result.items) == 1
+    item = result.items[0]
+    assert item.truncated is False
+    assert (item.start_line, item.end_line) == (1, 20)

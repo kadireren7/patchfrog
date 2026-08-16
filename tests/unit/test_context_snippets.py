@@ -27,6 +27,77 @@ def test_extracts_exact_line_range(tmp_path: Path) -> None:
     assert result.truncated is False
 
 
+def test_anchor_line_is_preserved_when_trimming_a_large_range(tmp_path: Path) -> None:
+    """Regression: trimming a range that exceeds max_lines must not
+    silently drop the actual line of interest (e.g. a finding deep
+    inside a 600-line function) just because it isn't near the start."""
+
+    (tmp_path / "huge.py").write_text("\n".join(f"line {i}" for i in range(1, 601)) + "\n")
+    service = ContextSnippetService()
+
+    result = service.extract(
+        _snapshot(tmp_path), relative_path="huge.py", start_line=1, end_line=600, max_lines=120, anchor_line=551
+    )
+
+    assert result is not None
+    assert result.truncated is True
+    assert result.start_line <= 551 <= result.end_line
+    assert "line 551" in result.content
+    assert result.end_line - result.start_line + 1 <= 120
+
+
+def test_anchor_near_start_still_includes_lead_in(tmp_path: Path) -> None:
+    """When the anchor is close enough to the top that the window still
+    reaches it, the lead-in (e.g. a function signature) is naturally
+    included -- not sacrificed just because an anchor was supplied."""
+
+    (tmp_path / "a.py").write_text("\n".join(f"line {i}" for i in range(1, 301)) + "\n")
+    service = ContextSnippetService()
+
+    result = service.extract(
+        _snapshot(tmp_path), relative_path="a.py", start_line=1, end_line=300, max_lines=120, anchor_line=10
+    )
+
+    assert result is not None
+    assert result.start_line == 1
+    assert "line 1" in result.content.splitlines()[0]
+    assert "line 10" in result.content
+
+
+def test_anchor_window_never_exceeds_max_lines(tmp_path: Path) -> None:
+    (tmp_path / "huge.py").write_text("\n".join(f"line {i}" for i in range(1, 601)) + "\n")
+    service = ContextSnippetService()
+
+    for anchor in (1, 300, 551, 600):
+        result = service.extract(
+            _snapshot(tmp_path), relative_path="huge.py", start_line=1, end_line=600, max_lines=50, anchor_line=anchor
+        )
+        assert result is not None
+        assert result.end_line - result.start_line + 1 <= 50
+        assert result.start_line <= anchor <= result.end_line, f"anchor {anchor} not preserved"
+
+
+def test_no_anchor_keeps_default_prefix_behavior(tmp_path: Path) -> None:
+    (tmp_path / "huge.py").write_text("\n".join(f"line {i}" for i in range(1, 601)) + "\n")
+    service = ContextSnippetService()
+
+    result = service.extract(_snapshot(tmp_path), relative_path="huge.py", start_line=1, end_line=600, max_lines=120)
+
+    assert result is not None
+    assert result.start_line == 1
+    assert result.end_line == 120
+
+
+def test_extracted_snippet_reports_actual_range_when_not_truncated(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("line1\nline2\nline3\n")
+    service = ContextSnippetService()
+
+    result = service.extract(_snapshot(tmp_path), relative_path="a.py", start_line=1, end_line=3, max_lines=100)
+
+    assert result is not None
+    assert (result.start_line, result.end_line) == (1, 3)
+
+
 def test_truncates_when_range_exceeds_max_lines(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("\n".join(f"line{i}" for i in range(1, 21)) + "\n")
     service = ContextSnippetService()
