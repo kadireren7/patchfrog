@@ -65,6 +65,16 @@ class RepositoryQueryService:
     ) -> SymbolModel | None:
         return await self._symbol_repo.get_by_id(session, symbol_id=symbol_id)
 
+    async def get_symbols_by_ids(
+        self, session: AsyncSession, *, symbol_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, SymbolModel]:
+        return await self._symbol_repo.get_many_by_ids(session, symbol_ids=symbol_ids)
+
+    async def get_files_by_ids(
+        self, session: AsyncSession, *, indexed_file_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, IndexedFileModel]:
+        return await self._file_repo.get_many_by_ids(session, indexed_file_ids=indexed_file_ids)
+
     async def symbols_in_file(
         self, session: AsyncSession, *, indexed_file_id: uuid.UUID
     ) -> list[SymbolModel]:

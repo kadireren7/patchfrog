@@ -233,6 +233,44 @@ class ContextCandidateGenerator:
             changed_lines_by_file=changed_lines_by_file,
         )
 
+    async def _related_symbol_ids(
+        self, session: AsyncSession, *, symbol_id: UUID, direction: str
+    ) -> set[UUID]:
+        refs = (
+            await self._queries.get_callers(session, symbol_id=symbol_id)
+            if direction == "callers"
+            else await self._queries.get_callees(session, symbol_id=symbol_id)
+        )
+        return (
+            {r.caller_symbol_id for r in refs if r.caller_symbol_id is not None}
+            if direction == "callers"
+            else {r.resolved_symbol_id for r in refs if r.resolved_symbol_id is not None}
+        )
+
+    async def _resolve_symbols_and_files(
+        self, session: AsyncSession, *, symbol_ids: set[UUID]
+    ) -> list[tuple[SymbolModel, IndexedFileModel]]:
+        """Batched: one query for every symbol id, one query for every
+        distinct file id those symbols live in -- never a per-id
+        round-trip, which a highly-connected symbol (many callers/callees)
+        would otherwise turn into hundreds of individual queries."""
+
+        if not symbol_ids:
+            return []
+        symbols_by_id = await self._queries.get_symbols_by_ids(session, symbol_ids=sorted(symbol_ids, key=str))
+        file_ids = {s.indexed_file_id for s in symbols_by_id.values()}
+        files_by_id = await self._queries.get_files_by_ids(session, indexed_file_ids=sorted(file_ids, key=str))
+        resolved = []
+        for symbol_id in sorted(symbol_ids, key=str):
+            symbol = symbols_by_id.get(symbol_id)
+            if symbol is None:
+                continue
+            file = files_by_id.get(symbol.indexed_file_id)
+            if file is None:
+                continue
+            resolved.append((symbol, file))
+        return resolved
+
     async def _call_edge_candidates(
         self,
         session: AsyncSession,
@@ -246,76 +284,42 @@ class ContextCandidateGenerator:
         changed_lines_by_file: dict[str, frozenset[int]],
     ) -> list[ContextCandidate]:
         depth_1_symbol_ids: set[UUID] = set()
-        candidates: list[ContextCandidate] = []
-
         for symbol_id in symbol_ids:
-            refs = (
-                await self._queries.get_callers(session, symbol_id=symbol_id)
-                if direction == "callers"
-                else await self._queries.get_callees(session, symbol_id=symbol_id)
+            depth_1_symbol_ids |= await self._related_symbol_ids(session, symbol_id=symbol_id, direction=direction)
+
+        candidates: list[ContextCandidate] = []
+        for symbol, file in await self._resolve_symbols_and_files(session, symbol_ids=depth_1_symbol_ids):
+            candidates.append(
+                self._symbol_candidate(
+                    symbol,
+                    file,
+                    relationship=relationship,
+                    kind=kind,
+                    distance=1,
+                    reason=f"direct {direction[:-1]} of the target symbol",
+                    changed_lines_by_file=changed_lines_by_file,
+                )
             )
-            related_ids = (
-                {r.caller_symbol_id for r in refs if r.caller_symbol_id is not None}
-                if direction == "callers"
-                else {r.resolved_symbol_id for r in refs if r.resolved_symbol_id is not None}
-            )
-            for related_id in related_ids:
-                if related_id in depth_1_symbol_ids:
-                    continue
-                depth_1_symbol_ids.add(related_id)
-                symbol = await self._queries.get_symbol_by_id(session, symbol_id=related_id)
-                if symbol is None:
-                    continue
-                file = await self._file_for_symbol(session, symbol)
-                if file is None:
-                    continue
+
+        if config.graph_depth >= 2 and depth_1_symbol_ids:
+            roots = sorted(depth_1_symbol_ids, key=str)[:_MAX_DEPTH_2_EXPANSION_ROOTS]
+            depth_2_symbol_ids: set[UUID] = set()
+            for root_id in roots:
+                depth_2_symbol_ids |= await self._related_symbol_ids(session, symbol_id=root_id, direction=direction)
+            depth_2_symbol_ids -= depth_1_symbol_ids
+
+            for symbol, file in await self._resolve_symbols_and_files(session, symbol_ids=depth_2_symbol_ids):
                 candidates.append(
                     self._symbol_candidate(
                         symbol,
                         file,
-                        relationship=relationship,
+                        relationship=transitive_relationship,
                         kind=kind,
-                        distance=1,
-                        reason=f"direct {direction[:-1]} of the target symbol",
+                        distance=2,
+                        reason=f"transitive {direction[:-1]} (depth 2) of the target symbol",
                         changed_lines_by_file=changed_lines_by_file,
                     )
                 )
-
-        if config.graph_depth >= 2 and depth_1_symbol_ids:
-            roots = sorted(depth_1_symbol_ids, key=str)[:_MAX_DEPTH_2_EXPANSION_ROOTS]
-            seen_depth_2: set[UUID] = set()
-            for root_id in roots:
-                refs = (
-                    await self._queries.get_callers(session, symbol_id=root_id)
-                    if direction == "callers"
-                    else await self._queries.get_callees(session, symbol_id=root_id)
-                )
-                related_ids = (
-                    {r.caller_symbol_id for r in refs if r.caller_symbol_id is not None}
-                    if direction == "callers"
-                    else {r.resolved_symbol_id for r in refs if r.resolved_symbol_id is not None}
-                )
-                for related_id in related_ids:
-                    if related_id in depth_1_symbol_ids or related_id in seen_depth_2:
-                        continue
-                    seen_depth_2.add(related_id)
-                    symbol = await self._queries.get_symbol_by_id(session, symbol_id=related_id)
-                    if symbol is None:
-                        continue
-                    file = await self._file_for_symbol(session, symbol)
-                    if file is None:
-                        continue
-                    candidates.append(
-                        self._symbol_candidate(
-                            symbol,
-                            file,
-                            relationship=transitive_relationship,
-                            kind=kind,
-                            distance=2,
-                            reason=f"transitive {direction[:-1]} (depth 2) of the target symbol",
-                            changed_lines_by_file=changed_lines_by_file,
-                        )
-                    )
 
         return candidates
 

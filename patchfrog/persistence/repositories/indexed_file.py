@@ -39,6 +39,16 @@ class IndexedFileRepository:
     async def get_by_id(self, session: AsyncSession, *, indexed_file_id: uuid.UUID) -> IndexedFileModel | None:
         return await session.get(IndexedFileModel, indexed_file_id)
 
+    async def get_many_by_ids(
+        self, session: AsyncSession, *, indexed_file_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, IndexedFileModel]:
+        """Batched form of :meth:`get_by_id`."""
+
+        if not indexed_file_ids:
+            return {}
+        result = await session.execute(select(IndexedFileModel).where(IndexedFileModel.id.in_(indexed_file_ids)))
+        return {model.id: model for model in result.scalars().all()}
+
     async def distinct_languages(
         self, session: AsyncSession, *, repository_index_id: uuid.UUID
     ) -> frozenset[Language]:

@@ -72,3 +72,15 @@ class SymbolRepository:
 
     async def get_by_id(self, session: AsyncSession, *, symbol_id: uuid.UUID) -> SymbolModel | None:
         return await session.get(SymbolModel, symbol_id)
+
+    async def get_many_by_ids(
+        self, session: AsyncSession, *, symbol_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, SymbolModel]:
+        """Batched form of :meth:`get_by_id` -- one query for a whole set
+        of ids rather than one round-trip per id, for candidate-generation
+        callers resolving many callers/callees at once."""
+
+        if not symbol_ids:
+            return {}
+        result = await session.execute(select(SymbolModel).where(SymbolModel.id.in_(symbol_ids)))
+        return {model.id: model for model in result.scalars().all()}
