@@ -1,12 +1,14 @@
-"""Developer CLI for repository indexing and static analysis.
+"""Developer CLI for repository indexing, static analysis, and context.
 
     python -m patchfrog.cli index --repository /path/to/repo [--full-name owner/repo]
     python -m patchfrog.cli analyze --repository /path/to/repo [--full-name owner/repo]
+    python -m patchfrog.cli context --repository /path/to/repo --finding-id <id>
+    python -m patchfrog.cli context --repository /path/to/repo --file src/foo.py --line 42
 
 Deliberately minimal — a couple of subcommands, argparse only. This
-exists purely as a controlled way to trigger indexing/analysis during
-development and self-validation; it is not a general-purpose CLI
-framework.
+exists purely as a controlled way to trigger indexing/analysis/context
+generation during development and self-validation; it is not a
+general-purpose CLI framework.
 """
 
 from __future__ import annotations
@@ -25,9 +27,12 @@ from patchfrog.analysis.domain import AnalysisRunSummary
 from patchfrog.analysis.service import StaleIndexError, StaticAnalysisService
 from patchfrog.config.logging import configure_logging
 from patchfrog.config.settings import get_settings
+from patchfrog.context.domain import ContextBundle, ContextTargetType
+from patchfrog.context.service import ContextService, StaleContextIndexError
 from patchfrog.indexing.models import IndexingSummary
 from patchfrog.indexing.service import RepositoryIndexingService
 from patchfrog.persistence.database import create_engine, create_session_factory
+from patchfrog.persistence.models.analysis import FindingModel
 from patchfrog.persistence.repositories import RepositoryRepository
 from patchfrog.repository.git import GitError
 
@@ -108,6 +113,48 @@ async def _analyze_local(*, repository_path: Path, full_name: str) -> AnalysisRu
         await engine.dispose()
 
 
+async def _context_local(
+    *, repository_path: Path, full_name: str, finding_id: uuid.UUID | None, file_path: str | None, line: int | None
+) -> ContextBundle:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        repository_id = await _upsert_cli_repository(session_factory, full_name=full_name)
+        service = ContextService(session_factory=session_factory)
+
+        if finding_id is not None:
+            async with session_factory() as session:
+                finding = await session.get(FindingModel, finding_id)
+            if finding is None:
+                raise ValueError(f"no finding with id {finding_id}")
+            return await service.build_context_local(
+                repository_id=repository_id,
+                root_path=repository_path,
+                repository_full_name=full_name,
+                target_type=ContextTargetType.FINDING,
+                file_path=finding.file_path,
+                line=finding.start_line,
+                symbol_id=finding.symbol_id,
+                finding_id=finding.id,
+                analysis_run_id=finding.analysis_run_id,
+            )
+
+        assert file_path is not None and line is not None  # enforced by argparse mutual-exclusion below
+        return await service.build_context_local(
+            repository_id=repository_id,
+            root_path=repository_path,
+            repository_full_name=full_name,
+            target_type=ContextTargetType.LINE,
+            file_path=file_path,
+            line=line,
+        )
+    finally:
+        await engine.dispose()
+
+
 def _run_index(args: argparse.Namespace) -> int:
     repository_path: Path = args.repository
     if not repository_path.is_dir():
@@ -166,6 +213,58 @@ def _run_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_context(args: argparse.Namespace) -> int:
+    repository_path: Path = args.repository
+    if not repository_path.is_dir():
+        print(f"error: not a directory: {repository_path}", file=sys.stderr)
+        return 1
+    if not (repository_path / ".git").exists():
+        print(f"error: not a git repository (no .git found): {repository_path}", file=sys.stderr)
+        return 1
+    if args.finding_id is None and (args.file is None or args.line is None):
+        print("error: either --finding-id, or both --file and --line, are required", file=sys.stderr)
+        return 1
+
+    full_name = args.full_name or _default_full_name(repository_path)
+    finding_id = uuid.UUID(args.finding_id) if args.finding_id else None
+    try:
+        bundle = asyncio.run(
+            _context_local(
+                repository_path=repository_path,
+                full_name=full_name,
+                finding_id=finding_id,
+                file_path=args.file,
+                line=args.line,
+            )
+        )
+    except GitError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except StaleContextIndexError as exc:
+        print(f"error: {exc} — run 'index' for this commit first", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"context for {full_name}: target={bundle.target.target_type.value}:{bundle.target.file_path} "
+        f"items={len(bundle.items)}/{bundle.metrics.candidate_count} tokens={bundle.total_tokens_estimate} "
+        f"lines={bundle.total_lines} generation_ms={bundle.metrics.generation_ms:.1f} "
+        f"reused={bundle.reused_existing_bundle}"
+    )
+    for rank, item in enumerate(bundle.items):
+        print(
+            f"  [{rank}] score={item.score:.3f} kind={item.kind.value} relationship={item.relationship.value} "
+            f"file={item.file_path} lines={item.start_line}-{item.end_line} "
+            f"tokens={item.estimated_tokens} truncated={item.truncated} reason={item.reason!r}"
+        )
+        if args.show_content:
+            for content_line in item.content.splitlines():
+                print(f"      | {content_line}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="patchfrog.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -192,11 +291,31 @@ def main(argv: list[str] | None = None) -> int:
         help="Repository identity, e.g. 'owner/repo' (defaults to the directory name)",
     )
 
+    context_parser = subparsers.add_parser(
+        "context", help="Build a deterministic context bundle for a finding or file/line (requires 'index' first)"
+    )
+    context_parser.add_argument(
+        "--repository", required=True, type=Path, help="Path to a local git checkout"
+    )
+    context_parser.add_argument(
+        "--full-name",
+        default=None,
+        help="Repository identity, e.g. 'owner/repo' (defaults to the directory name)",
+    )
+    context_parser.add_argument("--finding-id", default=None, help="Build context for this Finding's id")
+    context_parser.add_argument("--file", default=None, help="Repo-relative file path (with --line)")
+    context_parser.add_argument("--line", default=None, type=int, help="1-indexed line number (with --file)")
+    context_parser.add_argument(
+        "--show-content", action="store_true", help="Also print each item's extracted source content"
+    )
+
     args = parser.parse_args(argv)
     if args.command == "index":
         return _run_index(args)
     if args.command == "analyze":
         return _run_analyze(args)
+    if args.command == "context":
+        return _run_context(args)
 
     return 1
 

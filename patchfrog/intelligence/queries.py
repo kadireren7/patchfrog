@@ -55,6 +55,16 @@ class RepositoryQueryService:
             session, repository_index_id=repository_index_id, relative_path=relative_path
         )
 
+    async def get_file_by_id(
+        self, session: AsyncSession, *, indexed_file_id: uuid.UUID
+    ) -> IndexedFileModel | None:
+        return await self._file_repo.get_by_id(session, indexed_file_id=indexed_file_id)
+
+    async def get_symbol_by_id(
+        self, session: AsyncSession, *, symbol_id: uuid.UUID
+    ) -> SymbolModel | None:
+        return await self._symbol_repo.get_by_id(session, symbol_id=symbol_id)
+
     async def symbols_in_file(
         self, session: AsyncSession, *, indexed_file_id: uuid.UUID
     ) -> list[SymbolModel]:

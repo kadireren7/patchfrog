@@ -3,6 +3,8 @@ from __future__ import annotations
 from patchfrog.persistence.repositories.analysis_run import AnalysisRunRepository
 from patchfrog.persistence.repositories.analyzer_execution import AnalyzerExecutionRepository
 from patchfrog.persistence.repositories.call_reference import CallReferenceRepository
+from patchfrog.persistence.repositories.context_bundle import ContextBundleRepository
+from patchfrog.persistence.repositories.context_item import ContextItemRepository
 from patchfrog.persistence.repositories.finding import FindingRepository
 from patchfrog.persistence.repositories.finding_source import FindingSourceRepository
 from patchfrog.persistence.repositories.import_reference import ImportReferenceRepository
@@ -21,6 +23,8 @@ __all__ = [
     "AnalysisRunRepository",
     "AnalyzerExecutionRepository",
     "CallReferenceRepository",
+    "ContextBundleRepository",
+    "ContextItemRepository",
     "FindingRepository",
     "FindingSourceRepository",
     "ImportReferenceRepository",

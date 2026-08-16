@@ -36,6 +36,9 @@ class IndexedFileRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_id(self, session: AsyncSession, *, indexed_file_id: uuid.UUID) -> IndexedFileModel | None:
+        return await session.get(IndexedFileModel, indexed_file_id)
+
     async def distinct_languages(
         self, session: AsyncSession, *, repository_index_id: uuid.UUID
     ) -> frozenset[Language]:
