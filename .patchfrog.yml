@@ -1,0 +1,3 @@
+review:
+  max_candidates: 2
+  min_final_confidence: high

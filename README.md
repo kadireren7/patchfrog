@@ -182,3 +182,5 @@ No LLM/AI provider integration, embeddings, vector search, static analysis
 tooling (Tree-sitter/Semgrep/clang-tidy), inline review comments, autofixes,
 test generation, dashboards, or multi-repository analysis exist yet. These
 belong to later phases.
+
+<!-- dogfood: phase 5 config-parity fake-provider dogfood pass, will be cleaned up -->
