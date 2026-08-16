@@ -32,6 +32,9 @@ dependencies = [
     "ruff>=0.7,<1.0",
     "semgrep>=1.100,<2.0",
     "PyYAML>=6.0,<7.0",
+    # AI Reviewer (Phase 5): official Anthropic SDK for the Claude API
+    # provider adapter (patchfrog.review.providers.anthropic_provider).
+    "anthropic>=0.68,<1.0",
 ]
 
 [project.optional-dependencies]

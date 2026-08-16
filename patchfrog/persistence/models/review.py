@@ -1,0 +1,240 @@
+"""Persisted AI Reviewer tables for one review run.
+
+Mirrors :mod:`patchfrog.persistence.models.analysis` and
+:mod:`patchfrog.persistence.models.context`'s shape exactly: a canonical
+run row (``review_runs``) plus child tables cascade-deleted with it.
+Canonical-run identity is ``(repository_id, commit_sha, config_fingerprint,
+model_fingerprint)`` -- ``model_fingerprint`` folds in the *effective*
+reviewer/critic provider+model plus PatchFrog's own prompt/policy/engine
+versions (see :class:`patchfrog.review.config.ReviewModelIdentity`), so a
+model swap, a provider swap, or a prompt/policy change each invalidate
+reuse of a prior canonical run -- the same toolchain-awareness fix Phase 3
+required for the static analysis engine.
+
+``ai_finding_proposals`` is the full audit trail: every proposal the
+reviewer made is persisted regardless of outcome, including rejected and
+suppressed ones, with the reason recorded on ``status``/``validation_detail``.
+``ai_findings`` holds only the subset that survived validation, the
+critic, confidence aggregation, and dedup -- the only table a
+user-facing query should ever read from.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from enum import StrEnum
+
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, func, text
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.types import Boolean, Uuid
+
+from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
+from patchfrog.persistence.models._enum import enum_column
+from patchfrog.persistence.models.base import Base
+from patchfrog.review.domain import (
+    CriticDecision,
+    ProposalStatus,
+    ReviewCandidateReason,
+    ReviewRunStatus,
+)
+
+
+class ReviewCandidateStatus(StrEnum):
+    PENDING = "pending"
+    REVIEWED = "reviewed"
+    SKIPPED_BUDGET = "skipped_budget"
+    FAILED = "failed"
+
+
+class ReviewRunModel(Base):
+    """One canonical AI review run for a repository at a specific commit."""
+
+    __tablename__ = "review_runs"
+    __table_args__ = (
+        Index("ix_review_runs_repository_id", "repository_id"),
+        Index("ix_review_runs_repository_index_id", "repository_index_id"),
+        Index("ix_review_runs_pull_request_id", "pull_request_id"),
+        Index(
+            "uq_review_runs_succeeded_identity",
+            "repository_id",
+            "commit_sha",
+            "config_fingerprint",
+            "model_fingerprint",
+            unique=True,
+            postgresql_where=text("status = 'succeeded'"),
+            sqlite_where=text("status = 'succeeded'"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    repository_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("repositories.id"))
+    repository_index_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("repository_indexes.id"))
+    analysis_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("analysis_runs.id"), nullable=True
+    )
+    pull_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("pull_requests.id"), nullable=True
+    )
+    commit_sha: Mapped[str] = mapped_column(String(40))
+    config_fingerprint: Mapped[str] = mapped_column(String(64))
+    model_fingerprint: Mapped[str] = mapped_column(String(64))
+    status: Mapped[ReviewRunStatus] = mapped_column(enum_column(ReviewRunStatus, length=16))
+
+    reviewer_provider: Mapped[str] = mapped_column(String(64))
+    reviewer_model: Mapped[str] = mapped_column(String(128))
+    critic_provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    critic_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    candidates_reviewed: Mapped[int] = mapped_column(Integer, default=0)
+    candidates_failed: Mapped[int] = mapped_column(Integer, default=0)
+    candidates_skipped_budget: Mapped[int] = mapped_column(Integer, default=0)
+    proposals_count: Mapped[int] = mapped_column(Integer, default=0)
+    accepted_count: Mapped[int] = mapped_column(Integer, default=0)
+    rejected_count: Mapped[int] = mapped_column(Integer, default=0)
+    suppressed_duplicate_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    reviewer_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    reviewer_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    critic_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    critic_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+
+    duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ReviewCandidateModel(Base):
+    """One symbol- (or module-region-) centered candidate considered for
+    review within a run."""
+
+    __tablename__ = "review_candidates"
+    __table_args__ = (Index("ix_review_candidates_review_run_id", "review_run_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    review_run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("review_runs.id", ondelete="CASCADE")
+    )
+    file_path: Mapped[str] = mapped_column(String(1024))
+    symbol_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("symbols.id", ondelete="SET NULL"), nullable=True
+    )
+    symbol_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    qualified_name: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    start_line: Mapped[int] = mapped_column(Integer)
+    end_line: Mapped[int] = mapped_column(Integer)
+    changed_lines: Mapped[str] = mapped_column(Text)
+    reason: Mapped[ReviewCandidateReason] = mapped_column(enum_column(ReviewCandidateReason, length=32))
+    static_finding_ids: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[ReviewCandidateStatus] = mapped_column(
+        enum_column(ReviewCandidateStatus, length=16), default=ReviewCandidateStatus.PENDING
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_bundle_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("context_bundles.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AIFindingProposalModel(Base):
+    """Full audit trail of every finding the reviewer proposed, whatever
+    happened to it afterwards -- accepted, rejected by validation,
+    rejected by the critic, rejected for low confidence, or suppressed as
+    a duplicate. Never shown to users directly; see ``ai_findings``."""
+
+    __tablename__ = "ai_finding_proposals"
+    __table_args__ = (
+        Index("ix_ai_finding_proposals_review_run_id", "review_run_id"),
+        Index("ix_ai_finding_proposals_candidate_id", "candidate_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    review_run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("review_runs.id", ondelete="CASCADE")
+    )
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("review_candidates.id", ondelete="CASCADE")
+    )
+    title: Mapped[str] = mapped_column(String(512))
+    message: Mapped[str] = mapped_column(Text)
+    category: Mapped[FindingCategory] = mapped_column(enum_column(FindingCategory, length=32))
+    severity: Mapped[Severity] = mapped_column(enum_column(Severity, length=16))
+    confidence: Mapped[Confidence] = mapped_column(enum_column(Confidence, length=16))
+    file_path: Mapped[str] = mapped_column(String(1024))
+    start_line: Mapped[int] = mapped_column(Integer)
+    end_line: Mapped[int] = mapped_column(Integer)
+    evidence: Mapped[str] = mapped_column(Text)
+    reasoning_summary: Mapped[str] = mapped_column(Text)
+    suggested_fix: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[ProposalStatus] = mapped_column(enum_column(ProposalStatus, length=32))
+    validation_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CriticVerdictModel(Base):
+    """One critic verdict for one proposal -- at most one row per
+    proposal (a proposal only ever reaches the critic once)."""
+
+    __tablename__ = "critic_verdicts"
+    __table_args__ = (Index("ix_critic_verdicts_proposal_id", "proposal_id", unique=True),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    proposal_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("ai_finding_proposals.id", ondelete="CASCADE")
+    )
+    decision: Mapped[CriticDecision] = mapped_column(enum_column(CriticDecision, length=16))
+    reasoning_summary: Mapped[str] = mapped_column(Text)
+    downgraded_severity: Mapped[Severity | None] = mapped_column(
+        enum_column(Severity, length=16), nullable=True
+    )
+    downgraded_confidence: Mapped[Confidence | None] = mapped_column(
+        enum_column(Confidence, length=16), nullable=True
+    )
+    provider: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(128))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AIFindingModel(Base):
+    """One AI finding that survived validation, the critic, confidence
+    aggregation, and dedup -- the only table a query/presentation layer
+    should ever read from."""
+
+    __tablename__ = "ai_findings"
+    __table_args__ = (
+        Index("ix_ai_findings_review_run_id", "review_run_id"),
+        Index("ix_ai_findings_proposal_id", "proposal_id", unique=True),
+        Index("ix_ai_findings_file_path", "review_run_id", "file_path"),
+        Index("ix_ai_findings_severity", "review_run_id", "severity"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    review_run_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("review_runs.id", ondelete="CASCADE")
+    )
+    proposal_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("ai_finding_proposals.id", ondelete="CASCADE")
+    )
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("review_candidates.id", ondelete="CASCADE")
+    )
+    title: Mapped[str] = mapped_column(String(512))
+    message: Mapped[str] = mapped_column(Text)
+    category: Mapped[FindingCategory] = mapped_column(enum_column(FindingCategory, length=32))
+    severity: Mapped[Severity] = mapped_column(enum_column(Severity, length=16))
+    confidence: Mapped[Confidence] = mapped_column(enum_column(Confidence, length=16))
+    file_path: Mapped[str] = mapped_column(String(1024))
+    start_line: Mapped[int] = mapped_column(Integer)
+    end_line: Mapped[int] = mapped_column(Integer)
+    evidence: Mapped[str] = mapped_column(Text)
+    reasoning_summary: Mapped[str] = mapped_column(Text)
+    suggested_fix: Mapped[str | None] = mapped_column(Text, nullable=True)
+    corroborated_by_static: Mapped[bool] = mapped_column(Boolean, default=False)
+    static_finding_ids: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

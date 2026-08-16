@@ -1,0 +1,203 @@
+"""AI Reviewer configuration and effective-toolchain identity.
+
+Mirrors :mod:`patchfrog.analysis.config` + :mod:`patchfrog.analysis.toolchain`'s
+split for the static analysis engine: :class:`ReviewConfig` captures
+configuration *intent* (loaded from an optional ``review:`` section in
+``.patchfrog.yml``, same untrusted-repo-content safety rules as analysis
+config), while :class:`ReviewModelIdentity` captures the *effective*
+toolchain a run actually used -- provider, model, prompt version, and
+review-policy version. Both fingerprints together form a review run's
+persisted identity (see :mod:`patchfrog.persistence.repositories.review_run`),
+so a model swap, a provider swap, a prompt-template edit, or a
+validation/critic/confidence-aggregation rule change each invalidate
+reuse of a prior canonical run -- exactly the toolchain-awareness bug
+fixed for the static analysis engine in Phase 3.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from typing import Literal
+
+import structlog
+import yaml
+from pydantic import BaseModel, ConfigDict
+
+from patchfrog.analysis.domain import Confidence
+
+logger = structlog.get_logger(__name__)
+
+_CONFIG_FILENAMES = (".patchfrog.yml", ".patchfrog.yaml")
+
+#: Bumped whenever ReviewConfig's own shape/semantics change.
+CONFIG_SCHEMA_VERSION = 1
+
+#: Bumped whenever patchfrog.review.prompt's system/user prompt templates
+#: change materially enough that a prior run's proposals can no longer be
+#: considered equivalent to what re-running now would produce.
+REVIEW_PROMPT_VERSION = 1
+
+#: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
+#: patchfrog.review.confidence's rules for what survives to a final
+#: finding change materially.
+REVIEW_POLICY_VERSION = 1
+
+#: Bumped whenever candidate generation/selection (patchfrog.review.candidates)
+#: changes materially.
+REVIEW_ENGINE_VERSION = 1
+
+DEFAULT_PROVIDER = "anthropic"
+DEFAULT_MODEL = "claude-opus-5"
+DEFAULT_CRITIC_MODEL = "claude-opus-5"
+DEFAULT_MAX_CANDIDATES = 40
+DEFAULT_MAX_INPUT_TOKENS_PER_CANDIDATE = 12_000
+DEFAULT_MAX_OUTPUT_TOKENS_PER_CANDIDATE = 4_096
+DEFAULT_MAX_TOTAL_INPUT_TOKENS = 400_000
+DEFAULT_MAX_CONCURRENT_REQUESTS = 4
+DEFAULT_MIN_FINAL_CONFIDENCE: Confidence = Confidence.MEDIUM
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
+
+
+class ReviewConfig(BaseModel):
+    """Effective AI-review configuration for one review run.
+
+    ``provider``/``model`` here are configuration *intent* -- what the
+    caller asked for. The provider adapter's own
+    :class:`~patchfrog.review.provider.ProviderIdentity`, captured at call
+    time, is the *effective* identity folded into
+    :class:`ReviewModelIdentity` below; the two are expected to agree, but
+    only the latter participates in run-identity fingerprinting, so a
+    provider/adapter behavior change is still caught even if the
+    configured strings didn't change.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    provider: str = DEFAULT_PROVIDER
+    model: str = DEFAULT_MODEL
+    critic_enabled: bool = True
+    critic_model: str = DEFAULT_CRITIC_MODEL
+    max_candidates: int = DEFAULT_MAX_CANDIDATES
+    max_input_tokens_per_candidate: int = DEFAULT_MAX_INPUT_TOKENS_PER_CANDIDATE
+    max_output_tokens_per_candidate: int = DEFAULT_MAX_OUTPUT_TOKENS_PER_CANDIDATE
+    max_total_input_tokens: int = DEFAULT_MAX_TOTAL_INPUT_TOKENS
+    max_concurrent_requests: int = DEFAULT_MAX_CONCURRENT_REQUESTS
+    min_final_confidence: Confidence = DEFAULT_MIN_FINAL_CONFIDENCE
+    max_retries: int = DEFAULT_MAX_RETRIES
+    request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    def fingerprint(self) -> str:
+        """A deterministic fingerprint of *configuration intent* --
+        deliberately excludes anything about what actually ran (see
+        :class:`ReviewModelIdentity`, folded in separately by the
+        caller)."""
+
+        payload = {
+            "schema_version": CONFIG_SCHEMA_VERSION,
+            "provider": self.provider,
+            "model": self.model,
+            "critic_enabled": self.critic_enabled,
+            "critic_model": self.critic_model,
+            "max_candidates": self.max_candidates,
+            "max_input_tokens_per_candidate": self.max_input_tokens_per_candidate,
+            "max_output_tokens_per_candidate": self.max_output_tokens_per_candidate,
+            "max_total_input_tokens": self.max_total_input_tokens,
+            "min_final_confidence": self.min_final_confidence.value,
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+class ReviewModelIdentity(BaseModel):
+    """The *effective* toolchain identity for one review run: the actual
+    provider/model that served requests (reviewer and, if enabled,
+    critic), plus PatchFrog's own prompt/policy/engine versions.
+
+    Two runs with identical :class:`ReviewConfig` intent can still have a
+    different effective identity -- e.g. PatchFrog ships a prompt-template
+    fix, or the configured model alias now resolves to a different
+    snapshot server-side -- and canonical-run reuse must treat those as
+    distinct, exactly like
+    :class:`patchfrog.analysis.toolchain.ToolchainSnapshot` does for the
+    static analysis engine.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    reviewer_provider: str
+    reviewer_model: str
+    critic_provider: str | None
+    critic_model: str | None
+    prompt_version: int = REVIEW_PROMPT_VERSION
+    policy_version: int = REVIEW_POLICY_VERSION
+    engine_version: int = REVIEW_ENGINE_VERSION
+
+    def fingerprint(self) -> str:
+        payload = {
+            "reviewer_provider": self.reviewer_provider,
+            "reviewer_model": self.reviewer_model,
+            "critic_provider": self.critic_provider,
+            "critic_model": self.critic_model,
+            "prompt_version": self.prompt_version,
+            "policy_version": self.policy_version,
+            "engine_version": self.engine_version,
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+EnabledSetting = bool | Literal["auto"]
+
+
+def load_review_config(repository_root: Path) -> ReviewConfig:
+    """Load the ``review:`` section of ``.patchfrog.yml``/``.patchfrog.yaml``
+    from a repository root.
+
+    Same untrusted-input safety rules as
+    :func:`patchfrog.analysis.config.load_analysis_config`: absent or
+    malformed config always falls back to safe defaults, and the file is
+    only ever parsed with ``yaml.safe_load``. Credentials are never read
+    from this file -- see :mod:`patchfrog.config.settings` for the
+    environment-only ``ANTHROPIC_API_KEY``.
+    """
+
+    for filename in _CONFIG_FILENAMES:
+        path = repository_root / filename
+        if not path.is_file():
+            continue
+        try:
+            raw = yaml.safe_load(path.read_text())
+        except (OSError, yaml.YAMLError) as exc:
+            logger.warning("review_config_unreadable", path=str(path), error=str(exc))
+            return ReviewConfig()
+
+        if raw is None:
+            return ReviewConfig()
+        if not isinstance(raw, dict):
+            logger.warning("review_config_malformed", path=str(path))
+            return ReviewConfig()
+
+        review_section = raw.get("review", {})
+        if not isinstance(review_section, dict):
+            logger.warning("review_config_section_malformed", path=str(path))
+            return ReviewConfig()
+
+        # Never allow a credential-shaped key in the repo-controlled file
+        # to be silently accepted and ignored without at least a warning
+        # -- credentials are environment-only (see module docstring).
+        for forbidden in ("api_key", "credentials", "token", "secret"):
+            if forbidden in review_section:
+                logger.warning(
+                    "review_config_credential_field_ignored", path=str(path), field=forbidden
+                )
+
+        try:
+            return ReviewConfig.model_validate(review_section)
+        except Exception as exc:
+            logger.warning("review_config_invalid", path=str(path), error=str(exc))
+            return ReviewConfig()
+
+    return ReviewConfig()

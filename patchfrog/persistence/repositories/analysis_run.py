@@ -238,3 +238,24 @@ class AnalysisRunRepository:
 
     async def get_by_id(self, session: AsyncSession, *, run_id: uuid.UUID) -> AnalysisRunModel | None:
         return await session.get(AnalysisRunModel, run_id)
+
+    async def get_latest_succeeded_for_commit(
+        self, session: AsyncSession, *, repository_id: uuid.UUID, commit_sha: str
+    ) -> AnalysisRunModel | None:
+        """The most recently completed succeeded run for this commit,
+        regardless of which config/toolchain fingerprint produced it --
+        used by the AI Reviewer (:mod:`patchfrog.review.service`) to find
+        *any* static-analysis evidence for a commit without needing to
+        recompute the exact fingerprints a caller isn't tracking."""
+
+        result = await session.execute(
+            select(AnalysisRunModel)
+            .where(
+                AnalysisRunModel.repository_id == repository_id,
+                AnalysisRunModel.commit_sha == commit_sha,
+                AnalysisRunModel.status == AnalysisRunStatus.SUCCEEDED,
+            )
+            .order_by(AnalysisRunModel.completed_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()

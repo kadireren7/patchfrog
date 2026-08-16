@@ -4,6 +4,7 @@
     python -m patchfrog.cli analyze --repository /path/to/repo [--full-name owner/repo]
     python -m patchfrog.cli context --repository /path/to/repo --finding-id <id>
     python -m patchfrog.cli context --repository /path/to/repo --file src/foo.py --line 42
+    python -m patchfrog.cli review --repository /path/to/repo --base main [--dry-run]
 
 Deliberately minimal — a couple of subcommands, argparse only. This
 exists purely as a controlled way to trigger indexing/analysis/context
@@ -34,7 +35,18 @@ from patchfrog.indexing.service import RepositoryIndexingService
 from patchfrog.persistence.database import create_engine, create_session_factory
 from patchfrog.persistence.models.analysis import FindingModel
 from patchfrog.persistence.repositories import RepositoryRepository
-from patchfrog.repository.git import GitError
+from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
+from patchfrog.repository.git import GitError, run_git
+from patchfrog.review.candidates import ReviewCandidateGenerator
+from patchfrog.review.config import ReviewConfig, load_review_config
+from patchfrog.review.domain import ReviewCandidate, ReviewRunSummary
+from patchfrog.review.local_diff import diff_against_base
+from patchfrog.review.provider_factory import (
+    MissingProviderCredentialsError,
+    build_critic_provider,
+    build_reviewer_provider,
+)
+from patchfrog.review.service import PullRequestReviewService, StaleReviewIndexError
 
 logger = structlog.get_logger(__name__)
 
@@ -155,6 +167,73 @@ async def _context_local(
         await engine.dispose()
 
 
+async def _review_dry_run(
+    *, repository_path: Path, full_name: str, base_ref: str
+) -> tuple[ReviewConfig, tuple[ReviewCandidate, ...]]:
+    """Build review candidates (and, implicitly, the context each would
+    use) without ever constructing a provider or making a network call --
+    the safe path required before anyone runs a real, billed review."""
+
+    settings = get_settings()
+    configure_logging(settings.log_level)
+
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        repository_id = await _upsert_cli_repository(session_factory, full_name=full_name)
+        config = load_review_config(repository_path)
+        diff_files = diff_against_base(repository_path, base_ref)
+
+        async with session_factory() as session:
+            active_index = await RepositoryIndexRepository().get_active(session, repository_id=repository_id)
+            if active_index is None:
+                raise StaleReviewIndexError(f"no repository index exists for repository {repository_id}")
+
+            static_findings: list[FindingModel] = []
+            candidates = await ReviewCandidateGenerator().generate(
+                session,
+                repository_index_id=active_index.id,
+                diff_files=diff_files,
+                static_findings=static_findings,
+                max_candidates=config.max_candidates,
+            )
+        return config, candidates
+    finally:
+        await engine.dispose()
+
+
+async def _review_local(*, repository_path: Path, full_name: str, base_ref: str) -> ReviewRunSummary:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        repository_id = await _upsert_cli_repository(session_factory, full_name=full_name)
+        config = load_review_config(repository_path)
+        diff_files = diff_against_base(repository_path, base_ref)
+        commit_sha = run_git(["rev-parse", "HEAD"], cwd=repository_path).strip()
+
+        reviewer_provider = build_reviewer_provider(config, settings=settings)
+        critic_provider = build_critic_provider(config, settings=settings)
+
+        service = PullRequestReviewService(
+            session_factory=session_factory,
+            reviewer_provider=reviewer_provider,
+            critic_provider=critic_provider,
+        )
+        return await service.review_local(
+            repository_id=repository_id,
+            root_path=repository_path,
+            repository_full_name=full_name,
+            commit_sha=commit_sha,
+            diff_files=diff_files,
+            config=config,
+        )
+    finally:
+        await engine.dispose()
+
+
 def _run_index(args: argparse.Namespace) -> int:
     repository_path: Path = args.repository
     if not repository_path.is_dir():
@@ -265,6 +344,59 @@ def _run_context(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_review(args: argparse.Namespace) -> int:
+    repository_path: Path = args.repository
+    if not repository_path.is_dir():
+        print(f"error: not a directory: {repository_path}", file=sys.stderr)
+        return 1
+    if not (repository_path / ".git").exists():
+        print(f"error: not a git repository (no .git found): {repository_path}", file=sys.stderr)
+        return 1
+
+    full_name = args.full_name or _default_full_name(repository_path)
+    try:
+        if args.dry_run:
+            config, candidates = asyncio.run(
+                _review_dry_run(repository_path=repository_path, full_name=full_name, base_ref=args.base)
+            )
+            print(
+                f"dry-run for {full_name}: {len(candidates)} candidate(s) would be reviewed "
+                f"(provider={config.provider} model={config.model}, no provider call made)"
+            )
+            for c in candidates:
+                target = c.qualified_name or c.symbol_name or f"{c.file_path}:{c.start_line}"
+                print(
+                    f"  - {target} ({c.file_path}:{c.start_line}-{c.end_line}) reason={c.reason.value} "
+                    f"changed_lines={len(c.changed_lines)} static_findings={len(c.static_finding_ids)}"
+                )
+            return 0
+
+        summary = asyncio.run(
+            _review_local(repository_path=repository_path, full_name=full_name, base_ref=args.base)
+        )
+    except GitError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except StaleReviewIndexError as exc:
+        print(f"error: {exc} — run 'index' for this commit first", file=sys.stderr)
+        return 1
+    except MissingProviderCredentialsError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(
+        f"reviewed {full_name}: status={summary.status.value} "
+        f"candidates={summary.candidate_count} reviewed={summary.candidates_reviewed} "
+        f"failed={summary.candidates_failed} skipped_budget={summary.candidates_skipped_budget} "
+        f"accepted={summary.accepted_count} rejected={summary.rejected_count} "
+        f"suppressed_duplicate={summary.suppressed_duplicate_count} "
+        f"reviewer_tokens={summary.reviewer_usage.input_tokens}/{summary.reviewer_usage.output_tokens} "
+        f"critic_tokens={summary.critic_usage.input_tokens}/{summary.critic_usage.output_tokens} "
+        f"duration_ms={summary.duration_ms:.1f} reused={summary.reused_existing_run}"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="patchfrog.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -309,6 +441,30 @@ def main(argv: list[str] | None = None) -> int:
         "--show-content", action="store_true", help="Also print each item's extracted source content"
     )
 
+    review_parser = subparsers.add_parser(
+        "review",
+        help=(
+            "Run the AI reviewer against the diff since --base (requires 'index' first; "
+            "--dry-run never calls the LLM provider)"
+        ),
+    )
+    review_parser.add_argument(
+        "--repository", required=True, type=Path, help="Path to a local git checkout"
+    )
+    review_parser.add_argument(
+        "--full-name",
+        default=None,
+        help="Repository identity, e.g. 'owner/repo' (defaults to the directory name)",
+    )
+    review_parser.add_argument(
+        "--base", default="HEAD~1", help="Base ref to diff against (default: HEAD~1)"
+    )
+    review_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Build candidates and context only -- never constructs a provider or calls the LLM",
+    )
+
     args = parser.parse_args(argv)
     if args.command == "index":
         return _run_index(args)
@@ -316,6 +472,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_analyze(args)
     if args.command == "context":
         return _run_context(args)
+    if args.command == "review":
+        return _run_review(args)
 
     return 1
 
