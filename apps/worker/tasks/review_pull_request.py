@@ -2,8 +2,11 @@
 
 Thin adapter only — resolves the installation access token, re-fetches
 the PR's changed files from GitHub (diff hunks are not persisted by
-ingestion; see :mod:`patchfrog.services.pull_request_ingestion`), and
-delegates all real work to
+ingestion; see :mod:`patchfrog.services.pull_request_ingestion`), resolves
+the repository's *exact-commit* ``.patchfrog.yml`` review config (see
+:mod:`patchfrog.review.config_resolution` -- the same function the CLI
+uses, so the two paths can never diverge in what config a given
+repository/commit resolves to), and delegates all real work to
 :class:`patchfrog.review.service.PullRequestReviewService`. Phase 2's
 repository index for the exact commit under review must already exist
 (see :class:`patchfrog.review.service.StaleReviewIndexError`) -- the same
@@ -33,10 +36,11 @@ from patchfrog.github.auth import InstallationTokenProvider
 from patchfrog.github.client import GitHubClient
 from patchfrog.persistence.database import create_engine, create_session_factory
 from patchfrog.persistence.repositories import PullRequestRepository, RepositoryRepository
-from patchfrog.review.config import ReviewConfig
+from patchfrog.review.config import MalformedReviewConfigError
+from patchfrog.review.config_resolution import resolve_repository_review_config
 from patchfrog.review.domain import ReviewRunSummary
 from patchfrog.review.provider_factory import build_critic_provider, build_reviewer_provider
-from patchfrog.review.service import PullRequestReviewService
+from patchfrog.review.service import PullRequestReviewService, persist_malformed_config_failure
 
 logger = structlog.get_logger(__name__)
 
@@ -95,17 +99,24 @@ async def _review_pull_request(
 
         diff_files = [build_diff_file(f.path, f.patch) for f in changed_files]
 
-        # NOTE: .patchfrog.yml's `review:` section (see
-        # patchfrog.review.config.load_review_config) is only read from an
-        # already-checked-out working tree today -- the CLI path reads it
-        # directly off disk before calling the service. Reading it here
-        # would mean checking out the repository before candidate
-        # generation even starts, which the Context Engine snapshot
-        # (acquired lazily, per-candidate, inside the service) does not
-        # do up front. Every production run therefore uses ReviewConfig()
-        # defaults until per-repo config plumbing is added as a follow-up
-        # -- tracked in the Phase 5 PR's "Known limitations".
-        review_config = ReviewConfig()
+        clone_url = f"https://github.com/{full_name}.git"
+        try:
+            review_config = await resolve_repository_review_config(
+                local=False,
+                commit_sha=head_sha,
+                repository_full_name=full_name,
+                clone_url=clone_url,
+                token=token,
+            )
+        except MalformedReviewConfigError as exc:
+            await persist_malformed_config_failure(
+                session_factory,
+                repository_id=repository_id,
+                commit_sha=head_sha,
+                pull_request_id=pull_request_id,
+                exc=exc,
+            )
+            raise
 
         reviewer_provider = build_reviewer_provider(review_config, settings=settings)
         critic_provider = build_critic_provider(review_config, settings=settings)
@@ -117,7 +128,7 @@ async def _review_pull_request(
         )
         return await service.review_pull_request(
             repository_id=repository_id,
-            clone_url=f"https://github.com/{full_name}.git",
+            clone_url=clone_url,
             commit_sha=head_sha,
             repository_full_name=full_name,
             token=token,

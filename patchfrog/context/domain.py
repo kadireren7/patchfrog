@@ -170,8 +170,19 @@ class ContextQualityMetrics:
 
 @dataclass(frozen=True, slots=True)
 class ContextBundle:
-    """The final, ranked, bounded context for one target."""
+    """The final, ranked, bounded context for one target.
 
+    ``id`` is the persisted :class:`~patchfrog.persistence.models.context.ContextBundleModel`
+    row's id -- always the *canonical* row for this bundle's identity,
+    whether this call created it fresh or reused an existing succeeded
+    bundle (including the narrow concurrent-write-loss case, where it is
+    the winning concurrent bundle's id, not the id this call originally
+    claimed). Deliberately exposed so callers (e.g. the AI Reviewer, which
+    must record exactly which persisted context a provider request was
+    built from) never have to guess or re-derive it.
+    """
+
+    id: UUID
     target: ContextTarget
     items: tuple[ContextItem, ...]
     total_tokens_estimate: int

@@ -22,6 +22,7 @@ is where that decision is enforced end to end.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -51,7 +52,7 @@ from patchfrog.persistence.repositories.analysis_run import AnalysisRunRepositor
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
 from patchfrog.review.candidates import ReviewCandidateGenerator, summarize_static_finding
 from patchfrog.review.confidence import aggregate, meets_minimum
-from patchfrog.review.config import ReviewConfig, ReviewModelIdentity
+from patchfrog.review.config import MalformedReviewConfigError, ReviewConfig, ReviewModelIdentity
 from patchfrog.review.critic import CriticService
 from patchfrog.review.dedup import deduplicate
 from patchfrog.review.domain import (
@@ -88,6 +89,112 @@ class StaleReviewIndexError(RuntimeError):
     """No Phase 2 repository index exists for the exact commit being
     reviewed. Mirrors :class:`patchfrog.context.service.StaleContextIndexError`
     and :class:`patchfrog.analysis.service.StaleIndexError`."""
+
+
+async def require_matching_review_index(
+    session_factory: async_sessionmaker[AsyncSession], *, repository_id: uuid.UUID, commit_sha: str
+) -> uuid.UUID:
+    """Shared by :meth:`PullRequestReviewService._require_matching_index`
+    and :func:`persist_malformed_config_failure` -- the exact commit under
+    review must have a matching Phase 2 repository index, whether or not
+    its ``.patchfrog.yml`` could even be parsed. Module-level (rather than
+    an instance method) specifically so it's callable before a
+    :class:`PullRequestReviewService` exists -- config resolution, and
+    therefore provider selection, must happen before the service is
+    constructed (see :mod:`patchfrog.review.config_resolution`)."""
+
+    index_repo = RepositoryIndexRepository()
+    async with session_factory() as session:
+        active_index = await index_repo.get_active(session, repository_id=repository_id)
+    if active_index is None:
+        raise StaleReviewIndexError(f"no repository index exists for repository {repository_id}")
+    if active_index.commit_sha != commit_sha:
+        raise StaleReviewIndexError(
+            f"repository index is at commit {active_index.commit_sha!r}, "
+            f"but review was requested for commit {commit_sha!r}"
+        )
+    return active_index.id
+
+
+#: Fixed sentinel model_fingerprint for a malformed-config failure record
+#: (see :func:`persist_malformed_config_failure`) -- no real reviewer
+#: provider/model was ever selected (the configured model name lives in
+#: the very file that failed to parse), so there is nothing meaningful to
+#: fingerprint there. The failure's true identity comes entirely from its
+#: content-addressed config_fingerprint (see :func:`_malformed_config_fingerprint`).
+_MALFORMED_CONFIG_MODEL_FINGERPRINT = hashlib.sha256(b"malformed_review_config:unresolved_model").hexdigest()
+
+
+async def persist_malformed_config_failure(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    repository_id: uuid.UUID,
+    commit_sha: str,
+    pull_request_id: uuid.UUID | None,
+    exc: MalformedReviewConfigError,
+) -> ReviewRunModel:
+    """Record a malformed ``.patchfrog.yml`` as a clear, queryable failed
+    ``review_runs`` row -- "fail safely" means observable via the
+    database, not just a raised exception nobody happens to be watching
+    for. Callable directly by the CLI and the Celery task *before* either
+    has resolved a provider or constructed a :class:`PullRequestReviewService`
+    -- config resolution must happen before provider selection (see
+    :mod:`patchfrog.review.config_resolution`), so there is no real
+    reviewer provider/model to record at this point; ``reviewer_provider``/
+    ``reviewer_model`` are recorded as the literal string ``"unresolved"``
+    rather than a guess.
+
+    The identity is content-addressed on the malformed file's raw text
+    (:func:`_malformed_config_fingerprint`): retrying against the exact
+    same bad content reuses this identity (serialized by the same
+    ``pg_advisory_xact_lock`` every other review-run identity uses), while
+    fixing the file naturally produces a fresh, distinct identity on the
+    next attempt. This identity never reaches ``succeeded``, so unlike a
+    normal identity it does not converge to one canonical row across
+    repeated attempts -- each attempt is its own historical record, the
+    same behavior any other run-level exception already has (see the
+    generic ``except Exception`` handling in
+    :meth:`PullRequestReviewService._run`).
+
+    Still requires a matching repository index for ``commit_sha`` (reuses
+    :func:`require_matching_review_index`) -- a malformed config on a
+    stale/wrong commit surfaces :class:`StaleReviewIndexError` first,
+    exactly as a well-formed config would.
+    """
+
+    repository_index_id = await require_matching_review_index(
+        session_factory, repository_id=repository_id, commit_sha=commit_sha
+    )
+    run_repo = ReviewRunRepository()
+    config_fingerprint = _malformed_config_fingerprint(exc)
+
+    async with session_factory() as session:
+        run, is_new = await run_repo.get_or_create_running(
+            session,
+            repository_id=repository_id,
+            repository_index_id=repository_index_id,
+            commit_sha=commit_sha,
+            config_fingerprint=config_fingerprint,
+            model_fingerprint=_MALFORMED_CONFIG_MODEL_FINGERPRINT,
+            reviewer_provider="unresolved",
+            reviewer_model="unresolved",
+            critic_provider=None,
+            critic_model=None,
+            pull_request_id=pull_request_id,
+        )
+        await session.commit()
+
+    if not is_new:
+        logger.info("review_run_malformed_config_already_recorded", run_id=str(run.id))
+        return run
+
+    async with session_factory() as session:
+        failed_run = await run_repo.mark_failed(
+            session, run_id=run.id, error_message=f"malformed .patchfrog.yml: {exc}"
+        )
+        await session.commit()
+    logger.error("review_run_failed_malformed_config", run_id=str(run.id), error=str(exc))
+    return failed_run
 
 
 class _CandidateOutcome:
@@ -159,7 +266,18 @@ class PullRequestReviewService:
     ) -> ReviewRunSummary:
         """Review a repository already checked out on disk (CLI / dogfood
         use). Context is built against the same local checkout via
-        :meth:`ContextService.build_context_local`."""
+        :meth:`ContextService.build_context_local`.
+
+        ``config`` is expected to already be resolved by the caller (see
+        :func:`patchfrog.review.config_resolution.resolve_repository_review_config`,
+        used by both the CLI and the production Celery task so they can
+        never diverge) -- provider selection depends on ``config.provider``/
+        ``config.model``, so resolution necessarily happens before a
+        provider, and therefore this service, can be constructed. Omitting
+        ``config`` here is only a convenience default of
+        :class:`~patchfrog.review.config.ReviewConfig`'s own defaults, not
+        a substitute for real resolution.
+        """
 
         return await self._run(
             repository_id=repository_id,
@@ -185,7 +303,8 @@ class PullRequestReviewService:
         config: ReviewConfig | None = None,
     ) -> ReviewRunSummary:
         """Review a repository fetched from ``clone_url`` (production /
-        Celery-task use)."""
+        Celery-task use). ``config`` is expected to already be resolved by
+        the caller -- see :meth:`review_local`'s docstring."""
 
         return await self._run(
             repository_id=repository_id,
@@ -199,17 +318,9 @@ class PullRequestReviewService:
         )
 
     async def _require_matching_index(self, *, repository_id: uuid.UUID, commit_sha: str) -> uuid.UUID:
-        index_repo = RepositoryIndexRepository()
-        async with self._session_factory() as session:
-            active_index = await index_repo.get_active(session, repository_id=repository_id)
-        if active_index is None:
-            raise StaleReviewIndexError(f"no repository index exists for repository {repository_id}")
-        if active_index.commit_sha != commit_sha:
-            raise StaleReviewIndexError(
-                f"repository index is at commit {active_index.commit_sha!r}, "
-                f"but review was requested for commit {commit_sha!r}"
-            )
-        return active_index.id
+        return await require_matching_review_index(
+            self._session_factory, repository_id=repository_id, commit_sha=commit_sha
+        )
 
     async def _run(
         self,
@@ -236,8 +347,8 @@ class PullRequestReviewService:
             critic_provider=(self._critic_provider.identity.provider if self._critic_provider else None),
             critic_model=(self._critic_provider.identity.model if self._critic_provider else None),
         )
-        config_fingerprint = config.fingerprint()
         model_fingerprint = model_identity.fingerprint()
+        config_fingerprint = config.fingerprint()
 
         async with self._session_factory() as session:
             run, is_new = await self._run_repo.get_or_create_running(
@@ -560,11 +671,7 @@ class PullRequestReviewService:
 
             context_text = "\n\n".join(f"# {item.file_path}\n{item.content}" for item in bundle.items)
             allowed_file_paths = frozenset({candidate.file_path} | {i.file_path for i in bundle.items})
-            # ContextBundle (the domain object) doesn't carry the persisted
-            # ContextBundleModel row's id, so review_candidates.context_bundle_id
-            # is left unset (the column is nullable) -- known limitation, see
-            # the Phase 5 PR description.
-            outcome.context_bundle_id = None
+            outcome.context_bundle_id = bundle.id
         except Exception as exc:
             outcome.failed = True
             outcome.error = f"context build failed: {exc}"
@@ -691,6 +798,17 @@ class PullRequestReviewService:
                     static_finding_ids=candidate.static_finding_ids,
                 )
             )
+
+
+def _malformed_config_fingerprint(exc: MalformedReviewConfigError) -> str:
+    """Content-addressed identity for a malformed-config run-failure
+    record -- see :meth:`PullRequestReviewService._persist_malformed_config_failure`.
+    Deliberately keyed on the raw file text (not just the error message),
+    so two different malformed contents that happen to produce the same
+    YAML-parser error string still get distinct identities."""
+
+    payload = f"malformed_review_config:{exc.path}:{exc.raw_text}"
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 async def _call_with_retry[T](

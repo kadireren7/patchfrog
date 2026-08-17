@@ -38,7 +38,8 @@ from patchfrog.persistence.repositories import RepositoryRepository
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
 from patchfrog.repository.git import GitError, run_git
 from patchfrog.review.candidates import ReviewCandidateGenerator
-from patchfrog.review.config import ReviewConfig, load_review_config
+from patchfrog.review.config import MalformedReviewConfigError, ReviewConfig
+from patchfrog.review.config_resolution import resolve_repository_review_config
 from patchfrog.review.domain import ReviewCandidate, ReviewRunSummary
 from patchfrog.review.local_diff import diff_against_base
 from patchfrog.review.provider_factory import (
@@ -46,7 +47,11 @@ from patchfrog.review.provider_factory import (
     build_critic_provider,
     build_reviewer_provider,
 )
-from patchfrog.review.service import PullRequestReviewService, StaleReviewIndexError
+from patchfrog.review.service import (
+    PullRequestReviewService,
+    StaleReviewIndexError,
+    persist_malformed_config_failure,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -181,7 +186,10 @@ async def _review_dry_run(
     session_factory = create_session_factory(engine)
     try:
         repository_id = await _upsert_cli_repository(session_factory, full_name=full_name)
-        config = load_review_config(repository_path)
+        commit_sha = run_git(["rev-parse", "HEAD"], cwd=repository_path).strip()
+        config = await resolve_repository_review_config(
+            local=True, commit_sha=commit_sha, repository_full_name=full_name, root_path=repository_path
+        )
         diff_files = diff_against_base(repository_path, base_ref)
 
         async with session_factory() as session:
@@ -210,9 +218,21 @@ async def _review_local(*, repository_path: Path, full_name: str, base_ref: str)
     session_factory = create_session_factory(engine)
     try:
         repository_id = await _upsert_cli_repository(session_factory, full_name=full_name)
-        config = load_review_config(repository_path)
-        diff_files = diff_against_base(repository_path, base_ref)
         commit_sha = run_git(["rev-parse", "HEAD"], cwd=repository_path).strip()
+        try:
+            config = await resolve_repository_review_config(
+                local=True, commit_sha=commit_sha, repository_full_name=full_name, root_path=repository_path
+            )
+        except MalformedReviewConfigError as exc:
+            await persist_malformed_config_failure(
+                session_factory,
+                repository_id=repository_id,
+                commit_sha=commit_sha,
+                pull_request_id=None,
+                exc=exc,
+            )
+            raise
+        diff_files = diff_against_base(repository_path, base_ref)
 
         reviewer_provider = build_reviewer_provider(config, settings=settings)
         critic_provider = build_critic_provider(config, settings=settings)
@@ -379,6 +399,9 @@ def _run_review(args: argparse.Namespace) -> int:
         return 1
     except StaleReviewIndexError as exc:
         print(f"error: {exc} — run 'index' for this commit first", file=sys.stderr)
+        return 1
+    except MalformedReviewConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 1
     except MissingProviderCredentialsError as exc:
         print(f"error: {exc}", file=sys.stderr)

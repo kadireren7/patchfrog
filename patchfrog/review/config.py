@@ -151,39 +151,75 @@ class ReviewModelIdentity(BaseModel):
 
 EnabledSetting = bool | Literal["auto"]
 
+#: How ``load_review_config`` handles a *malformed* (present but
+#: unparsable/invalid) config file. ``"defaults"`` -- the historical,
+#: dry-run/CLI-preview-friendly behavior -- silently falls back to
+#: :class:`ReviewConfig` defaults after logging a warning. ``"raise"``
+#: instead raises :class:`MalformedReviewConfigError`, so a caller that
+#: represents a real, persisted review run (the CLI's real run and the
+#: production Celery task alike -- see :mod:`patchfrog.review.service`)
+#: can turn a bad committed config into a visible, queryable failed run
+#: rather than one that silently proceeded on defaults. A genuinely
+#: *missing* file is never "malformed" -- that always means defaults,
+#: under either mode.
+OnMalformed = Literal["defaults", "raise"]
 
-def load_review_config(repository_root: Path) -> ReviewConfig:
+
+class MalformedReviewConfigError(ValueError):
+    """Raised by :func:`load_review_config` when ``on_malformed="raise"``
+    and the repository's ``.patchfrog.yml``/``.patchfrog.yaml`` exists but
+    could not be parsed or validated (bad YAML, non-mapping shape, or a
+    ``review:`` section that fails :class:`ReviewConfig` validation).
+
+    Carries the file's raw text so a caller can derive a stable,
+    content-addressed identity for the failure -- see
+    :func:`patchfrog.review.service._malformed_config_fingerprint` --
+    so retrying against the *same* bad content doesn't need a fresh
+    identity, but fixing the file does.
+    """
+
+    def __init__(self, message: str, *, path: Path, raw_text: str) -> None:
+        super().__init__(message)
+        self.path = path
+        self.raw_text = raw_text
+
+
+def load_review_config(repository_root: Path, *, on_malformed: OnMalformed = "defaults") -> ReviewConfig:
     """Load the ``review:`` section of ``.patchfrog.yml``/``.patchfrog.yaml``
     from a repository root.
 
     Same untrusted-input safety rules as
-    :func:`patchfrog.analysis.config.load_analysis_config`: absent or
-    malformed config always falls back to safe defaults, and the file is
-    only ever parsed with ``yaml.safe_load``. Credentials are never read
-    from this file -- see :mod:`patchfrog.config.settings` for the
-    environment-only ``ANTHROPIC_API_KEY``.
+    :func:`patchfrog.analysis.config.load_analysis_config`: the file is
+    only ever parsed with ``yaml.safe_load``, and a genuinely *missing*
+    file always falls back to defaults regardless of ``on_malformed``.
+    Credentials are never read from this file -- see
+    :mod:`patchfrog.config.settings` for the environment-only
+    ``ANTHROPIC_API_KEY``.
     """
 
     for filename in _CONFIG_FILENAMES:
         path = repository_root / filename
         if not path.is_file():
             continue
+
         try:
-            raw = yaml.safe_load(path.read_text())
-        except (OSError, yaml.YAMLError) as exc:
-            logger.warning("review_config_unreadable", path=str(path), error=str(exc))
-            return ReviewConfig()
+            raw_text = path.read_text()
+        except OSError as exc:
+            return _malformed(path, "", f"unreadable: {exc}", on_malformed)
+
+        try:
+            raw = yaml.safe_load(raw_text)
+        except yaml.YAMLError as exc:
+            return _malformed(path, raw_text, f"invalid YAML: {exc}", on_malformed)
 
         if raw is None:
             return ReviewConfig()
         if not isinstance(raw, dict):
-            logger.warning("review_config_malformed", path=str(path))
-            return ReviewConfig()
+            return _malformed(path, raw_text, "top-level content is not a mapping", on_malformed)
 
         review_section = raw.get("review", {})
         if not isinstance(review_section, dict):
-            logger.warning("review_config_section_malformed", path=str(path))
-            return ReviewConfig()
+            return _malformed(path, raw_text, "'review' section is not a mapping", on_malformed)
 
         # Never allow a credential-shaped key in the repo-controlled file
         # to be silently accepted and ignored without at least a warning
@@ -197,7 +233,13 @@ def load_review_config(repository_root: Path) -> ReviewConfig:
         try:
             return ReviewConfig.model_validate(review_section)
         except Exception as exc:
-            logger.warning("review_config_invalid", path=str(path), error=str(exc))
-            return ReviewConfig()
+            return _malformed(path, raw_text, f"invalid 'review' section: {exc}", on_malformed)
 
+    return ReviewConfig()
+
+
+def _malformed(path: Path, raw_text: str, detail: str, on_malformed: OnMalformed) -> ReviewConfig:
+    logger.warning("review_config_malformed", path=str(path), detail=detail, on_malformed=on_malformed)
+    if on_malformed == "raise":
+        raise MalformedReviewConfigError(f"{path}: {detail}", path=path, raw_text=raw_text)
     return ReviewConfig()
