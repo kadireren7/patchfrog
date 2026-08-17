@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from patchfrog.persistence.repositories.ai_finding import AIFindingRepository
+from patchfrog.persistence.repositories.ai_finding_proposal import AIFindingProposalRepository
 from patchfrog.persistence.repositories.analysis_run import AnalysisRunRepository
 from patchfrog.persistence.repositories.analyzer_execution import AnalyzerExecutionRepository
 from patchfrog.persistence.repositories.call_reference import CallReferenceRepository
 from patchfrog.persistence.repositories.context_bundle import ContextBundleRepository
 from patchfrog.persistence.repositories.context_item import ContextItemRepository
+from patchfrog.persistence.repositories.critic_verdict import CriticVerdictRepository
 from patchfrog.persistence.repositories.finding import FindingRepository
 from patchfrog.persistence.repositories.finding_source import FindingSourceRepository
 from patchfrog.persistence.repositories.import_reference import ImportReferenceRepository
@@ -17,14 +20,19 @@ from patchfrog.persistence.repositories.pull_request_ingestion import (
 from patchfrog.persistence.repositories.repository import RepositoryRepository
 from patchfrog.persistence.repositories.repository_edge import RepositoryEdgeRepository
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
+from patchfrog.persistence.repositories.review_candidate import ReviewCandidateRepository
+from patchfrog.persistence.repositories.review_run import ReviewRunRepository
 from patchfrog.persistence.repositories.symbol import SymbolRepository
 
 __all__ = [
+    "AIFindingProposalRepository",
+    "AIFindingRepository",
     "AnalysisRunRepository",
     "AnalyzerExecutionRepository",
     "CallReferenceRepository",
     "ContextBundleRepository",
     "ContextItemRepository",
+    "CriticVerdictRepository",
     "FindingRepository",
     "FindingSourceRepository",
     "ImportReferenceRepository",
@@ -35,5 +43,7 @@ __all__ = [
     "RepositoryEdgeRepository",
     "RepositoryIndexRepository",
     "RepositoryRepository",
+    "ReviewCandidateRepository",
+    "ReviewRunRepository",
     "SymbolRepository",
 ]

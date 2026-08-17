@@ -30,8 +30,18 @@ from patchfrog.persistence.models.pull_request_ingestion import (
 )
 from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.persistence.models.repository_index import IndexStatus, RepositoryIndexModel
+from patchfrog.persistence.models.review import (
+    AIFindingModel,
+    AIFindingProposalModel,
+    CriticVerdictModel,
+    ReviewCandidateModel,
+    ReviewCandidateStatus,
+    ReviewRunModel,
+)
 
 __all__ = [
+    "AIFindingModel",
+    "AIFindingProposalModel",
     "AnalysisRunModel",
     "AnalysisRunStatus",
     "AnalyzerExecutionModel",
@@ -40,6 +50,7 @@ __all__ = [
     "ContextBundleModel",
     "ContextBundleStatus",
     "ContextItemModel",
+    "CriticVerdictModel",
     "FileIndexStatus",
     "FindingModel",
     "FindingSourceModel",
@@ -54,5 +65,8 @@ __all__ = [
     "RepositoryEdgeModel",
     "RepositoryIndexModel",
     "RepositoryModel",
+    "ReviewCandidateModel",
+    "ReviewCandidateStatus",
+    "ReviewRunModel",
     "SymbolModel",
 ]

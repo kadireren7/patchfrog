@@ -376,6 +376,7 @@ class ContextService:
         )
 
         return ContextBundle(
+            id=final_bundle.id,
             target=target,
             items=budget_result.items,
             total_tokens_estimate=budget_result.total_tokens,
@@ -410,6 +411,7 @@ class ContextService:
             item_models = await self._item_repo.list_for_bundle(session, bundle_id=bundle.id)
         items = tuple(_item_from_model(m) for m in item_models)
         return ContextBundle(
+            id=bundle.id,
             target=target,
             items=items,
             total_tokens_estimate=bundle.total_tokens,

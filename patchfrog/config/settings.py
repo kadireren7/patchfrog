@@ -45,6 +45,15 @@ class Settings(BaseSettings):
         default=10.0, alias="GITHUB_API_TIMEOUT_SECONDS"
     )
 
+    # AI Reviewer (Phase 5): credentials for the configured LLM provider.
+    # Environment-only -- never read from .patchfrog.yml (see
+    # patchfrog.review.config.load_review_config), never logged, never
+    # persisted. Optional: if unset, patchfrog.review.provider_factory
+    # raises a clear, actionable error only when a real provider is
+    # actually requested (CLI --dry-run and the Celery task's own
+    # provider-construction step both handle this explicitly).
+    anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+
     @field_validator("log_level")
     @classmethod
     def _validate_log_level(cls, value: str) -> str:
