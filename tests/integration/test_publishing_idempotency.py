@@ -38,6 +38,10 @@ def _pr_metadata(*, number: int, head_sha: str) -> PullRequestMetadata:
     )
 
 
+_TEST_CONFIG = PublicationConfig(enabled=True)
+_TEST_POLICY_FINGERPRINT = _TEST_CONFIG.fingerprint()
+
+
 async def test_reconciliation_recovers_when_db_state_lost_but_github_marker_exists(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
@@ -72,6 +76,7 @@ async def test_reconciliation_recovers_when_db_state_lost_but_github_marker_exis
             base_sha="0" * 40,
             head_sha=reviewed.commit_sha,
             mode=ReviewPublicationMode.PUBLISH,
+            publication_policy_fingerprint=_TEST_POLICY_FINGERPRINT,
             status=ReviewPublicationStatus.PUBLISHING,
             started_at=datetime.now(UTC) - timedelta(minutes=30),
         )
@@ -124,6 +129,7 @@ async def test_abandoned_in_flight_with_no_github_marker_allows_a_fresh_safe_ret
             base_sha="0" * 40,
             head_sha=reviewed.commit_sha,
             mode=ReviewPublicationMode.PUBLISH,
+            publication_policy_fingerprint=_TEST_POLICY_FINGERPRINT,
             status=ReviewPublicationStatus.PUBLISHING,
             started_at=datetime.now(UTC) - timedelta(minutes=30),
         )

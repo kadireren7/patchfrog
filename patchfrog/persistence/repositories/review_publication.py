@@ -31,39 +31,63 @@ class ReviewPublicationRepository:
     """Persistence operations for :class:`ReviewPublicationModel`.
 
     Identity for idempotency/concurrency purposes is ``(review_run_id,
-    mode)`` -- mirrors :class:`patchfrog.persistence.repositories.review_run.ReviewRunRepository`
+    mode, publication_policy_fingerprint)`` -- mirrors
+    :class:`patchfrog.persistence.repositories.review_run.ReviewRunRepository`
     exactly, including the transaction-scoped PostgreSQL advisory lock
-    guarding creation/claim/success (no-op on SQLite). Only ``status =
-    'published'`` rows participate in the uniqueness guarantee (see
-    ``uq_review_publications_published_identity``) -- ``DRY_RUN`` attempts
-    and failed/stale real-publish attempts never block a later successful
-    publish for the same review run.
+    guarding creation/claim/success (no-op on SQLite).
+    ``publication_policy_fingerprint`` (see
+    :meth:`patchfrog.publishing.config.PublicationConfig.fingerprint`) is
+    folded into every part of this identity -- lock key, uniqueness
+    check, and the DB-level partial unique index -- so a publication
+    generated under one effective policy can never silently reuse or
+    collide with one generated under a materially different policy (a
+    different ``min_severity``, comment cap, or PatchFrog format/engine
+    version). Only ``status = 'published'`` rows participate in the
+    uniqueness guarantee (see ``uq_review_publications_published_identity``)
+    -- ``DRY_RUN`` attempts and failed/stale real-publish attempts never
+    block a later successful publish for the same identity.
     """
 
     async def _lock_identity(
-        self, session: AsyncSession, *, review_run_id: uuid.UUID, mode: ReviewPublicationMode
+        self,
+        session: AsyncSession,
+        *,
+        review_run_id: uuid.UUID,
+        mode: ReviewPublicationMode,
+        publication_policy_fingerprint: str,
     ) -> None:
         if session.bind is None or session.bind.dialect.name != "postgresql":
             return
-        key_material = f"review_publication:{review_run_id}:{mode.value}"
+        key_material = f"review_publication:{review_run_id}:{mode.value}:{publication_policy_fingerprint}"
         digest = hashlib.sha256(key_material.encode()).digest()[:8]
         lock_key = int.from_bytes(digest, "big") & 0x7FFFFFFFFFFFFFFF
         await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
 
     async def get_published(
-        self, session: AsyncSession, *, review_run_id: uuid.UUID, mode: ReviewPublicationMode
+        self,
+        session: AsyncSession,
+        *,
+        review_run_id: uuid.UUID,
+        mode: ReviewPublicationMode,
+        publication_policy_fingerprint: str,
     ) -> ReviewPublicationModel | None:
         result = await session.execute(
             select(ReviewPublicationModel).where(
                 ReviewPublicationModel.review_run_id == review_run_id,
                 ReviewPublicationModel.mode == mode,
+                ReviewPublicationModel.publication_policy_fingerprint == publication_policy_fingerprint,
                 ReviewPublicationModel.status == ReviewPublicationStatus.PUBLISHED,
             )
         )
         return result.scalar_one_or_none()
 
     async def get_in_flight(
-        self, session: AsyncSession, *, review_run_id: uuid.UUID, mode: ReviewPublicationMode
+        self,
+        session: AsyncSession,
+        *,
+        review_run_id: uuid.UUID,
+        mode: ReviewPublicationMode,
+        publication_policy_fingerprint: str,
     ) -> ReviewPublicationModel | None:
         """A prior attempt stuck in ``PUBLISHING`` -- the durable marker
         for "GitHub write may have happened, DB commit did not" (see the
@@ -74,6 +98,7 @@ class ReviewPublicationRepository:
             .where(
                 ReviewPublicationModel.review_run_id == review_run_id,
                 ReviewPublicationModel.mode == mode,
+                ReviewPublicationModel.publication_policy_fingerprint == publication_policy_fingerprint,
                 ReviewPublicationModel.status == ReviewPublicationStatus.PUBLISHING,
             )
             .order_by(ReviewPublicationModel.created_at.desc())
@@ -91,6 +116,7 @@ class ReviewPublicationRepository:
         base_sha: str | None,
         head_sha: str,
         mode: ReviewPublicationMode,
+        publication_policy_fingerprint: str,
         status: ReviewPublicationStatus,
     ) -> ReviewPublicationModel:
         """Always creates a fresh row -- callers first check
@@ -106,6 +132,7 @@ class ReviewPublicationRepository:
             base_sha=base_sha,
             head_sha=head_sha,
             mode=mode,
+            publication_policy_fingerprint=publication_policy_fingerprint,
             status=status,
             started_at=datetime.now(UTC),
         )
@@ -124,6 +151,7 @@ class ReviewPublicationRepository:
         base_sha: str | None,
         head_sha: str,
         mode: ReviewPublicationMode,
+        publication_policy_fingerprint: str,
         initial_status: ReviewPublicationStatus,
     ) -> tuple[ReviewPublicationModel, PublicationAttemptOutcome]:
         """Single atomic decision point for one publication attempt,
@@ -143,6 +171,13 @@ class ReviewPublicationRepository:
           :meth:`patchfrog.publishing.github_publisher.GitHubClientReviewPublisher.find_patchfrog_review`).
         - Otherwise -> ``NEW``: a freshly created row, safe to proceed.
 
+        Identity is always ``(review_run_id, mode, publication_policy_fingerprint)``
+        -- a publication under a *different* fingerprint (a policy or
+        format/engine version change) is a wholly separate identity: an
+        old-policy ``PUBLISHED``/``PUBLISHING`` row for this review run
+        never causes ``ALREADY_PUBLISHED``/``IN_PROGRESS_ELSEWHERE`` for a
+        new-policy attempt, and vice versa.
+
         For ``PUBLISH`` mode the fresh row is created directly with
         ``initial_status`` already reflecting the caller's intent (e.g.
         ``PUBLISHING``) so the *entire* check-then-create decision is one
@@ -151,13 +186,19 @@ class ReviewPublicationRepository:
         caller could slip through.
         """
 
-        await self._lock_identity(session, review_run_id=review_run_id, mode=mode)
+        await self._lock_identity(
+            session, review_run_id=review_run_id, mode=mode, publication_policy_fingerprint=publication_policy_fingerprint
+        )
 
-        published = await self.get_published(session, review_run_id=review_run_id, mode=mode)
+        published = await self.get_published(
+            session, review_run_id=review_run_id, mode=mode, publication_policy_fingerprint=publication_policy_fingerprint
+        )
         if published is not None:
             return published, PublicationAttemptOutcome.ALREADY_PUBLISHED
 
-        in_flight = await self.get_in_flight(session, review_run_id=review_run_id, mode=mode)
+        in_flight = await self.get_in_flight(
+            session, review_run_id=review_run_id, mode=mode, publication_policy_fingerprint=publication_policy_fingerprint
+        )
         if in_flight is not None:
             # SQLite (used in the test suite) does not round-trip tzinfo
             # through a DateTime(timezone=True) column -- a naive value
@@ -181,6 +222,7 @@ class ReviewPublicationRepository:
             base_sha=base_sha,
             head_sha=head_sha,
             mode=mode,
+            publication_policy_fingerprint=publication_policy_fingerprint,
             status=initial_status,
         )
         return model, PublicationAttemptOutcome.NEW
@@ -240,8 +282,18 @@ class ReviewPublicationRepository:
         if model is None:
             raise ValueError(f"No review publication with id {publication_id}")
 
-        await self._lock_identity(session, review_run_id=model.review_run_id, mode=model.mode)
-        existing = await self.get_published(session, review_run_id=model.review_run_id, mode=model.mode)
+        await self._lock_identity(
+            session,
+            review_run_id=model.review_run_id,
+            mode=model.mode,
+            publication_policy_fingerprint=model.publication_policy_fingerprint,
+        )
+        existing = await self.get_published(
+            session,
+            review_run_id=model.review_run_id,
+            mode=model.mode,
+            publication_policy_fingerprint=model.publication_policy_fingerprint,
+        )
         if existing is not None and existing.id != model.id:
             model.status = ReviewPublicationStatus.FAILED
             model.error_message = f"superseded by concurrent publication {existing.id}"

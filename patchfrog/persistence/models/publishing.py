@@ -4,13 +4,26 @@ Mirrors :mod:`patchfrog.persistence.models.review`'s shape: one canonical
 publication row (``review_publications``) plus a cascade-deleted child
 table of individual planned/published comments
 (``review_publication_comments``). Canonical *published* identity is
-``(review_run_id, mode)`` -- a review run has at most one successful
-``PUBLISH``-mode publication, enforced the same way
+``(review_run_id, mode, publication_policy_fingerprint)`` -- a review run
+has at most one successful ``PUBLISH``-mode publication *per effective
+publication policy*, enforced the same way
 ``uq_review_runs_succeeded_identity`` enforces one canonical
 :class:`~patchfrog.persistence.models.review.ReviewRunModel` per identity:
 a partial unique index scoped to ``status = 'published'`` only, so
 ``DRY_RUN``/``FAILED``/``STALE`` attempts can accumulate freely as history
 without ever blocking a later real publish.
+
+``publication_policy_fingerprint`` (see
+:meth:`patchfrog.publishing.config.PublicationConfig.fingerprint`) folds
+in configuration intent (``enabled``, ``min_severity``,
+``max_inline_comments``, ``max_summary_findings``) together with
+PatchFrog's own comment-format/engine versions -- mirrors exactly why
+:class:`~patchfrog.persistence.models.review.ReviewRunModel`'s identity
+folds in both ``config_fingerprint`` and ``model_fingerprint``. A
+publication generated under one effective policy must never silently
+reuse or collide with one generated under a materially different policy;
+a policy change is always a fresh, distinct canonical identity, never a
+suppressed duplicate.
 
 ``review_publication_comments`` deliberately stores a ``body_hash``, not
 the comment body itself -- the body is fully reconstructible from the
@@ -49,6 +62,7 @@ class ReviewPublicationModel(Base):
             "uq_review_publications_published_identity",
             "review_run_id",
             "mode",
+            "publication_policy_fingerprint",
             unique=True,
             postgresql_where=text("status = 'published'"),
             sqlite_where=text("status = 'published'"),
@@ -67,6 +81,7 @@ class ReviewPublicationModel(Base):
     base_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
     head_sha: Mapped[str] = mapped_column(String(40))
     mode: Mapped[ReviewPublicationMode] = mapped_column(enum_column(ReviewPublicationMode, length=16))
+    publication_policy_fingerprint: Mapped[str] = mapped_column(String(64))
     status: Mapped[ReviewPublicationStatus] = mapped_column(enum_column(ReviewPublicationStatus, length=32))
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     github_review_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

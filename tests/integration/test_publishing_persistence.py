@@ -29,6 +29,7 @@ from patchfrog.persistence.models.publishing import (
     ReviewPublicationCommentModel,
     ReviewPublicationModel,
 )
+from patchfrog.publishing.config import PublicationConfig
 from patchfrog.publishing.domain import (
     PublicationDisposition,
     ReviewPublicationMode,
@@ -41,6 +42,7 @@ from tests.support.publishing import (
 )
 
 _POSTGRES_URL = "postgresql+asyncpg://patchfrog:patchfrog@localhost:5432/patchfrog"
+_TEST_POLICY_FINGERPRINT = PublicationConfig(enabled=True).fingerprint()
 
 
 async def _postgres_available() -> AsyncEngine | None:
@@ -101,7 +103,7 @@ async def test_db_level_unique_constraint_rejects_second_published_row(tmp_path:
             first = ReviewPublicationModel(
                 review_run_id=reviewed.review_run_id, repository_id=repository_id,
                 pull_request_id=reviewed.pull_request_id, pull_request_number=reviewed.pull_request_number,
-                base_sha="0" * 40, head_sha=reviewed.commit_sha, mode=ReviewPublicationMode.PUBLISH,
+                base_sha="0" * 40, head_sha=reviewed.commit_sha, mode=ReviewPublicationMode.PUBLISH, publication_policy_fingerprint=_TEST_POLICY_FINGERPRINT,
                 status=ReviewPublicationStatus.PUBLISHED, github_review_id=1, started_at=datetime.now(UTC),
                 completed_at=datetime.now(UTC),
             )
@@ -112,7 +114,7 @@ async def test_db_level_unique_constraint_rejects_second_published_row(tmp_path:
             second = ReviewPublicationModel(
                 review_run_id=reviewed.review_run_id, repository_id=repository_id,
                 pull_request_id=reviewed.pull_request_id, pull_request_number=reviewed.pull_request_number,
-                base_sha="0" * 40, head_sha=reviewed.commit_sha, mode=ReviewPublicationMode.PUBLISH,
+                base_sha="0" * 40, head_sha=reviewed.commit_sha, mode=ReviewPublicationMode.PUBLISH, publication_policy_fingerprint=_TEST_POLICY_FINGERPRINT,
                 status=ReviewPublicationStatus.PUBLISHED, github_review_id=2, started_at=datetime.now(UTC),
                 completed_at=datetime.now(UTC),
             )
@@ -151,13 +153,14 @@ async def test_dry_run_rows_never_block_a_later_published_row(tmp_path: Path) ->
             dry_run_row = ReviewPublicationModel(
                 review_run_id=reviewed.review_run_id, repository_id=repository_id,
                 pull_request_id=reviewed.pull_request_id, pull_request_number=reviewed.pull_request_number,
-                base_sha="0" * 40, head_sha=reviewed.commit_sha, mode=ReviewPublicationMode.DRY_RUN,
+                base_sha="0" * 40, head_sha=reviewed.commit_sha, mode=ReviewPublicationMode.DRY_RUN, publication_policy_fingerprint=_TEST_POLICY_FINGERPRINT,
                 status=ReviewPublicationStatus.DRY_RUN, started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
             )
             published_row = ReviewPublicationModel(
                 review_run_id=reviewed.review_run_id, repository_id=repository_id,
                 pull_request_id=reviewed.pull_request_id, pull_request_number=reviewed.pull_request_number,
                 base_sha="0" * 40, head_sha=reviewed.commit_sha, mode=ReviewPublicationMode.PUBLISH,
+                publication_policy_fingerprint=_TEST_POLICY_FINGERPRINT,
                 status=ReviewPublicationStatus.PUBLISHED, github_review_id=1, started_at=datetime.now(UTC),
                 completed_at=datetime.now(UTC),
             )
@@ -193,6 +196,7 @@ async def test_comment_fingerprint_uniqueness_within_a_publication(tmp_path: Pat
                 review_run_id=reviewed.review_run_id, repository_id=repository_id,
                 pull_request_id=reviewed.pull_request_id, pull_request_number=reviewed.pull_request_number,
                 base_sha="0" * 40, head_sha=reviewed.commit_sha, mode=ReviewPublicationMode.DRY_RUN,
+                publication_policy_fingerprint=_TEST_POLICY_FINGERPRINT,
                 status=ReviewPublicationStatus.DRY_RUN, started_at=datetime.now(UTC),
             )
             session.add(publication)
@@ -247,6 +251,7 @@ async def test_deleting_review_run_cascades_to_publications_and_comments(tmp_pat
                 review_run_id=reviewed.review_run_id, repository_id=repository_id,
                 pull_request_id=reviewed.pull_request_id, pull_request_number=reviewed.pull_request_number,
                 base_sha="0" * 40, head_sha=reviewed.commit_sha, mode=ReviewPublicationMode.DRY_RUN,
+                publication_policy_fingerprint=_TEST_POLICY_FINGERPRINT,
                 status=ReviewPublicationStatus.DRY_RUN, started_at=datetime.now(UTC),
             )
             session.add(publication)

@@ -134,6 +134,7 @@ class ReviewPublicationService:
         initial_status = (
             ReviewPublicationStatus.PUBLISHING if mode is ReviewPublicationMode.PUBLISH else ReviewPublicationStatus.DRY_RUN
         )
+        policy_fingerprint = config.fingerprint()
 
         async with self._session_factory() as session:
             attempt, outcome = await self._publication_repo.get_or_create_attempt(
@@ -145,6 +146,7 @@ class ReviewPublicationService:
                 base_sha=pull_request.base_sha,
                 head_sha=run.commit_sha,
                 mode=mode,
+                publication_policy_fingerprint=policy_fingerprint,
                 initial_status=initial_status,
             )
             await session.commit()
