@@ -5,6 +5,7 @@
     python -m patchfrog.cli context --repository /path/to/repo --finding-id <id>
     python -m patchfrog.cli context --repository /path/to/repo --file src/foo.py --line 42
     python -m patchfrog.cli review --repository /path/to/repo --base main [--dry-run]
+    python -m patchfrog.cli publish --review-run-id <id> [--publish]
 
 Deliberately minimal — a couple of subcommands, argparse only. This
 exists purely as a controlled way to trigger indexing/analysis/context
@@ -21,6 +22,7 @@ import sys
 import uuid
 from pathlib import Path
 
+import httpx
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -30,12 +32,25 @@ from patchfrog.config.logging import configure_logging
 from patchfrog.config.settings import get_settings
 from patchfrog.context.domain import ContextBundle, ContextTargetType
 from patchfrog.context.service import ContextService, StaleContextIndexError
+from patchfrog.github.auth import InstallationTokenProvider
+from patchfrog.github.client import GitHubClient
 from patchfrog.indexing.models import IndexingSummary
 from patchfrog.indexing.service import RepositoryIndexingService
 from patchfrog.persistence.database import create_engine, create_session_factory
 from patchfrog.persistence.models.analysis import FindingModel
+from patchfrog.persistence.models.pull_request import PullRequestModel
+from patchfrog.persistence.models.repository import RepositoryModel
+from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.persistence.repositories import RepositoryRepository
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
+from patchfrog.publishing.config_resolution import resolve_repository_publication_config
+from patchfrog.publishing.domain import ReviewPublicationMode, ReviewPublicationResult
+from patchfrog.publishing.github_publisher import GitHubClientReviewPublisher
+from patchfrog.publishing.service import (
+    ReviewNotFoundError,
+    ReviewPublicationService,
+    ReviewRunNotAssociatedWithPullRequestError,
+)
 from patchfrog.repository.git import GitError, run_git
 from patchfrog.review.candidates import ReviewCandidateGenerator
 from patchfrog.review.config import MalformedReviewConfigError, ReviewConfig
@@ -254,6 +269,69 @@ async def _review_local(*, repository_path: Path, full_name: str, base_ref: str)
         await engine.dispose()
 
 
+async def _publish_review_run(*, review_run_id: uuid.UUID, publish: bool) -> ReviewPublicationResult:
+    """Publish (or dry-run plan) an already-completed review run to
+    GitHub. Unlike ``index``/``analyze``/``context``/``review``, this
+    subcommand operates on a *remote* pull request, not a local checkout
+    -- the review run must already be associated with a real GitHub
+    repository/pull request known to PatchFrog (i.e. one ingested through
+    a real GitHub App installation, not a CLI-synthetic one; see
+    :func:`_upsert_cli_repository`'s ``installation_id=0`` placeholder,
+    which cannot obtain a real installation token)."""
+
+    settings = get_settings()
+    configure_logging(settings.log_level)
+
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            run = await session.get(ReviewRunModel, review_run_id)
+            if run is None:
+                raise ReviewNotFoundError(f"no review run with id {review_run_id}")
+            if run.pull_request_id is None:
+                raise ReviewRunNotAssociatedWithPullRequestError(
+                    f"review run {review_run_id} has no associated pull request"
+                )
+            repository = await session.get(RepositoryModel, run.repository_id)
+            pull_request = await session.get(PullRequestModel, run.pull_request_id)
+            assert repository is not None and pull_request is not None
+
+        clone_url = f"https://github.com/{repository.full_name}.git"
+        mode = ReviewPublicationMode.PUBLISH if publish else ReviewPublicationMode.DRY_RUN
+
+        async with httpx.AsyncClient(timeout=settings.github_api_timeout_seconds) as http_client:
+            token_provider = InstallationTokenProvider(
+                http_client=http_client,
+                app_id=settings.github_app_id,
+                private_key=settings.github_private_key,
+                api_base_url=settings.github_api_base_url,
+            )
+            token = await token_provider.get_token(repository.installation_id)
+
+            config = await resolve_repository_publication_config(
+                local=False,
+                commit_sha=run.commit_sha,
+                repository_full_name=repository.full_name,
+                clone_url=clone_url,
+                token=token,
+            )
+
+            github_client = GitHubClient(
+                http_client=http_client,
+                token_provider=token_provider,
+                api_base_url=settings.github_api_base_url,
+                timeout_seconds=settings.github_api_timeout_seconds,
+            )
+            publisher = GitHubClientReviewPublisher(
+                github_client=github_client, installation_id=repository.installation_id
+            )
+            service = ReviewPublicationService(session_factory=session_factory, publisher=publisher)
+            return await service.publish(review_run_id=review_run_id, mode=mode, config=config)
+    finally:
+        await engine.dispose()
+
+
 def _run_index(args: argparse.Namespace) -> int:
     repository_path: Path = args.repository
     if not repository_path.is_dir():
@@ -420,6 +498,37 @@ def _run_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_publish(args: argparse.Namespace) -> int:
+    try:
+        review_run_id = uuid.UUID(args.review_run_id)
+    except ValueError:
+        print(f"error: not a valid review run id: {args.review_run_id!r}", file=sys.stderr)
+        return 1
+
+    try:
+        result = asyncio.run(_publish_review_run(review_run_id=review_run_id, publish=args.publish))
+    except ReviewNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except ReviewRunNotAssociatedWithPullRequestError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    mode_label = "PUBLISH" if args.publish else "DRY-RUN"
+    print(
+        f"{mode_label} publish for review run {review_run_id}: status={result.status.value} "
+        f"repository={result.repository_id} pr=#{result.pull_request_number} head_sha={result.head_sha} "
+        f"planned_inline={result.planned_inline} published_inline={result.published_inline} "
+        f"summary_only={result.summary_only} omitted={result.omitted} "
+        f"github_review_id={result.github_review_id} reconciled={result.reconciled}"
+    )
+    if result.errors:
+        for error in result.errors:
+            print(f"  error: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="patchfrog.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -488,6 +597,23 @@ def main(argv: list[str] | None = None) -> int:
         help="Build candidates and context only -- never constructs a provider or calls the LLM",
     )
 
+    publish_parser = subparsers.add_parser(
+        "publish",
+        help=(
+            "Plan (default) or actually publish an already-completed review run's findings "
+            "as a GitHub Pull Request Review. Safe by default: no GitHub write happens "
+            "without --publish."
+        ),
+    )
+    publish_parser.add_argument(
+        "--review-run-id", required=True, help="id of an already-completed patchfrog.review_runs row"
+    )
+    publish_parser.add_argument(
+        "--publish",
+        action="store_true",
+        help="Actually write the review to GitHub. Without this flag, only plans and reports (no write).",
+    )
+
     args = parser.parse_args(argv)
     if args.command == "index":
         return _run_index(args)
@@ -497,6 +623,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_context(args)
     if args.command == "review":
         return _run_review(args)
+    if args.command == "publish":
+        return _run_publish(args)
 
     return 1
 

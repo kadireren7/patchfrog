@@ -23,6 +23,10 @@ from patchfrog.persistence.models.context import (
     ContextItemModel,
 )
 from patchfrog.persistence.models.parsed_file_cache import ParsedFileCacheModel
+from patchfrog.persistence.models.publishing import (
+    ReviewPublicationCommentModel,
+    ReviewPublicationModel,
+)
 from patchfrog.persistence.models.pull_request import PullRequestModel
 from patchfrog.persistence.models.pull_request_ingestion import (
     IngestionStatus,
@@ -67,6 +71,8 @@ __all__ = [
     "RepositoryModel",
     "ReviewCandidateModel",
     "ReviewCandidateStatus",
+    "ReviewPublicationCommentModel",
+    "ReviewPublicationModel",
     "ReviewRunModel",
     "SymbolModel",
 ]

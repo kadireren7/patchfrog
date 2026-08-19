@@ -21,6 +21,10 @@ from patchfrog.persistence.repositories.repository import RepositoryRepository
 from patchfrog.persistence.repositories.repository_edge import RepositoryEdgeRepository
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
 from patchfrog.persistence.repositories.review_candidate import ReviewCandidateRepository
+from patchfrog.persistence.repositories.review_publication import ReviewPublicationRepository
+from patchfrog.persistence.repositories.review_publication_comment import (
+    ReviewPublicationCommentRepository,
+)
 from patchfrog.persistence.repositories.review_run import ReviewRunRepository
 from patchfrog.persistence.repositories.symbol import SymbolRepository
 
@@ -44,6 +48,8 @@ __all__ = [
     "RepositoryIndexRepository",
     "RepositoryRepository",
     "ReviewCandidateRepository",
+    "ReviewPublicationCommentRepository",
+    "ReviewPublicationRepository",
     "ReviewRunRepository",
     "SymbolRepository",
 ]

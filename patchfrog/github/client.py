@@ -12,6 +12,11 @@ from typing import Any
 
 import httpx
 
+from patchfrog.domain.github_review import (
+    GitHubReviewCommentInput,
+    GitHubReviewEvent,
+    GitHubSubmittedReview,
+)
 from patchfrog.domain.pull_request import (
     ChangedFile,
     FileChangeStatus,
@@ -33,6 +38,8 @@ from patchfrog.github.errors import (
 
 _FILES_PER_PAGE = 100
 _MAX_FILES_PAGES = 50  # 5,000 files — far beyond any realistic PR; guards against runaway pagination.
+_REVIEWS_PER_PAGE = 100
+_MAX_REVIEWS_PAGES = 20  # 2,000 reviews — far beyond any realistic PR.
 
 
 class GitHubClient:
@@ -82,6 +89,60 @@ class GitHubClient:
 
         return changed_files
 
+    async def list_pull_request_reviews(
+        self, *, installation_id: int, ref: PullRequestRef
+    ) -> list[GitHubSubmittedReview]:
+        """Fetch all reviews already submitted on a pull request, following
+        pagination. Used for reconciliation -- discovering a review
+        PatchFrog previously published (by its marker) when local
+        persistence state is uncertain (crash mid-publish, retry)."""
+
+        path = f"/repos/{ref.owner}/{ref.repository}/pulls/{ref.number}/reviews"
+        reviews: list[GitHubSubmittedReview] = []
+
+        for page in range(1, _MAX_REVIEWS_PAGES + 1):
+            data = await self._get_json(
+                installation_id=installation_id,
+                path=path,
+                params={"per_page": _REVIEWS_PER_PAGE, "page": page},
+            )
+            if not isinstance(data, list):
+                raise GitHubResponseError(f"Expected a list of reviews, got {type(data).__name__}")
+            reviews.extend(_parse_submitted_review(item) for item in data)
+            if len(data) < _REVIEWS_PER_PAGE:
+                break
+
+        return reviews
+
+    async def create_pull_request_review(
+        self,
+        *,
+        installation_id: int,
+        ref: PullRequestRef,
+        commit_id: str,
+        event: GitHubReviewEvent,
+        body: str,
+        comments: list[GitHubReviewCommentInput],
+    ) -> GitHubSubmittedReview:
+        """Submit one pull request review, optionally with inline comments.
+
+        ``commit_id`` pins the review to a specific commit -- GitHub
+        rejects (422) a review whose ``commit_id`` is not the PR's current
+        head, which is itself a second, server-side layer of the
+        stale-head protection :mod:`patchfrog.publishing` enforces before
+        ever reaching this call (see
+        :mod:`patchfrog.publishing.service`)."""
+
+        path = f"/repos/{ref.owner}/{ref.repository}/pulls/{ref.number}/reviews"
+        payload: dict[str, Any] = {
+            "commit_id": commit_id,
+            "body": body,
+            "event": event.value,
+            "comments": [_serialize_comment(c) for c in comments],
+        }
+        data = await self._post_json(installation_id=installation_id, path=path, json_body=payload)
+        return _parse_submitted_review(data)
+
     async def _get_json(
         self,
         *,
@@ -96,6 +157,39 @@ class GitHubClient:
             response = await self._http_client.get(
                 url,
                 params=params,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                timeout=self._timeout,
+            )
+        except httpx.TimeoutException as exc:
+            raise GitHubTimeoutError(f"Timed out calling GitHub API: {path}") from exc
+        except httpx.HTTPError as exc:
+            raise GitHubTimeoutError(f"Network error calling GitHub API: {path}") from exc
+
+        _raise_for_status(response)
+
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise GitHubResponseError(f"GitHub returned malformed JSON for {path}") from exc
+
+    async def _post_json(
+        self,
+        *,
+        installation_id: int,
+        path: str,
+        json_body: dict[str, Any],
+    ) -> Any:
+        token = await self._token_provider.get_token(installation_id)
+        url = f"{self._api_base_url}{path}"
+
+        try:
+            response = await self._http_client.post(
+                url,
+                json=json_body,
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/vnd.github+json",
@@ -185,3 +279,30 @@ def _parse_changed_file(data: dict[str, Any]) -> ChangedFile:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise GitHubResponseError("Malformed changed-file response from GitHub") from exc
+
+
+def _parse_submitted_review(data: dict[str, Any]) -> GitHubSubmittedReview:
+    try:
+        return GitHubSubmittedReview(
+            id=data["id"],
+            body=data.get("body"),
+            state=data["state"],
+            commit_id=data.get("commit_id"),
+            user_login=(data.get("user") or {}).get("login"),
+        )
+    except (KeyError, TypeError) as exc:
+        raise GitHubResponseError("Malformed review response from GitHub") from exc
+
+
+def _serialize_comment(comment: GitHubReviewCommentInput) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "path": comment.path,
+        "body": comment.body,
+        "line": comment.line,
+        "side": comment.side.value,
+    }
+    if comment.start_line is not None:
+        payload["start_line"] = comment.start_line
+    if comment.start_side is not None:
+        payload["start_side"] = comment.start_side.value
+    return payload
