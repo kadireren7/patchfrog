@@ -84,7 +84,19 @@ class PublicationPlanner:
         config: PublicationConfig,
         mode: ReviewPublicationMode,
         current_head_sha: str,
+        already_reported_finding_ids: frozenset[UUID] = frozenset(),
     ) -> ReviewPublicationPlan:
+        """``already_reported_finding_ids`` (Phase 7,
+        :mod:`patchfrog.review_memory`) -- findings already known to be the
+        same underlying issue as one this PR was already sent a comment
+        for in a previous publication. Filtered out *before* severity/
+        selection logic runs, so they never occupy an inline/summary slot
+        and are never counted as ``omitted`` (see
+        :class:`~patchfrog.publishing.domain.PublicationDisposition.ALREADY_REPORTED`).
+        Never affects Phase 6's own exact-SHA publication idempotency --
+        this only ever narrows which findings *enter* planning, the
+        planner's actual selection/idempotency logic is untouched."""
+
         if current_head_sha != snapshot.head_sha:
             return ReviewPublicationPlan(
                 snapshot=snapshot,
@@ -107,9 +119,18 @@ class PublicationPlanner:
         changed_by_path: Mapping[str, ChangedFile] = {f.path: f for f in changed_files}
         diff_by_path: Mapping[str, DiffFile] = {f.path: f for f in diff_files}
 
+        already_reported: list[ReviewPublicationComment] = []
         eligible: list[PublishableFinding] = []
         omitted: list[ReviewPublicationComment] = []
         for finding in findings:
+            if finding.finding_id in already_reported_finding_ids:
+                already_reported.append(
+                    self._to_comment(
+                        finding, snapshot, PublicationDisposition.ALREADY_REPORTED, position=None,
+                        reason="same underlying issue already reported in a previous review (Phase 7 review memory)",
+                    )
+                )
+                continue
             if not _meets_min_severity(finding.severity, minimum=config.min_severity):
                 omitted.append(self._to_comment(finding, snapshot, PublicationDisposition.OMITTED, position=None, reason="below minimum severity threshold"))
                 continue
@@ -155,14 +176,21 @@ class PublicationPlanner:
         inline_comments = tuple(sorted((c for _, c in inline_selected), key=lambda c: self._presentation_key(c)))
         summary_only = tuple(sorted((c for _, c in summary_selected), key=lambda c: self._presentation_key(c)))
         omitted_tuple = tuple(sorted(omitted, key=lambda c: self._presentation_key(c)))
+        already_reported_tuple = tuple(sorted(already_reported, key=lambda c: self._presentation_key(c)))
 
         if not inline_comments and not summary_only:
+            reason = (
+                "all findings already reported in a previous review (Phase 7 suppression)"
+                if already_reported_tuple and not omitted_tuple
+                else "no findings met the publication threshold (all filtered or omitted)"
+            )
             return ReviewPublicationPlan(
                 snapshot=snapshot,
                 mode=mode,
                 status=ReviewPublicationStatus.SKIPPED_NO_FINDINGS,
-                reason="no findings met the publication threshold (all filtered or omitted)",
+                reason=reason,
                 omitted=omitted_tuple,
+                already_reported=already_reported_tuple,
             )
 
         status = ReviewPublicationStatus.DRY_RUN if mode is ReviewPublicationMode.DRY_RUN else ReviewPublicationStatus.PLANNED
@@ -187,6 +215,7 @@ class PublicationPlanner:
             inline_comments=inline_comments,
             summary_only=summary_only,
             omitted=omitted_tuple,
+            already_reported=already_reported_tuple,
             summary_body=summary_body,
         )
 

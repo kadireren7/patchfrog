@@ -252,6 +252,7 @@ class TokenUsage:
 class ReviewRunSummary:
     """Metrics for one completed (or failed) AI review run."""
 
+    run_id: UUID
     status: ReviewRunStatus
     candidate_count: int
     candidates_reviewed: int

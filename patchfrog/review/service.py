@@ -263,6 +263,8 @@ class PullRequestReviewService:
         diff_files: list[DiffFile],
         pull_request_id: uuid.UUID | None = None,
         config: ReviewConfig | None = None,
+        candidate_filter: Callable[[ReviewCandidate], bool] | None = None,
+        incremental_context_fingerprint: str | None = None,
     ) -> ReviewRunSummary:
         """Review a repository already checked out on disk (CLI / dogfood
         use). Context is built against the same local checkout via
@@ -277,6 +279,16 @@ class PullRequestReviewService:
         ``config`` here is only a convenience default of
         :class:`~patchfrog.review.config.ReviewConfig`'s own defaults, not
         a substitute for real resolution.
+
+        ``candidate_filter``/``incremental_context_fingerprint`` are the
+        only two Phase 7 (:mod:`patchfrog.review_memory`) hooks into this
+        otherwise-unmodified Phase 5 service: an optional predicate
+        applied to Phase 5's own deterministically-generated candidates
+        (never a different candidate *set* -- Phase 7 only ever narrows
+        it) and the run-identity fingerprint that keeps a full-mode
+        result and an incremental-mode result for the same commit from
+        ever being reused for each other. Both default to "Phase 7
+        doesn't exist" behavior.
         """
 
         return await self._run(
@@ -288,6 +300,8 @@ class PullRequestReviewService:
             config=config or ReviewConfig(),
             context_kwargs={"root_path": root_path},
             local=True,
+            candidate_filter=candidate_filter,
+            incremental_context_fingerprint=incremental_context_fingerprint,
         )
 
     async def review_pull_request(
@@ -301,10 +315,13 @@ class PullRequestReviewService:
         diff_files: list[DiffFile],
         pull_request_id: uuid.UUID | None = None,
         config: ReviewConfig | None = None,
+        candidate_filter: Callable[[ReviewCandidate], bool] | None = None,
+        incremental_context_fingerprint: str | None = None,
     ) -> ReviewRunSummary:
         """Review a repository fetched from ``clone_url`` (production /
         Celery-task use). ``config`` is expected to already be resolved by
-        the caller -- see :meth:`review_local`'s docstring."""
+        the caller -- see :meth:`review_local`'s docstring, including for
+        ``candidate_filter``/``incremental_context_fingerprint``."""
 
         return await self._run(
             repository_id=repository_id,
@@ -315,6 +332,8 @@ class PullRequestReviewService:
             config=config or ReviewConfig(),
             context_kwargs={"clone_url": clone_url, "token": token},
             local=False,
+            candidate_filter=candidate_filter,
+            incremental_context_fingerprint=incremental_context_fingerprint,
         )
 
     async def _require_matching_index(self, *, repository_id: uuid.UUID, commit_sha: str) -> uuid.UUID:
@@ -333,6 +352,8 @@ class PullRequestReviewService:
         config: ReviewConfig,
         context_kwargs: dict[str, object],
         local: bool,
+        candidate_filter: Callable[[ReviewCandidate], bool] | None = None,
+        incremental_context_fingerprint: str | None = None,
     ) -> ReviewRunSummary:
         start = time.monotonic()
         log = logger.bind(repository_id=str(repository_id), commit_sha=commit_sha)
@@ -363,6 +384,7 @@ class PullRequestReviewService:
                 critic_provider=model_identity.critic_provider,
                 critic_model=model_identity.critic_model,
                 pull_request_id=pull_request_id,
+                incremental_context_fingerprint=incremental_context_fingerprint,
             )
             await session.commit()
             run_id = run.id
@@ -386,6 +408,8 @@ class PullRequestReviewService:
                 local=local,
                 start=start,
                 log=log,
+                candidate_filter=candidate_filter,
+                incremental_context_fingerprint=run.incremental_context_fingerprint,
             )
         except Exception as exc:
             async with self._session_factory() as session:
@@ -412,6 +436,8 @@ class PullRequestReviewService:
         local: bool,
         start: float,
         log: structlog.stdlib.BoundLogger,
+        candidate_filter: Callable[[ReviewCandidate], bool] | None = None,
+        incremental_context_fingerprint: str,
     ) -> ReviewRunSummary:
         async with self._session_factory() as session:
             static_findings = []
@@ -431,6 +457,13 @@ class PullRequestReviewService:
                 static_findings=static_findings,
                 max_candidates=config.max_candidates,
             )
+
+        if candidate_filter is not None:
+            # Phase 7 (patchfrog.review_memory) narrowing candidates down
+            # to only those genuinely changed since the previous review
+            # generation -- never a different candidate *set*, only a
+            # subset of exactly what Phase 5 would already review.
+            candidates = tuple(c for c in candidates if candidate_filter(c))
 
         outcomes = [_CandidateOutcome(c) for c in candidates]
         static_by_id = {f.id: f for f in static_findings}
@@ -486,6 +519,7 @@ class PullRequestReviewService:
                 commit_sha=commit_sha,
                 config_fingerprint=config_fingerprint,
                 model_fingerprint=model_fingerprint,
+                incremental_context_fingerprint=incremental_context_fingerprint,
             )
             if existing is not None:
                 await self._run_repo.mark_failed(
@@ -615,6 +649,7 @@ class PullRequestReviewService:
         )
 
         return ReviewRunSummary(
+            run_id=final_run.id,
             status=run_status,
             candidate_count=len(outcomes),
             candidates_reviewed=candidates_reviewed,
@@ -856,6 +891,7 @@ def _hunk_lines_in_range(hunk: DiffHunk, start_line: int, end_line: int) -> list
 
 def _summary_from_model(run: ReviewRunModel, *, reused: bool) -> ReviewRunSummary:
     return ReviewRunSummary(
+        run_id=run.id,
         status=run.status,
         candidate_count=run.candidate_count,
         candidates_reviewed=run.candidates_reviewed,

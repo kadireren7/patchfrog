@@ -60,3 +60,46 @@ def run_git(
         )
 
     return result.stdout
+
+
+def git_is_ancestor(*, ancestor_sha: str, descendant_sha: str, cwd: Path) -> bool:
+    """``git merge-base --is-ancestor <ancestor> <descendant>``.
+
+    Unlike every other git subcommand here, exit code alone *is* the
+    answer (0 = true, 1 = false) rather than a failure signal -- so this
+    is the one place that inspects a raw ``subprocess.run`` exit code
+    instead of going through :func:`run_git`. Any exit code other than
+    0/1 (missing object, not a git repository, ...) is a genuine error
+    and raises :class:`GitError` -- callers must never interpret "I
+    couldn't tell" as "false" themselves (see
+    :mod:`patchfrog.repository.ancestry`, which treats *any* failure to
+    prove ancestry, true or unknown, identically: no incremental reuse).
+    """
+
+    command = [
+        "git", "-c", "core.hooksPath=/dev/null",
+        "merge-base", "--is-ancestor", ancestor_sha, descendant_sha,
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30.0,
+            env={"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"},
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitError("git merge-base --is-ancestor timed out") from exc
+    except OSError as exc:
+        raise GitError(f"failed to execute git: {exc}") from exc
+
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    raise GitError(
+        f"git merge-base --is-ancestor failed (exit {result.returncode}): "
+        f"{scrub_secrets(result.stderr.strip())}"
+    )

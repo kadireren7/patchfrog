@@ -47,10 +47,18 @@ def compute_change_set(
             snapshot.commit_sha,
         ]
     )
+    return parse_name_status_diff(output, old_commit_sha=old_commit_sha, new_commit_sha=snapshot.commit_sha)
+
+
+def parse_name_status_diff(output: str, *, old_commit_sha: str | None, new_commit_sha: str) -> ChangeSet:
+    """Public parsing half of :func:`compute_change_set`, split out so
+    :mod:`patchfrog.repository.ancestry` (Phase 7) can reuse the exact
+    same ``git diff --name-status -M50% -z`` parsing against a scratch
+    clone it fetched for a different reason (ancestry proof), without a
+    second fetch or a :class:`RepositorySnapshot` of its own."""
+
     return ChangeSet(
-        old_commit_sha=old_commit_sha,
-        new_commit_sha=snapshot.commit_sha,
-        changes=tuple(_parse_name_status(output)),
+        old_commit_sha=old_commit_sha, new_commit_sha=new_commit_sha, changes=tuple(_parse_name_status(output))
     )
 
 

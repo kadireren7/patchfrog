@@ -26,6 +26,18 @@ class SymbolRepository:
         )
         return list(result.scalars().all())
 
+    async def list_for_index(
+        self, session: AsyncSession, *, repository_index_id: uuid.UUID
+    ) -> list[SymbolModel]:
+        """Every symbol for one index version, one query -- used by
+        :mod:`patchfrog.review_memory.symbol_continuity` to compare two
+        whole index versions without an N+1 per-symbol lookup."""
+
+        result = await session.execute(
+            select(SymbolModel).where(SymbolModel.repository_index_id == repository_index_id)
+        )
+        return list(result.scalars().all())
+
     async def find_by_name(
         self, session: AsyncSession, *, repository_index_id: uuid.UUID, name: str
     ) -> list[SymbolModel]:

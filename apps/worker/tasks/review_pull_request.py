@@ -40,7 +40,13 @@ from patchfrog.review.config import MalformedReviewConfigError
 from patchfrog.review.config_resolution import resolve_repository_review_config
 from patchfrog.review.domain import ReviewRunSummary
 from patchfrog.review.provider_factory import build_critic_provider, build_reviewer_provider
-from patchfrog.review.service import PullRequestReviewService, persist_malformed_config_failure
+from patchfrog.review.service import (
+    PullRequestReviewService,
+    persist_malformed_config_failure,
+    require_matching_review_index,
+)
+from patchfrog.review_memory.config_resolution import resolve_repository_incremental_config
+from patchfrog.review_memory.service import IncrementalReviewMemoryService
 
 logger = structlog.get_logger(__name__)
 
@@ -121,12 +127,43 @@ async def _review_pull_request(
         reviewer_provider = build_reviewer_provider(review_config, settings=settings)
         critic_provider = build_critic_provider(review_config, settings=settings)
 
+        incremental_config = await resolve_repository_incremental_config(
+            local=False,
+            commit_sha=head_sha,
+            repository_full_name=full_name,
+            clone_url=clone_url,
+            token=token,
+        )
+
+        memory_service = IncrementalReviewMemoryService(session_factory=session_factory)
+        repository_index_id = await require_matching_review_index(
+            session_factory, repository_id=repository_id, commit_sha=head_sha
+        )
+        full_candidates = await memory_service.build_candidates(
+            repository_id=repository_id,
+            repository_index_id=repository_index_id,
+            commit_sha=head_sha,
+            diff_files=diff_files,
+            max_candidates=review_config.max_candidates,
+        )
+        prepared = await memory_service.prepare(
+            pull_request_id=pull_request_id,
+            repository_index_id=repository_index_id,
+            commit_sha=head_sha,
+            clone_url=clone_url,
+            token=token,
+            current_candidates=full_candidates,
+            reviewer_provider=reviewer_provider.identity.provider,
+            reviewer_model=reviewer_provider.identity.model,
+            incremental_config=incremental_config,
+        )
+
         service = PullRequestReviewService(
             session_factory=session_factory,
             reviewer_provider=reviewer_provider,
             critic_provider=critic_provider,
         )
-        return await service.review_pull_request(
+        summary = await service.review_pull_request(
             repository_id=repository_id,
             clone_url=clone_url,
             commit_sha=head_sha,
@@ -135,7 +172,20 @@ async def _review_pull_request(
             diff_files=diff_files,
             pull_request_id=pull_request_id,
             config=review_config,
+            candidate_filter=prepared.candidate_filter,
+            incremental_context_fingerprint=prepared.incremental_context_fingerprint,
         )
+
+        if prepared.memory_tracking_active and pull_request_id is not None:
+            await memory_service.finalize(
+                review_run_id=summary.run_id,
+                repository_id=repository_id,
+                pull_request_id=pull_request_id,
+                commit_sha=head_sha,
+                prepared=prepared,
+            )
+
+        return summary
     finally:
         await engine.dispose()
 
