@@ -45,11 +45,6 @@ from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.persistence.models.review_memory import ReviewGenerationModel
 from patchfrog.persistence.repositories import PullRequestRepository, RepositoryRepository
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
-from patchfrog.persistence.repositories.review_generation import ReviewGenerationRepository
-from patchfrog.persistence.repositories.review_memory_finding import ReviewMemoryFindingRepository
-from patchfrog.persistence.repositories.review_memory_transition import (
-    ReviewMemoryTransitionRepository,
-)
 from patchfrog.publishing.config_resolution import resolve_repository_publication_config
 from patchfrog.publishing.domain import ReviewPublicationMode, ReviewPublicationResult
 from patchfrog.publishing.github_publisher import GitHubClientReviewPublisher
@@ -76,6 +71,7 @@ from patchfrog.review.service import (
 )
 from patchfrog.review_memory.config_resolution import resolve_repository_incremental_config
 from patchfrog.review_memory.domain import IncrementalPlan, ReviewMemoryFinding
+from patchfrog.review_memory.queries import ReviewMemoryQueryService
 from patchfrog.review_memory.service import IncrementalReviewMemoryService
 
 logger = structlog.get_logger(__name__)
@@ -423,14 +419,13 @@ async def _review_history(*, repository_path: Path, full_name: str) -> ReviewHis
             if pr is None:
                 return None
 
-            generations = await ReviewGenerationRepository().list_for_pr(session, pull_request_id=pr.id)
-            open_findings = await ReviewMemoryFindingRepository().get_open_for_pr(
-                session, pull_request_id=pr.id
-            )
+            memory_queries = ReviewMemoryQueryService()
+            generations = await memory_queries.get_review_history_for_pr(session, pull_request_id=pr.id)
+            open_findings = await memory_queries.get_open_memory_findings(session, pull_request_id=pr.id)
             transitions_by_generation: dict[uuid.UUID, int] = {}
             for generation in generations:
-                transitions = await ReviewMemoryTransitionRepository().list_for_target_run(
-                    session, target_review_run_id=generation.review_run_id
+                transitions = await memory_queries.get_transitions_for_run(
+                    session, review_run_id=generation.review_run_id
                 )
                 transitions_by_generation[generation.id] = len(transitions)
 
