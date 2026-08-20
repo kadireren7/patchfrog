@@ -11,3 +11,6 @@ def add(a, b):
 
 def divide(a, b):
     return a - b  # BUG: should be a / b
+
+
+# unrelated: just a comment, no code change to add()/divide()
