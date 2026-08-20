@@ -61,6 +61,7 @@ class ReviewRunModel(Base):
             "commit_sha",
             "config_fingerprint",
             "model_fingerprint",
+            "incremental_context_fingerprint",
             unique=True,
             postgresql_where=text("status = 'succeeded'"),
             sqlite_where=text("status = 'succeeded'"),
@@ -79,6 +80,15 @@ class ReviewRunModel(Base):
     commit_sha: Mapped[str] = mapped_column(String(40))
     config_fingerprint: Mapped[str] = mapped_column(String(64))
     model_fingerprint: Mapped[str] = mapped_column(String(64))
+    #: Folds in whether this run was FULL or INCREMENTAL and, for
+    #: INCREMENTAL, exactly which previous review generation it is tied
+    #: to -- see :func:`patchfrog.review_memory.config.compute_incremental_context_fingerprint`.
+    #: A run that never went through Phase 7 orchestration at all (every
+    #: pre-Phase-7 caller: CLI, tests, direct service use) gets the fixed
+    #: ``NO_MEMORY_CONTEXT_FINGERPRINT`` default, so canonical-run reuse
+    #: for the common "no incremental review" case is completely
+    #: unaffected by this column's addition.
+    incremental_context_fingerprint: Mapped[str] = mapped_column(String(64))
     status: Mapped[ReviewRunStatus] = mapped_column(enum_column(ReviewRunStatus, length=16))
 
     reviewer_provider: Mapped[str] = mapped_column(String(64))

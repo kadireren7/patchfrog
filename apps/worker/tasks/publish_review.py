@@ -41,6 +41,7 @@ from patchfrog.persistence.database import create_engine, create_session_factory
 from patchfrog.persistence.models.pull_request import PullRequestModel
 from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.persistence.models.review import ReviewRunModel
+from patchfrog.persistence.repositories.review_memory_finding import ReviewMemoryFindingRepository
 from patchfrog.publishing.config_resolution import resolve_repository_publication_config
 from patchfrog.publishing.domain import (
     ReviewPublicationMode,
@@ -111,8 +112,24 @@ async def _publish_review(
                 github_client=github_client, installation_id=repository.installation_id
             )
 
+            async with session_factory() as session:
+                # Phase 7 (patchfrog.review_memory) suppression -- derived
+                # entirely from review_run_id, independent of whatever the
+                # review task passed through in-process, so a publish
+                # retry/redelivery always recomputes it fresh.
+                already_reported_finding_ids = (
+                    await ReviewMemoryFindingRepository().list_carried_forward_current_finding_ids(
+                        session, review_run_id=review_run_id
+                    )
+                )
+
             service = ReviewPublicationService(session_factory=session_factory, publisher=publisher)
-            return await service.publish(review_run_id=review_run_id, mode=mode, config=config)
+            return await service.publish(
+                review_run_id=review_run_id,
+                mode=mode,
+                config=config,
+                already_reported_finding_ids=already_reported_finding_ids,
+            )
     finally:
         await engine.dispose()
 

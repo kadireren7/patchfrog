@@ -9,22 +9,29 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.review.domain import ReviewRunStatus
+from patchfrog.review_memory.config import NO_MEMORY_CONTEXT_FINGERPRINT
 
 
 class ReviewRunRepository:
     """Persistence operations for :class:`ReviewRunModel`.
 
     Identity for idempotency/concurrency purposes is ``(repository_id,
-    commit_sha, config_fingerprint, model_fingerprint)`` -- mirrors
+    commit_sha, config_fingerprint, model_fingerprint,
+    incremental_context_fingerprint)`` -- mirrors
     :class:`patchfrog.persistence.repositories.analysis_run.AnalysisRunRepository`
     exactly, including the transaction-scoped PostgreSQL advisory lock
     guarding creation/claim/success (no-op on SQLite). ``config_fingerprint``
     is configuration intent (:meth:`patchfrog.review.config.ReviewConfig.fingerprint`);
     ``model_fingerprint`` is the effective toolchain actually used
     (:meth:`patchfrog.review.config.ReviewModelIdentity.fingerprint` --
-    reviewer/critic provider+model, prompt/policy/engine version). Both
-    must match for a prior run to be reused -- see the module docstring
-    of :mod:`patchfrog.persistence.models.review` for why.
+    reviewer/critic provider+model, prompt/policy/engine version).
+    ``incremental_context_fingerprint`` (Phase 7) additionally
+    distinguishes a FULL run from an INCREMENTAL one tied to a specific
+    previous review generation -- see
+    :func:`patchfrog.review_memory.config.compute_incremental_context_fingerprint`.
+    All four/five must match for a prior run to be reused -- see the
+    module docstring of :mod:`patchfrog.persistence.models.review` for
+    why.
     """
 
     async def _lock_identity(
@@ -35,10 +42,14 @@ class ReviewRunRepository:
         commit_sha: str,
         config_fingerprint: str,
         model_fingerprint: str,
+        incremental_context_fingerprint: str,
     ) -> None:
         if session.bind is None or session.bind.dialect.name != "postgresql":
             return
-        key_material = f"review:{repository_id}:{commit_sha}:{config_fingerprint}:{model_fingerprint}"
+        key_material = (
+            f"review:{repository_id}:{commit_sha}:{config_fingerprint}:"
+            f"{model_fingerprint}:{incremental_context_fingerprint}"
+        )
         digest = hashlib.sha256(key_material.encode()).digest()[:8]
         lock_key = int.from_bytes(digest, "big") & 0x7FFFFFFFFFFFFFFF
         await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
@@ -51,6 +62,7 @@ class ReviewRunRepository:
         commit_sha: str,
         config_fingerprint: str,
         model_fingerprint: str,
+        incremental_context_fingerprint: str,
     ) -> ReviewRunModel | None:
         result = await session.execute(
             select(ReviewRunModel).where(
@@ -58,6 +70,7 @@ class ReviewRunRepository:
                 ReviewRunModel.commit_sha == commit_sha,
                 ReviewRunModel.config_fingerprint == config_fingerprint,
                 ReviewRunModel.model_fingerprint == model_fingerprint,
+                ReviewRunModel.incremental_context_fingerprint == incremental_context_fingerprint,
                 ReviewRunModel.status == ReviewRunStatus.SUCCEEDED,
             )
         )
@@ -72,6 +85,7 @@ class ReviewRunRepository:
         commit_sha: str,
         config_fingerprint: str,
         model_fingerprint: str,
+        incremental_context_fingerprint: str,
     ) -> ReviewRunModel | None:
         """See ``AnalysisRunRepository.claim_for_write`` -- identical
         pattern. Must run before any candidate/proposal/finding rows are
@@ -83,6 +97,7 @@ class ReviewRunRepository:
             commit_sha=commit_sha,
             config_fingerprint=config_fingerprint,
             model_fingerprint=model_fingerprint,
+            incremental_context_fingerprint=incremental_context_fingerprint,
         )
         existing = await self.get_succeeded(
             session,
@@ -90,6 +105,7 @@ class ReviewRunRepository:
             commit_sha=commit_sha,
             config_fingerprint=config_fingerprint,
             model_fingerprint=model_fingerprint,
+            incremental_context_fingerprint=incremental_context_fingerprint,
         )
         if existing is not None and existing.id != run_id:
             return existing
@@ -110,13 +126,17 @@ class ReviewRunRepository:
         critic_model: str | None,
         pull_request_id: uuid.UUID | None = None,
         analysis_run_id: uuid.UUID | None = None,
+        incremental_context_fingerprint: str | None = None,
     ) -> tuple[ReviewRunModel, bool]:
+        incremental_context_fingerprint = incremental_context_fingerprint or NO_MEMORY_CONTEXT_FINGERPRINT
+
         await self._lock_identity(
             session,
             repository_id=repository_id,
             commit_sha=commit_sha,
             config_fingerprint=config_fingerprint,
             model_fingerprint=model_fingerprint,
+            incremental_context_fingerprint=incremental_context_fingerprint,
         )
         existing = await self.get_succeeded(
             session,
@@ -124,6 +144,7 @@ class ReviewRunRepository:
             commit_sha=commit_sha,
             config_fingerprint=config_fingerprint,
             model_fingerprint=model_fingerprint,
+            incremental_context_fingerprint=incremental_context_fingerprint,
         )
         if existing is not None:
             return existing, False
@@ -136,6 +157,7 @@ class ReviewRunRepository:
             commit_sha=commit_sha,
             config_fingerprint=config_fingerprint,
             model_fingerprint=model_fingerprint,
+            incremental_context_fingerprint=incremental_context_fingerprint,
             status=ReviewRunStatus.RUNNING,
             reviewer_provider=reviewer_provider,
             reviewer_model=reviewer_model,
@@ -182,6 +204,7 @@ class ReviewRunRepository:
             commit_sha=model.commit_sha,
             config_fingerprint=model.config_fingerprint,
             model_fingerprint=model.model_fingerprint,
+            incremental_context_fingerprint=model.incremental_context_fingerprint,
         )
         existing = await self.get_succeeded(
             session,
@@ -189,6 +212,7 @@ class ReviewRunRepository:
             commit_sha=model.commit_sha,
             config_fingerprint=model.config_fingerprint,
             model_fingerprint=model.model_fingerprint,
+            incremental_context_fingerprint=model.incremental_context_fingerprint,
         )
         if existing is not None and existing.id != model.id:
             model.status = ReviewRunStatus.FAILED

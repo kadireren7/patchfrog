@@ -20,6 +20,7 @@ import asyncio
 import hashlib
 import sys
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -41,7 +42,8 @@ from patchfrog.persistence.models.analysis import FindingModel
 from patchfrog.persistence.models.pull_request import PullRequestModel
 from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.persistence.models.review import ReviewRunModel
-from patchfrog.persistence.repositories import RepositoryRepository
+from patchfrog.persistence.models.review_memory import ReviewGenerationModel
+from patchfrog.persistence.repositories import PullRequestRepository, RepositoryRepository
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
 from patchfrog.publishing.config_resolution import resolve_repository_publication_config
 from patchfrog.publishing.domain import ReviewPublicationMode, ReviewPublicationResult
@@ -67,6 +69,10 @@ from patchfrog.review.service import (
     StaleReviewIndexError,
     persist_malformed_config_failure,
 )
+from patchfrog.review_memory.config_resolution import resolve_repository_incremental_config
+from patchfrog.review_memory.domain import IncrementalPlan, ReviewMemoryFinding
+from patchfrog.review_memory.queries import ReviewMemoryQueryService
+from patchfrog.review_memory.service import IncrementalReviewMemoryService
 
 logger = structlog.get_logger(__name__)
 
@@ -105,6 +111,38 @@ async def _upsert_cli_repository(
         )
         await session.commit()
         return repository_row.id
+
+
+#: The one synthetic "local PR" review memory is scoped to for CLI
+#: ``--incremental`` use -- there is no real GitHub pull request behind a
+#: bare local checkout, so (mirroring :func:`_synthetic_github_repository_id`'s
+#: "stable synthetic identity for CLI use" approach) every ``--incremental``
+#: CLI invocation against the same repository/full-name is treated as
+#: iterating on the same one PR, exactly matching how a developer actually
+#: uses this locally: successive commits on the same branch.
+_CLI_SYNTHETIC_PR_NUMBER = 0
+
+
+async def _upsert_cli_pull_request(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    repository_id: uuid.UUID,
+    base_sha: str,
+    head_sha: str,
+) -> uuid.UUID:
+    async with session_factory() as session:
+        pr = await PullRequestRepository().upsert(
+            session,
+            repository_id=repository_id,
+            github_pr_number=_CLI_SYNTHETIC_PR_NUMBER,
+            title="local --incremental checkout",
+            author="cli",
+            base_sha=base_sha,
+            head_sha=head_sha,
+            state="open",
+        )
+        await session.commit()
+        return pr.id
 
 
 async def _index_local(*, repository_path: Path, full_name: str) -> IndexingSummary:
@@ -188,11 +226,18 @@ async def _context_local(
 
 
 async def _review_dry_run(
-    *, repository_path: Path, full_name: str, base_ref: str
-) -> tuple[ReviewConfig, tuple[ReviewCandidate, ...]]:
+    *, repository_path: Path, full_name: str, base_ref: str, incremental: bool
+) -> tuple[ReviewConfig, tuple[ReviewCandidate, ...], IncrementalPlan | None]:
     """Build review candidates (and, implicitly, the context each would
     use) without ever constructing a provider or making a network call --
-    the safe path required before anyone runs a real, billed review."""
+    the safe path required before anyone runs a real, billed review.
+
+    ``incremental`` additionally builds (but never persists) the Phase 7
+    incremental plan against a synthetic local "PR" scoped to this
+    repository (see :func:`_upsert_cli_pull_request`) -- still zero
+    provider calls, ancestry verification is real git plumbing against
+    the local checkout itself.
+    """
 
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -220,12 +265,37 @@ async def _review_dry_run(
                 static_findings=static_findings,
                 max_candidates=config.max_candidates,
             )
-        return config, candidates
+
+        if not incremental:
+            return config, candidates, None
+
+        base_sha = run_git(["rev-parse", base_ref], cwd=repository_path).strip()
+        pull_request_id = await _upsert_cli_pull_request(
+            session_factory, repository_id=repository_id, base_sha=base_sha, head_sha=commit_sha
+        )
+        incremental_config = await resolve_repository_incremental_config(
+            local=True, commit_sha=commit_sha, repository_full_name=full_name, root_path=repository_path
+        )
+        memory_service = IncrementalReviewMemoryService(session_factory=session_factory)
+        prepared = await memory_service.prepare(
+            pull_request_id=pull_request_id,
+            repository_index_id=active_index.id,
+            commit_sha=commit_sha,
+            clone_url=str(repository_path),
+            token=None,
+            current_candidates=candidates,
+            reviewer_provider=config.provider,
+            reviewer_model=config.model,
+            incremental_config=incremental_config,
+        )
+        return config, candidates, prepared.plan
     finally:
         await engine.dispose()
 
 
-async def _review_local(*, repository_path: Path, full_name: str, base_ref: str) -> ReviewRunSummary:
+async def _review_local(
+    *, repository_path: Path, full_name: str, base_ref: str, incremental: bool
+) -> ReviewRunSummary:
     settings = get_settings()
     configure_logging(settings.log_level)
 
@@ -257,13 +327,112 @@ async def _review_local(*, repository_path: Path, full_name: str, base_ref: str)
             reviewer_provider=reviewer_provider,
             critic_provider=critic_provider,
         )
-        return await service.review_local(
+
+        if not incremental:
+            return await service.review_local(
+                repository_id=repository_id,
+                root_path=repository_path,
+                repository_full_name=full_name,
+                commit_sha=commit_sha,
+                diff_files=diff_files,
+                config=config,
+            )
+
+        async with session_factory() as session:
+            active_index = await RepositoryIndexRepository().get_active(session, repository_id=repository_id)
+            if active_index is None:
+                raise StaleReviewIndexError(f"no repository index exists for repository {repository_id}")
+
+        base_sha = run_git(["rev-parse", base_ref], cwd=repository_path).strip()
+        pull_request_id = await _upsert_cli_pull_request(
+            session_factory, repository_id=repository_id, base_sha=base_sha, head_sha=commit_sha
+        )
+        incremental_config = await resolve_repository_incremental_config(
+            local=True, commit_sha=commit_sha, repository_full_name=full_name, root_path=repository_path
+        )
+        memory_service = IncrementalReviewMemoryService(session_factory=session_factory)
+        full_candidates = await memory_service.build_candidates(
+            repository_id=repository_id,
+            repository_index_id=active_index.id,
+            commit_sha=commit_sha,
+            diff_files=diff_files,
+            max_candidates=config.max_candidates,
+        )
+        prepared = await memory_service.prepare(
+            pull_request_id=pull_request_id,
+            repository_index_id=active_index.id,
+            commit_sha=commit_sha,
+            clone_url=str(repository_path),
+            token=None,
+            current_candidates=full_candidates,
+            reviewer_provider=reviewer_provider.identity.provider,
+            reviewer_model=reviewer_provider.identity.model,
+            incremental_config=incremental_config,
+        )
+        summary = await service.review_local(
             repository_id=repository_id,
             root_path=repository_path,
             repository_full_name=full_name,
             commit_sha=commit_sha,
             diff_files=diff_files,
+            pull_request_id=pull_request_id,
             config=config,
+            candidate_filter=prepared.candidate_filter,
+            incremental_context_fingerprint=prepared.incremental_context_fingerprint,
+        )
+        if prepared.memory_tracking_active:
+            await memory_service.finalize(
+                review_run_id=summary.run_id,
+                repository_id=repository_id,
+                pull_request_id=pull_request_id,
+                commit_sha=commit_sha,
+                prepared=prepared,
+            )
+        return summary
+    finally:
+        await engine.dispose()
+
+
+@dataclass(slots=True)
+class ReviewHistoryReport:
+    generations: list[ReviewGenerationModel]
+    open_findings: list[ReviewMemoryFinding]
+    transitions_by_generation: dict[uuid.UUID, int]
+
+
+async def _review_history(*, repository_path: Path, full_name: str) -> ReviewHistoryReport | None:
+    """Read-only inspection of Phase 7 state for the CLI's synthetic
+    local PR (see :func:`_upsert_cli_pull_request`) -- never writes
+    anything, never verifies ancestry, never calls a provider."""
+
+    settings = get_settings()
+    configure_logging(settings.log_level)
+
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        repository_id = await _upsert_cli_repository(session_factory, full_name=full_name)
+        async with session_factory() as session:
+            pr = await PullRequestRepository().get_by_repository_and_number(
+                session, repository_id=repository_id, github_pr_number=_CLI_SYNTHETIC_PR_NUMBER
+            )
+            if pr is None:
+                return None
+
+            memory_queries = ReviewMemoryQueryService()
+            generations = await memory_queries.get_review_history_for_pr(session, pull_request_id=pr.id)
+            open_findings = await memory_queries.get_open_memory_findings(session, pull_request_id=pr.id)
+            transitions_by_generation: dict[uuid.UUID, int] = {}
+            for generation in generations:
+                transitions = await memory_queries.get_transitions_for_run(
+                    session, review_run_id=generation.review_run_id
+                )
+                transitions_by_generation[generation.id] = len(transitions)
+
+        return ReviewHistoryReport(
+            generations=generations,
+            open_findings=list(open_findings),
+            transitions_by_generation=transitions_by_generation,
         )
     finally:
         await engine.dispose()
@@ -454,8 +623,11 @@ def _run_review(args: argparse.Namespace) -> int:
     full_name = args.full_name or _default_full_name(repository_path)
     try:
         if args.dry_run:
-            config, candidates = asyncio.run(
-                _review_dry_run(repository_path=repository_path, full_name=full_name, base_ref=args.base)
+            config, candidates, plan = asyncio.run(
+                _review_dry_run(
+                    repository_path=repository_path, full_name=full_name, base_ref=args.base,
+                    incremental=args.incremental,
+                )
             )
             print(
                 f"dry-run for {full_name}: {len(candidates)} candidate(s) would be reviewed "
@@ -467,10 +639,30 @@ def _run_review(args: argparse.Namespace) -> int:
                     f"  - {target} ({c.file_path}:{c.start_line}-{c.end_line}) reason={c.reason.value} "
                     f"changed_lines={len(c.changed_lines)} static_findings={len(c.static_finding_ids)}"
                 )
+            if plan is not None:
+                m = plan.metrics
+                print(
+                    f"incremental plan: mode={plan.mode.value} "
+                    f"ancestry_verified={plan.selection.ancestry_verified} "
+                    f"usable_for_candidate_skipping={plan.selection.usable_for_candidate_skipping} "
+                    f"usable_for_finding_memory={plan.selection.usable_for_finding_memory} "
+                    f"detail={plan.selection.detail!r}"
+                )
+                print(
+                    f"  candidates: previous={m.previous_candidate_count} full={m.current_full_candidate_count} "
+                    f"selected={len(plan.selected_candidates)} skipped={len(plan.skipped_candidates)}"
+                )
+                print(
+                    f"  memory: carried_forward={m.findings_carried_forward} resolved={m.findings_resolved} "
+                    f"ambiguous={m.findings_ambiguous}"
+                )
             return 0
 
         summary = asyncio.run(
-            _review_local(repository_path=repository_path, full_name=full_name, base_ref=args.base)
+            _review_local(
+                repository_path=repository_path, full_name=full_name, base_ref=args.base,
+                incremental=args.incremental,
+            )
         )
     except GitError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -495,6 +687,39 @@ def _run_review(args: argparse.Namespace) -> int:
         f"critic_tokens={summary.critic_usage.input_tokens}/{summary.critic_usage.output_tokens} "
         f"duration_ms={summary.duration_ms:.1f} reused={summary.reused_existing_run}"
     )
+    return 0
+
+
+def _run_review_history(args: argparse.Namespace) -> int:
+    repository_path: Path = args.repository
+    if not repository_path.is_dir():
+        print(f"error: not a directory: {repository_path}", file=sys.stderr)
+        return 1
+
+    full_name = args.full_name or _default_full_name(repository_path)
+    report = asyncio.run(_review_history(repository_path=repository_path, full_name=full_name))
+    if report is None:
+        print(f"no review-memory history for {full_name} -- run 'review --incremental' first")
+        return 0
+
+    print(f"review-memory history for {full_name}: {len(report.generations)} generation(s)")
+    for generation in report.generations:
+        transitions = report.transitions_by_generation.get(generation.id, 0)
+        print(
+            f"  - generation={generation.id} run={generation.review_run_id} "
+            f"commit={generation.commit_sha[:12]} mode={generation.mode.value} "
+            f"ancestry_verified={generation.ancestry_verified} compatibility_ok={generation.compatibility_ok} "
+            f"invalidation_reason={generation.invalidation_reason.value if generation.invalidation_reason else None} "
+            f"transitions={transitions}"
+        )
+
+    print(f"open memory findings: {len(report.open_findings)}")
+    for finding in report.open_findings:
+        print(
+            f"  - {finding.file_path}:{finding.start_line}-{finding.end_line} "
+            f"status={finding.status.value} severity={finding.severity.value} "
+            f"title={finding.title!r}"
+        )
     return 0
 
 
@@ -596,6 +821,28 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Build candidates and context only -- never constructs a provider or calls the LLM",
     )
+    review_parser.add_argument(
+        "--incremental",
+        action="store_true",
+        help=(
+            "Enable Phase 7 incremental review memory, scoped to a synthetic local PR tied to "
+            "this repository checkout. With --dry-run, also prints the incremental plan (no "
+            "provider call, no memory persisted)."
+        ),
+    )
+
+    history_parser = subparsers.add_parser(
+        "review-history",
+        help="Inspect Phase 7 review-generation and finding-memory history for a local checkout's synthetic PR",
+    )
+    history_parser.add_argument(
+        "--repository", required=True, type=Path, help="Path to a local git checkout"
+    )
+    history_parser.add_argument(
+        "--full-name",
+        default=None,
+        help="Repository identity, e.g. 'owner/repo' (defaults to the directory name)",
+    )
 
     publish_parser = subparsers.add_parser(
         "publish",
@@ -623,6 +870,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_context(args)
     if args.command == "review":
         return _run_review(args)
+    if args.command == "review-history":
+        return _run_review_history(args)
     if args.command == "publish":
         return _run_publish(args)
 

@@ -42,6 +42,11 @@ from patchfrog.persistence.models.review import (
     ReviewCandidateStatus,
     ReviewRunModel,
 )
+from patchfrog.persistence.models.review_memory import (
+    ReviewGenerationModel,
+    ReviewMemoryFindingModel,
+    ReviewMemoryTransitionModel,
+)
 
 __all__ = [
     "AIFindingModel",
@@ -71,6 +76,9 @@ __all__ = [
     "RepositoryModel",
     "ReviewCandidateModel",
     "ReviewCandidateStatus",
+    "ReviewGenerationModel",
+    "ReviewMemoryFindingModel",
+    "ReviewMemoryTransitionModel",
     "ReviewPublicationCommentModel",
     "ReviewPublicationModel",
     "ReviewRunModel",

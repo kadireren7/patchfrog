@@ -27,6 +27,7 @@ from patchfrog.persistence.repositories import (
     ReviewCandidateRepository,
     ReviewRunRepository,
 )
+from patchfrog.review_memory.config import NO_MEMORY_CONTEXT_FINGERPRINT
 
 
 class ReviewQueryService:
@@ -48,6 +49,7 @@ class ReviewQueryService:
         commit_sha: str,
         config_fingerprint: str,
         model_fingerprint: str,
+        incremental_context_fingerprint: str | None = None,
     ) -> ReviewRunModel | None:
         return await self._run_repo.get_succeeded(
             session,
@@ -55,6 +57,7 @@ class ReviewQueryService:
             commit_sha=commit_sha,
             config_fingerprint=config_fingerprint,
             model_fingerprint=model_fingerprint,
+            incremental_context_fingerprint=incremental_context_fingerprint or NO_MEMORY_CONTEXT_FINGERPRINT,
         )
 
     async def get_candidates_for_run(

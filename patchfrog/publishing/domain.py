@@ -86,6 +86,14 @@ class PublicationDisposition(StrEnum):
     INLINE = "inline"
     SUMMARY_ONLY = "summary_only"
     OMITTED = "omitted"
+    #: Suppressed before any selection/threshold logic runs, because
+    #: Phase 7 (:mod:`patchfrog.review_memory`) determined this finding is
+    #: the same underlying issue as one already published on this PR in a
+    #: previous review -- see :meth:`patchfrog.publishing.planner.PublicationPlanner.build_plan`'s
+    #: ``already_reported_finding_ids``. Deliberately distinct from
+    #: ``OMITTED`` (which means "didn't meet the threshold"): this
+    #: finding met every threshold, it just isn't news.
+    ALREADY_REPORTED = "already_reported"
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,6 +176,7 @@ class ReviewPublicationPlan:
     inline_comments: tuple[ReviewPublicationComment, ...] = field(default_factory=tuple)
     summary_only: tuple[ReviewPublicationComment, ...] = field(default_factory=tuple)
     omitted: tuple[ReviewPublicationComment, ...] = field(default_factory=tuple)
+    already_reported: tuple[ReviewPublicationComment, ...] = field(default_factory=tuple)
     summary_body: str = ""
 
     @property

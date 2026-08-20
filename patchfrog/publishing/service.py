@@ -105,6 +105,7 @@ class ReviewPublicationService:
         review_run_id: uuid.UUID,
         mode: ReviewPublicationMode,
         config: PublicationConfig | None = None,
+        already_reported_finding_ids: frozenset[uuid.UUID] = frozenset(),
     ) -> ReviewPublicationResult:
         config = config or PublicationConfig()
 
@@ -203,6 +204,7 @@ class ReviewPublicationService:
             config=config,
             mode=mode,
             current_head_sha=current_head_sha,
+            already_reported_finding_ids=already_reported_finding_ids,
         )
 
         await self._persist_plan_comments(publication_id, plan)
@@ -296,7 +298,9 @@ class ReviewPublicationService:
         return self._result_from_model(model, reconciled=False, errors=())
 
     async def _persist_plan_comments(self, publication_id: uuid.UUID, plan: ReviewPublicationPlan) -> None:
-        all_comments: list[ReviewPublicationComment] = [*plan.inline_comments, *plan.summary_only, *plan.omitted]
+        all_comments: list[ReviewPublicationComment] = [
+            *plan.inline_comments, *plan.summary_only, *plan.omitted, *plan.already_reported,
+        ]
         if not all_comments:
             return
         async with self._session_factory() as session:
