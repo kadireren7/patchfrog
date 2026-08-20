@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,9 +13,12 @@ from patchfrog.persistence.models.review_memory import (
     ReviewMemoryTransitionModel,
 )
 from patchfrog.review_memory.domain import (
+    EvidenceSnippet,
     FindingMemoryStatus,
     ReviewMemoryFinding,
     TransitionReasonCode,
+    parse_evidence_json,
+    serialize_evidence,
 )
 
 
@@ -40,6 +44,7 @@ def _to_domain(model: ReviewMemoryFindingModel) -> ReviewMemoryFinding:
         exact_fingerprint=model.exact_fingerprint,
         semantic_family_fingerprint=model.semantic_family_fingerprint,
         status=model.status,
+        evidence=parse_evidence_json(model.evidence),
     )
 
 
@@ -134,6 +139,7 @@ class ReviewMemoryFindingRepository:
         end_line: int,
         exact_fingerprint: str,
         semantic_family_fingerprint: str,
+        evidence: Sequence[EvidenceSnippet] = (),
     ) -> ReviewMemoryFinding:
         model = ReviewMemoryFindingModel(
             repository_id=repository_id,
@@ -156,6 +162,7 @@ class ReviewMemoryFindingRepository:
             end_line=end_line,
             exact_fingerprint=exact_fingerprint,
             semantic_family_fingerprint=semantic_family_fingerprint,
+            evidence=serialize_evidence(evidence),
             status=FindingMemoryStatus.OPEN,
         )
         session.add(model)
@@ -188,6 +195,7 @@ class ReviewMemoryFindingRepository:
         updated_end_line: int | None = None,
         updated_symbol_id: uuid.UUID | None = None,
         updated_current_finding_id: uuid.UUID | None = None,
+        updated_evidence: Sequence[EvidenceSnippet] | None = None,
     ) -> ReviewMemoryFinding:
         model = await session.get(ReviewMemoryFindingModel, memory_finding_id)
         if model is None:
@@ -210,6 +218,13 @@ class ReviewMemoryFindingRepository:
             model.current_finding_id = updated_current_finding_id
         elif new_status in (FindingMemoryStatus.RESOLVED, FindingMemoryStatus.SUPERSEDED):
             model.current_finding_id = None
+        if updated_evidence is not None:
+            # Only ever set on a genuine fresh AI reconfirmation
+            # (RECHECK_CONFIRMED) -- a pure zero-AI-call carry-forward
+            # never passes this, since UNCHANGED/MOVED/RENAMED symbol
+            # continuity already guarantees the existing evidence is
+            # still exactly as valid to check against next time.
+            model.evidence = serialize_evidence(updated_evidence)
 
         session.add(
             ReviewMemoryTransitionModel(

@@ -19,6 +19,8 @@ folding it into a bare boolean anywhere.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from uuid import UUID
@@ -69,6 +71,16 @@ class TransitionReasonCode(StrEnum):
     FILE_RENAMED = "file_renamed"
     SYMBOL_MODIFIED = "symbol_modified"
     EVIDENCE_REGION_CHANGED = "evidence_region_changed"
+    #: A finding was carried forward with **zero** reviewer/critic
+    #: provider calls this run: symbol continuity was UNCHANGED/MOVED/
+    #: RENAMED *and* the finding's stored evidence snippet(s) were
+    #: independently reconfirmed verbatim (whitespace-normalized, never
+    #: fuzzy/LLM-matched) against the exact current commit's file
+    #: content. See :mod:`patchfrog.review_memory.evidence`. Always
+    #: persisted explicitly -- never folded into ``SYMBOL_UNCHANGED``/
+    #: ``LINE_ONLY_MOVED``/``FILE_RENAMED``, which describe *symbol*
+    #: continuity, not the evidence-based carry-forward decision itself.
+    EVIDENCE_CONFIRMED_UNCHANGED = "evidence_confirmed_unchanged"
     SYMBOL_DELETED = "symbol_deleted"
     FILE_DELETED = "file_deleted"
     HISTORY_REWRITTEN = "history_rewritten"
@@ -93,6 +105,69 @@ class SymbolContinuityStatus(StrEnum):
     MOVED = "moved"
     RENAMED = "renamed"
     AMBIGUOUS = "ambiguous"
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceSnippet:
+    """One verbatim excerpt a finding's evidence rested on -- the
+    deterministic identity :mod:`patchfrog.review_memory.evidence`
+    revalidates against the exact current commit's real file content.
+    Mirrors :class:`patchfrog.review.domain.ReviewEvidence`/the JSON shape
+    already persisted on :class:`~patchfrog.persistence.models.review.AIFindingModel.evidence`
+    -- deliberately not re-derived or reused from a
+    :class:`~patchfrog.context.domain.ContextBundle`, which can go stale
+    relative to the exact current commit (see the module docstring of
+    :mod:`patchfrog.review_memory.evidence`)."""
+
+    file_path: str
+    start_line: int
+    end_line: int
+    quoted_text: str
+
+
+def serialize_evidence(evidence: Sequence[EvidenceSnippet]) -> str:
+    """The one JSON shape both :class:`~patchfrog.persistence.models.review.AIFindingModel.evidence`
+    and :class:`~patchfrog.persistence.models.review_memory.ReviewMemoryFindingModel.evidence`
+    use -- kept as a single shared pure function so the two never drift
+    into subtly incompatible encodings."""
+
+    return json.dumps(
+        [
+            {"file_path": e.file_path, "start_line": e.start_line, "end_line": e.end_line, "quoted_text": e.quoted_text}
+            for e in evidence
+        ]
+    )
+
+
+def parse_evidence_json(raw: str) -> tuple[EvidenceSnippet, ...]:
+    """Inverse of :func:`serialize_evidence`. Never raises -- malformed
+    or unexpected content (e.g. a pre-Phase-7.1 row, or genuinely
+    corrupt data) deserializes to an empty tuple, which
+    :mod:`patchfrog.review_memory.evidence` already treats as "cannot
+    confirm, needs recheck" -- fails closed, never crashes a read path."""
+
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    result: list[EvidenceSnippet] = []
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            result.append(
+                EvidenceSnippet(
+                    file_path=str(entry["file_path"]),
+                    start_line=int(entry["start_line"]),
+                    end_line=int(entry["end_line"]),
+                    quoted_text=str(entry["quoted_text"]),
+                )
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    return tuple(result)
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +257,16 @@ class ReviewMemoryFinding:
     exact_fingerprint: str
     semantic_family_fingerprint: str
     status: FindingMemoryStatus
+    #: Deterministic evidence identity, persisted at creation time and
+    #: refreshed only when a fresh AI look reconfirms this finding (see
+    #: ``MemoryFindingDecision.updated_evidence``) -- never refreshed on
+    #: a zero-AI-call carry-forward, since UNCHANGED/MOVED/RENAMED
+    #: symbol continuity already guarantees byte-identical body content,
+    #: so the original evidence text remains exactly as valid to check
+    #: against. Empty for any pre-Phase-7.1 row (backfilled), which
+    #: correctly fails closed to "cannot confirm, needs recheck" in
+    #: :mod:`patchfrog.review_memory.evidence`.
+    evidence: tuple[EvidenceSnippet, ...] = field(default_factory=tuple)
 
 
 class PreReviewDisposition(StrEnum):
@@ -238,6 +323,7 @@ class CurrentFinding:
     message: str
     start_line: int
     end_line: int
+    evidence: tuple[EvidenceSnippet, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +348,14 @@ class MemoryFindingDecision:
     #: :mod:`patchfrog.publishing.planner`'s already-reported suppression
     #: keys off of.
     updated_current_finding_id: UUID | None = None
+    #: New evidence to persist on the memory finding, when a fresh AI
+    #: look actually reconfirmed it this run (RECHECK_CONFIRMED) --
+    #: ``None`` (leave the existing evidence untouched) for a pure
+    #: zero-AI-call carry-forward, where the underlying body is
+    #: byte-identical by construction (see ``ReviewMemoryFinding.evidence``'s
+    #: docstring for why refreshing would be redundant there) and for
+    #: RESOLVED/SUPERSEDED, where evidence no longer matters.
+    updated_evidence: tuple[EvidenceSnippet, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -304,7 +398,28 @@ class IncrementalMetrics:
     previous_candidate_count: int
     current_full_candidate_count: int
     incremental_candidate_count: int
+    #: Total candidates this run never sent to the reviewer at all --
+    #: every skipped candidate avoided exactly one reviewer call (and,
+    #: if it would have produced a proposal, a critic call too). Equal
+    #: to ``candidates_skipped_finding_free + candidates_skipped_evidence_confirmed``.
     candidates_skipped_by_memory: int
+    #: Same count as ``candidates_skipped_by_memory``, named explicitly
+    #: for "prove zero provider calls happened" reporting -- kept as a
+    #: distinct, explicitly-named field rather than only an implicit
+    #: rename so a metrics consumer never has to know the two are
+    #: definitionally identical to find it.
+    provider_calls_avoided: int
+    #: Of ``candidates_skipped_by_memory``: skipped because the symbol
+    #: was untouched *and* had no open memory finding attached at all --
+    #: the original, always-safe incremental-savings mechanism.
+    candidates_skipped_finding_free: int
+    #: Of ``candidates_skipped_by_memory``: skipped because a *tracked*
+    #: open finding's symbol was untouched (UNCHANGED/MOVED/RENAMED) and
+    #: its stored evidence was independently, deterministically
+    #: reconfirmed against the exact current commit -- the case this
+    #: phase's evidence-revalidation work makes newly reachable. See
+    #: ``TransitionReasonCode.EVIDENCE_CONFIRMED_UNCHANGED``.
+    candidates_skipped_evidence_confirmed: int
     findings_carried_forward: int
     findings_changed: int
     findings_resolved: int

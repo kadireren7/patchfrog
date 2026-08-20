@@ -230,3 +230,56 @@ def test_metrics_count_dispositions_correctly() -> None:
     assert plan.metrics.findings_resolved == 1
     assert plan.metrics.findings_ambiguous == 1
     assert plan.metrics.previous_candidate_count == 5
+
+
+def test_skipped_candidates_breakdown_distinguishes_finding_free_from_evidence_confirmed() -> None:
+    """provider_calls_avoided must be provably attributable to two
+    distinct causes: a symbol with no open finding at all (the original
+    incremental-savings mechanism) vs. a symbol with an open finding
+    whose evidence was deterministically reconfirmed (the zero-AI-call
+    carry-forward this phase adds) -- never conflated into one opaque
+    count."""
+
+    finding_free_id = uuid.uuid4()
+    evidence_confirmed_id = uuid.uuid4()
+    dirty_id = uuid.uuid4()
+    candidates = (
+        _candidate(symbol_id=finding_free_id, name="clean"),
+        _candidate(symbol_id=evidence_confirmed_id, name="tracked_unchanged"),
+        _candidate(symbol_id=dirty_id, name="dirty"),
+    )
+    change_set = IncrementalChangeSet(
+        previous_commit_sha="sha1", current_commit_sha="sha2",
+        file_changes=ChangeSet(old_commit_sha="sha1", new_commit_sha="sha2", changes=(
+            FileChange(change_type=FileChangeType.MODIFIED, path="a.py"),
+        )),
+        symbol_changes=(
+            SymbolContinuityResult(
+                status=SymbolContinuityStatus.UNCHANGED, previous=_snapshot(id_=finding_free_id),
+                current=_snapshot(id_=finding_free_id), reason="same",
+            ),
+            SymbolContinuityResult(
+                status=SymbolContinuityStatus.UNCHANGED, previous=_snapshot(id_=evidence_confirmed_id),
+                current=_snapshot(id_=evidence_confirmed_id), reason="same",
+            ),
+            SymbolContinuityResult(
+                status=SymbolContinuityStatus.MODIFIED, previous=_snapshot(id_=uuid.uuid4()),
+                current=_snapshot(id_=dirty_id), reason="changed",
+            ),
+        ),
+    )
+    carry_forward_decision = PreReviewDecision(
+        memory_finding=_memory_finding(), disposition=PreReviewDisposition.CARRY_FORWARD,
+        reason=TransitionReasonCode.EVIDENCE_CONFIRMED_UNCHANGED, detail="evidence confirmed",
+        updated_symbol_id=evidence_confirmed_id,
+    )
+    plan = IncrementalReviewPlanner().plan(
+        selection=_usable_selection(), current_candidates=candidates, change_set=change_set,
+        pre_review_decisions=(carry_forward_decision,), previous_candidate_count=3,
+    )
+    assert {c.symbol_name for c in plan.selected_candidates} == {"dirty"}
+    assert {c.symbol_name for c in plan.skipped_candidates} == {"clean", "tracked_unchanged"}
+    assert plan.metrics.candidates_skipped_by_memory == 2
+    assert plan.metrics.provider_calls_avoided == 2
+    assert plan.metrics.candidates_skipped_finding_free == 1
+    assert plan.metrics.candidates_skipped_evidence_confirmed == 1

@@ -21,17 +21,22 @@ Scenario (three PR commits against one fixed base):
 
 Proves, against real persisted state:
   - ``add`` (clean, no memory finding ever attached) is never sent to the
-    reviewer again after commit1 -- the core incremental savings
+    reviewer again after commit1 -- the original incremental savings
     mechanism, verified via ``reviewer.calls``, not just candidate counts.
-  - ``divide``'s bug survives commit2 as CARRIED_FORWARD (rechecked,
-    reproduced) and is suppressed from that commit's publication plan
-    (Phase 6 idempotency untouched -- it's still a real inline-eligible
-    finding, just already-reported).
+  - ``divide``'s bug survives commit2 as CARRIED_FORWARD with **zero**
+    reviewer/critic calls: symbol continuity UNCHANGED and its stored
+    evidence snippet independently reconfirmed verbatim against the
+    exact current commit's real file content
+    (:mod:`patchfrog.review_memory.evidence`) -- and is suppressed from
+    that commit's publication plan (Phase 6 idempotency untouched --
+    there simply is no new finding row to publish in the first place).
   - ``power``'s new bug is accepted as a new memory finding in commit2,
-    then carried forward again (rechecked, reproduced, suppressed) in
-    commit3.
-  - ``divide``'s bug is RESOLVED (no re-publish, no "resolved" comment
-    spam) once commit3 actually fixes it.
+    then carried forward again with zero provider calls in commit3 the
+    same way.
+  - ``divide``'s bug, once its body actually changes (commit3, fixed),
+    always gets a real AI recheck regardless of evidence revalidation --
+    and is RESOLVED (no re-publish, no "resolved" comment spam) once
+    that recheck confirms it's gone.
 """
 
 from __future__ import annotations
@@ -261,7 +266,21 @@ async def test_incremental_review_memory_lifecycle(
         commit_sha=commit2_sha, prepared=prepared2,
     )
     assert "add" not in _prompted_targets(reviewer2)  # never re-reviewed: real incremental savings
+    # divide's finding survives untouched: symbol continuity UNCHANGED
+    # *and* its stored evidence ("return a - b") is still present
+    # verbatim in math_ops.py at commit2 -- zero-AI-call carry-forward,
+    # not a recheck. Proven directly against the fake provider's
+    # recorded calls, never inferred from status alone.
+    assert "divide" not in _prompted_targets(reviewer2)
+    assert "divide" not in _prompted_targets(critic2)
+    divide_candidate_ids = {c.fingerprint() for c in full_candidates2 if c.symbol_name == "divide"}
+    assert divide_candidate_ids and divide_candidate_ids.isdisjoint(selected_ids)
+    assert summary2.accepted_count == 1  # power only -- divide never went to the reviewer at all
     assert len(reconciliation2.new_finding_ids) == 1  # power's new bug
+
+    assert prepared2.plan.metrics.candidates_skipped_evidence_confirmed == 1  # divide
+    assert prepared2.plan.metrics.candidates_skipped_finding_free == 2  # add + the math_ops.py module region
+    assert prepared2.plan.metrics.provider_calls_avoided == 3
 
     async with session_factory() as session:
         open_findings2 = await ReviewMemoryFindingRepository().get_open_for_pr(session, pull_request_id=pull_request_id)
@@ -311,6 +330,13 @@ async def test_incremental_review_memory_lifecycle(
         commit_sha=commit3_sha, prepared=prepared3,
     )
     assert "add" not in _prompted_targets(reviewer3)
+    # power: untouched since commit2, evidence still present -> zero-AI
+    # carry-forward again. divide: body actually changed (MODIFIED
+    # continuity) -> evidence revalidation is never even consulted,
+    # always a real recheck regardless.
+    assert "power" not in _prompted_targets(reviewer3)
+    assert "divide" in _prompted_targets(reviewer3)
+    assert prepared3.plan.metrics.candidates_skipped_evidence_confirmed == 1  # power
     assert not reconciliation3.new_finding_ids  # nothing new
     assert len(reconciliation3.resolved_memory_finding_ids) == 1  # divide's bug resolved
 

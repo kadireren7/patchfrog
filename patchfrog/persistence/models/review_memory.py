@@ -144,6 +144,15 @@ class ReviewMemoryFindingModel(Base):
     end_line: Mapped[int] = mapped_column(Integer)
     exact_fingerprint: Mapped[str] = mapped_column(String(64))
     semantic_family_fingerprint: Mapped[str] = mapped_column(String(64))
+    #: JSON-serialized list of ``{file_path, start_line, end_line,
+    #: quoted_text}`` objects -- same shape as
+    #: ``AIFindingModel.evidence`` -- the deterministic identity
+    #: :mod:`patchfrog.review_memory.evidence` revalidates against the
+    #: exact current commit to decide zero-AI-call carry-forward. Never
+    #: refreshed on a pure carry-forward (see
+    #: ``ReviewMemoryFinding.evidence``'s docstring); refreshed only when
+    #: a fresh AI look reconfirms this finding (RECHECK_CONFIRMED).
+    evidence: Mapped[str] = mapped_column(Text, server_default="[]")
     status: Mapped[FindingMemoryStatus] = mapped_column(enum_column(FindingMemoryStatus, length=16))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

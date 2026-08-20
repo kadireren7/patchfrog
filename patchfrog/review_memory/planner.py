@@ -15,6 +15,17 @@ whether candidate-skipping is actually usable (see
 :class:`patchfrog.review_memory.domain.PreviousReviewSelection`) -- when
 it is not (no usable previous review, or drift), every current candidate
 is selected, identical to Phase 5's own behavior with Phase 7 absent.
+
+A candidate is skipped for one of two reasons, both counted separately
+in :class:`~patchfrog.review_memory.domain.IncrementalMetrics`: its
+symbol is untouched with no open finding attached at all
+(``candidates_skipped_finding_free``), or its symbol is untouched *and*
+carries an open finding whose evidence was independently, deterministically
+reconfirmed against the exact current commit
+(``candidates_skipped_evidence_confirmed`` -- see
+:mod:`patchfrog.review_memory.evidence`). Both are real zero-provider-call
+skips; the breakdown exists purely so "the reviewer was never called for
+this open, tracked finding" is provable, not just inferable.
 """
 
 from __future__ import annotations
@@ -75,7 +86,7 @@ class IncrementalReviewPlanner:
             previous_candidate_count=previous_candidate_count,
             current_full_candidate_count=len(current_candidates),
             incremental_candidate_count=len(selected),
-            candidates_skipped=len(skipped),
+            skipped_candidates=skipped,
             pre_review_decisions=pre_review_decisions,
         )
         return IncrementalPlan(
@@ -103,7 +114,7 @@ class IncrementalReviewPlanner:
             previous_candidate_count=previous_candidate_count,
             current_full_candidate_count=len(current_candidates),
             incremental_candidate_count=len(current_candidates),
-            candidates_skipped=0,
+            skipped_candidates=(),
             pre_review_decisions=pre_review_decisions,
         )
         return IncrementalPlan(
@@ -121,7 +132,7 @@ class IncrementalReviewPlanner:
         previous_candidate_count: int,
         current_full_candidate_count: int,
         incremental_candidate_count: int,
-        candidates_skipped: int,
+        skipped_candidates: Sequence[ReviewCandidate],
         pre_review_decisions: Sequence[PreReviewDecision],
     ) -> IncrementalMetrics:
         carried = sum(1 for d in pre_review_decisions if d.disposition is PreReviewDisposition.CARRY_FORWARD)
@@ -131,11 +142,32 @@ class IncrementalReviewPlanner:
             if d.disposition is PreReviewDisposition.NEEDS_RECHECK
             and d.reason is TransitionReasonCode.AMBIGUOUS_SYMBOL_MATCH
         )
+
+        # Every CARRY_FORWARD decision's symbol id is, by construction,
+        # a symbol that was deterministically confirmed (evidence
+        # reconfirmed) rather than merely "not in this run's diff" --
+        # any skipped candidate matching one of these ids was skipped
+        # *because of* a tracked open finding, not because it was
+        # finding-free.
+        evidence_confirmed_symbol_ids = {
+            d.updated_symbol_id
+            for d in pre_review_decisions
+            if d.disposition is PreReviewDisposition.CARRY_FORWARD and d.updated_symbol_id is not None
+        }
+        candidates_skipped_evidence_confirmed = sum(
+            1 for c in skipped_candidates if c.symbol_id in evidence_confirmed_symbol_ids
+        )
+        candidates_skipped_by_memory = len(skipped_candidates)
+        candidates_skipped_finding_free = candidates_skipped_by_memory - candidates_skipped_evidence_confirmed
+
         return IncrementalMetrics(
             previous_candidate_count=previous_candidate_count,
             current_full_candidate_count=current_full_candidate_count,
             incremental_candidate_count=incremental_candidate_count,
-            candidates_skipped_by_memory=candidates_skipped,
+            candidates_skipped_by_memory=candidates_skipped_by_memory,
+            provider_calls_avoided=candidates_skipped_by_memory,
+            candidates_skipped_finding_free=candidates_skipped_finding_free,
+            candidates_skipped_evidence_confirmed=candidates_skipped_evidence_confirmed,
             findings_carried_forward=carried,
             findings_changed=0,  # known only after post-review reconciliation
             findings_resolved=resolved,

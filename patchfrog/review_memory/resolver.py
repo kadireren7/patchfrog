@@ -171,14 +171,16 @@ class ReviewMemoryResolver:
                 updated_start_line=updated_start, updated_end_line=updated_end,
             )
 
-        reason = {
-            SymbolContinuityStatus.UNCHANGED: TransitionReasonCode.SYMBOL_UNCHANGED,
-            SymbolContinuityStatus.MOVED: TransitionReasonCode.LINE_ONLY_MOVED,
-            SymbolContinuityStatus.RENAMED: TransitionReasonCode.FILE_RENAMED,
-        }[status]
+        # Evidence independently, deterministically reconfirmed against
+        # the exact current commit -- zero AI call needed. Always this
+        # one explicit reason code, whatever the underlying continuity
+        # classification (unchanged/moved/renamed) was; that classification
+        # is preserved in ``detail`` for traceability, never folded into
+        # the reason code itself (see TransitionReasonCode.EVIDENCE_CONFIRMED_UNCHANGED).
         return PreReviewDecision(
             memory_finding=finding, disposition=PreReviewDisposition.CARRY_FORWARD,
-            reason=reason, detail=continuity.reason,
+            reason=TransitionReasonCode.EVIDENCE_CONFIRMED_UNCHANGED,
+            detail=f"evidence reconfirmed verbatim at current location ({status.value}: {continuity.reason})",
             updated_symbol_id=current.id, updated_file_path=current.file_path,
             updated_start_line=updated_start, updated_end_line=updated_end,
         )
@@ -215,21 +217,38 @@ class ReviewMemoryResolver:
                 )
                 continue
 
+            key = (
+                pre.updated_symbol_id or pre.updated_file_path or pre.memory_finding.file_path,
+                pre.memory_finding.category.value,
+            )
+            matches = by_symbol_and_category.get(key, [])
+
             if pre.disposition is PreReviewDisposition.CARRY_FORWARD:
-                decisions.append(
-                    MemoryFindingDecision(
-                        memory_finding=pre.memory_finding, new_status=FindingMemoryStatus.CARRIED_FORWARD,
-                        reason=pre.reason, detail=pre.detail,
-                        updated_file_path=pre.updated_file_path, updated_start_line=pre.updated_start_line,
-                        updated_end_line=pre.updated_end_line, updated_symbol_id=pre.updated_symbol_id,
+                if not matches:
+                    # The normal, expected path: this candidate was
+                    # genuinely never sent to the reviewer this run --
+                    # zero AI calls, trust the deterministic carry-forward
+                    # as-is, evidence unchanged.
+                    decisions.append(
+                        MemoryFindingDecision(
+                            memory_finding=pre.memory_finding, new_status=FindingMemoryStatus.CARRIED_FORWARD,
+                            reason=pre.reason, detail=pre.detail,
+                            updated_file_path=pre.updated_file_path, updated_start_line=pre.updated_start_line,
+                            updated_end_line=pre.updated_end_line, updated_symbol_id=pre.updated_symbol_id,
+                        )
                     )
-                )
+                    continue
+                # A CARRY_FORWARD-dispositioned candidate was reviewed
+                # anyway -- e.g. drift/full mode selects every current
+                # candidate regardless of this pre-review disposition
+                # (see IncrementalReviewPlanner._full_plan). Never trust
+                # the deterministic carry-forward over what the AI
+                # actually produced this run; reconcile against reality
+                # exactly like a NEEDS_RECHECK match.
+                decisions.append(self._reconcile_against_match(pre, matches[0]))
                 continue
 
-            # NEEDS_RECHECK: look for a current finding at the same
-            # (symbol-or-file, category) key.
-            key = (pre.updated_symbol_id or pre.updated_file_path or pre.memory_finding.file_path, pre.memory_finding.category.value)
-            matches = by_symbol_and_category.get(key, [])
+            # NEEDS_RECHECK.
             if not matches:
                 decisions.append(
                     MemoryFindingDecision(
@@ -241,33 +260,31 @@ class ReviewMemoryResolver:
                 )
                 continue
 
-            match = matches[0]
-            same_severity = match.severity == pre.memory_finding.severity
-            same_message = _normalize(match.message) == _normalize(pre.memory_finding.message)
-            if same_severity and same_message:
-                decisions.append(
-                    MemoryFindingDecision(
-                        memory_finding=pre.memory_finding, new_status=FindingMemoryStatus.CARRIED_FORWARD,
-                        reason=TransitionReasonCode.RECHECK_CONFIRMED,
-                        detail=f"rechecked ({pre.reason.value}); AI review reproduced an equivalent finding",
-                        updated_file_path=match.file_path, updated_start_line=match.start_line,
-                        updated_end_line=match.end_line, updated_symbol_id=match.symbol_id or pre.updated_symbol_id,
-                        updated_current_finding_id=match.id,
-                    )
-                )
-            else:
-                decisions.append(
-                    MemoryFindingDecision(
-                        memory_finding=pre.memory_finding, new_status=FindingMemoryStatus.CHANGED,
-                        reason=TransitionReasonCode.RECHECK_CONFIRMED,
-                        detail=f"rechecked ({pre.reason.value}); same category, different severity/message",
-                        updated_file_path=match.file_path, updated_start_line=match.start_line,
-                        updated_end_line=match.end_line, updated_symbol_id=match.symbol_id or pre.updated_symbol_id,
-                        updated_current_finding_id=match.id,
-                    )
-                )
+            decisions.append(self._reconcile_against_match(pre, matches[0]))
 
         return decisions
+
+    @staticmethod
+    def _reconcile_against_match(pre: PreReviewDecision, match: CurrentFinding) -> MemoryFindingDecision:
+        same_severity = match.severity == pre.memory_finding.severity
+        same_message = _normalize(match.message) == _normalize(pre.memory_finding.message)
+        if same_severity and same_message:
+            return MemoryFindingDecision(
+                memory_finding=pre.memory_finding, new_status=FindingMemoryStatus.CARRIED_FORWARD,
+                reason=TransitionReasonCode.RECHECK_CONFIRMED,
+                detail=f"rechecked ({pre.reason.value}); AI review reproduced an equivalent finding",
+                updated_file_path=match.file_path, updated_start_line=match.start_line,
+                updated_end_line=match.end_line, updated_symbol_id=match.symbol_id or pre.updated_symbol_id,
+                updated_current_finding_id=match.id, updated_evidence=match.evidence,
+            )
+        return MemoryFindingDecision(
+            memory_finding=pre.memory_finding, new_status=FindingMemoryStatus.CHANGED,
+            reason=TransitionReasonCode.RECHECK_CONFIRMED,
+            detail=f"rechecked ({pre.reason.value}); same category, different severity/message",
+            updated_file_path=match.file_path, updated_start_line=match.start_line,
+            updated_end_line=match.end_line, updated_symbol_id=match.symbol_id or pre.updated_symbol_id,
+            updated_current_finding_id=match.id, updated_evidence=match.evidence,
+        )
 
 
 def _normalize(text: str) -> str:

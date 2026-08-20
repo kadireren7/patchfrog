@@ -36,19 +36,17 @@ shares (:func:`patchfrog.repository.ancestry.verify_ancestor_with_diff`)
 always run *before* any write-session is opened -- no DB lock, no
 transaction, is ever held across that network I/O.
 
-Known, deliberate simplification (documented rather than silently
-assumed): this phase does not implement real evidence-snippet
-revalidation (re-reading the current commit's file content to confirm a
-finding's quoted evidence still appears verbatim at its mapped location).
-:meth:`patchfrog.review_memory.resolver.ReviewMemoryResolver.resolve_pre_review`
-already fails closed on this (``evidence_still_present`` omitted ==
-"not confirmed"), so every UNCHANGED/MOVED/RENAMED symbol with an
-attached previous finding is routed to ``NEEDS_RECHECK`` rather than a
-zero-AI-call ``CARRY_FORWARD``. This is *safe* (never wrongly suppresses
-a finding that might no longer apply) but gives up some of the possible
-incremental savings -- the primary savings mechanism that remains fully
-intact is skipping candidates for symbols that changed not at all and
-never had a finding attached in the first place.
+Evidence revalidation (:mod:`patchfrog.review_memory.evidence`): for
+every open finding whose symbol continuity is UNCHANGED/MOVED/RENAMED,
+``prepare()`` fetches the *exact current commit's* real file content for
+the finding's mapped location (:func:`patchfrog.repository.file_contents.read_files_at_commit`
+-- a fresh, targeted git read, never a previously-built
+:class:`~patchfrog.context.domain.ContextBundle`) and deterministically
+confirms the finding's stored evidence snippet(s) are still present
+verbatim (whitespace-normalized only, never fuzzy/LLM-matched). Only
+then does the finding carry forward with **zero** reviewer/critic
+provider calls this run; any ambiguity (no stored evidence, unreadable
+file, evidence no longer found) fails closed to a fresh AI recheck.
 """
 
 from __future__ import annotations
@@ -73,6 +71,7 @@ from patchfrog.persistence.repositories import (
 )
 from patchfrog.persistence.repositories.analysis_run import AnalysisRunRepository
 from patchfrog.repository.ancestry import verify_ancestor_with_diff
+from patchfrog.repository.file_contents import read_files_at_commit
 from patchfrog.review.candidates import ReviewCandidateGenerator
 from patchfrog.review.config import (
     REVIEW_ENGINE_VERSION,
@@ -95,9 +94,13 @@ from patchfrog.review_memory.domain import (
     IncrementalPlan,
     PreviousGenerationCandidate,
     PreviousReviewSelection,
+    ReviewMemoryFinding,
+    SymbolContinuityResult,
     SymbolSnapshot,
     TransitionReasonCode,
+    parse_evidence_json,
 )
+from patchfrog.review_memory.evidence import determine_evidence_check_targets, revalidate_evidence
 from patchfrog.review_memory.fingerprint import (
     compute_exact_fingerprint,
     compute_semantic_family_fingerprint,
@@ -311,8 +314,17 @@ class IncrementalReviewMemoryService:
             symbol_changes=symbol_changes,
         )
 
+        evidence_still_present = self._revalidate_evidence(
+            previous_findings=previous_findings,
+            symbol_changes=symbol_changes,
+            clone_url=clone_url,
+            commit_sha=commit_sha,
+            token=token,
+        )
         pre_review_decisions = self._resolver.resolve_pre_review(
-            previous_findings=previous_findings, change_set=change_set
+            previous_findings=previous_findings,
+            change_set=change_set,
+            evidence_still_present=evidence_still_present,
         )
 
         selection = PreviousReviewSelection(
@@ -350,6 +362,9 @@ class IncrementalReviewMemoryService:
             mode=plan.mode.value,
             previous_generation_id=str(prev.id),
             candidates_skipped=plan.metrics.candidates_skipped_by_memory,
+            candidates_skipped_finding_free=plan.metrics.candidates_skipped_finding_free,
+            candidates_skipped_evidence_confirmed=plan.metrics.candidates_skipped_evidence_confirmed,
+            provider_calls_avoided=plan.metrics.provider_calls_avoided,
             candidates_selected=len(plan.selected_candidates),
         )
 
@@ -365,6 +380,39 @@ class IncrementalReviewMemoryService:
             memory_compatibility_fingerprint=current_compat_fp,
             current_symbol_snapshots=current_symbol_snapshots,
             memory_tracking_active=True,
+        )
+
+    def _revalidate_evidence(
+        self,
+        *,
+        previous_findings: Sequence[ReviewMemoryFinding],
+        symbol_changes: Sequence[SymbolContinuityResult],
+        clone_url: str,
+        commit_sha: str,
+        token: str | None,
+    ) -> dict[str, bool]:
+        """Fetch only the specific files needed
+        (:func:`~patchfrog.review_memory.evidence.determine_evidence_check_targets`)
+        at the *exact current commit* (never a stale checkout, never a
+        previously-built ContextBundle -- see the module docstring) and
+        deterministically confirm evidence
+        (:func:`~patchfrog.review_memory.evidence.revalidate_evidence`).
+        A no-op (zero fetches) when no open finding is even eligible for
+        evidence-based carry-forward this run."""
+
+        targets = determine_evidence_check_targets(
+            previous_findings=previous_findings, symbol_changes=symbol_changes
+        )
+        if not targets:
+            return {}
+        needed_paths = frozenset(targets.values())
+        current_file_contents = read_files_at_commit(
+            clone_url=clone_url, commit_sha=commit_sha, paths=needed_paths, token=token
+        )
+        return revalidate_evidence(
+            previous_findings=previous_findings,
+            symbol_changes=symbol_changes,
+            current_file_contents=current_file_contents,
         )
 
     def _no_memory_prepared(
@@ -479,6 +527,7 @@ class IncrementalReviewMemoryService:
                     updated_end_line=d.updated_end_line,
                     updated_symbol_id=d.updated_symbol_id,
                     updated_current_finding_id=d.updated_current_finding_id,
+                    updated_evidence=d.updated_evidence,
                 )
 
             for cf in new_findings:
@@ -575,6 +624,7 @@ class IncrementalReviewMemoryService:
             end_line=cf.end_line,
             exact_fingerprint=exact_fp,
             semantic_family_fingerprint=semantic_fp,
+            evidence=cf.evidence,
         )
 
     async def _load_current_findings(
@@ -606,6 +656,7 @@ class IncrementalReviewMemoryService:
                     message=f.message,
                     start_line=f.start_line,
                     end_line=f.end_line,
+                    evidence=parse_evidence_json(f.evidence),
                 )
             )
         return result

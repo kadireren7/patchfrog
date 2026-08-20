@@ -19,6 +19,7 @@ from patchfrog.review_memory.domain import (
     CurrentFinding,
     FindingMemoryStatus,
     IncrementalChangeSet,
+    PreReviewDecision,
     PreReviewDisposition,
     ReviewMemoryFinding,
     SymbolContinuityResult,
@@ -109,10 +110,11 @@ def test_modified_symbol_needs_recheck() -> None:
 
 
 def test_unchanged_symbol_without_evidence_confirmation_needs_recheck() -> None:
-    """The documented simplification: no evidence revalidation
-    implemented yet -- an UNCHANGED symbol with an attached finding still
-    needs a fresh AI look unless the caller explicitly confirms the
-    evidence snippet, which nothing does today."""
+    """Fail-closed default: an UNCHANGED symbol with an attached finding
+    still needs a fresh AI look unless the caller explicitly confirms
+    the evidence snippet (``evidence_still_present`` omitted here) --
+    see :mod:`patchfrog.review_memory.evidence` for the real,
+    deterministic confirmation path."""
 
     symbol_id = uuid.uuid4()
     new_id = uuid.uuid4()
@@ -143,7 +145,7 @@ def test_unchanged_symbol_with_evidence_confirmed_carries_forward() -> None:
         evidence_still_present={str(finding.id): True},
     )
     assert decisions[0].disposition is PreReviewDisposition.CARRY_FORWARD
-    assert decisions[0].reason is TransitionReasonCode.SYMBOL_UNCHANGED
+    assert decisions[0].reason is TransitionReasonCode.EVIDENCE_CONFIRMED_UNCHANGED
     assert decisions[0].updated_symbol_id == new_id
 
 
@@ -208,7 +210,6 @@ def _current_finding_from_final(final: FinalAIFinding, *, current_id: uuid.UUID 
 
 
 def test_reconcile_resolved_immediately_becomes_resolved() -> None:
-    from patchfrog.review_memory.domain import PreReviewDecision
 
     finding = _memory_finding(symbol_id=uuid.uuid4())
     pre = PreReviewDecision(
@@ -221,7 +222,6 @@ def test_reconcile_resolved_immediately_becomes_resolved() -> None:
 
 
 def test_reconcile_carry_forward_stays_carried_forward_without_matching() -> None:
-    from patchfrog.review_memory.domain import PreReviewDecision
 
     symbol_id = uuid.uuid4()
     finding = _memory_finding(symbol_id=symbol_id)
@@ -236,7 +236,6 @@ def test_reconcile_carry_forward_stays_carried_forward_without_matching() -> Non
 
 
 def test_reconcile_needs_recheck_reproduced_is_carried_forward() -> None:
-    from patchfrog.review_memory.domain import PreReviewDecision
 
     symbol_id = uuid.uuid4()
     finding = _memory_finding(symbol_id=symbol_id, message="there is a bug")
@@ -256,7 +255,6 @@ def test_reconcile_needs_recheck_reproduced_is_carried_forward() -> None:
 
 
 def test_reconcile_needs_recheck_different_severity_is_changed() -> None:
-    from patchfrog.review_memory.domain import PreReviewDecision
 
     symbol_id = uuid.uuid4()
     finding = _memory_finding(symbol_id=symbol_id, severity=Severity.MEDIUM, message="there is a bug")
@@ -274,7 +272,6 @@ def test_reconcile_needs_recheck_different_severity_is_changed() -> None:
 
 
 def test_reconcile_needs_recheck_no_match_is_resolved() -> None:
-    from patchfrog.review_memory.domain import PreReviewDecision
 
     symbol_id = uuid.uuid4()
     finding = _memory_finding(symbol_id=symbol_id)
@@ -285,3 +282,71 @@ def test_reconcile_needs_recheck_no_match_is_resolved() -> None:
     decisions = ReviewMemoryResolver().reconcile_post_review(pre_review_decisions=[pre], current_findings=[])
     assert decisions[0].new_status is FindingMemoryStatus.RESOLVED
     assert decisions[0].reason is TransitionReasonCode.RECHECK_NO_LONGER_PRESENT
+
+
+def test_reconcile_carry_forward_with_no_match_stays_zero_ai() -> None:
+    """The expected, common path: a CARRY_FORWARD-dispositioned finding
+    whose candidate was genuinely never selected this run (incremental
+    mode skipped it) -- current_findings has nothing at its key, so the
+    deterministic carry-forward is trusted as-is."""
+
+    symbol_id = uuid.uuid4()
+    finding = _memory_finding(symbol_id=symbol_id)
+    pre = PreReviewDecision(
+        memory_finding=finding, disposition=PreReviewDisposition.CARRY_FORWARD,
+        reason=TransitionReasonCode.EVIDENCE_CONFIRMED_UNCHANGED, detail="evidence confirmed",
+        updated_symbol_id=symbol_id, updated_file_path="a.py", updated_start_line=1, updated_end_line=2,
+    )
+    decisions = ReviewMemoryResolver().reconcile_post_review(pre_review_decisions=[pre], current_findings=[])
+    assert decisions[0].new_status is FindingMemoryStatus.CARRIED_FORWARD
+    assert decisions[0].reason is TransitionReasonCode.EVIDENCE_CONFIRMED_UNCHANGED
+    assert decisions[0].updated_current_finding_id is None  # no new finding row exists for this run
+
+
+def test_reconcile_carry_forward_but_actually_reviewed_reconciles_against_reality() -> None:
+    """Regression scenario E: symbol unchanged (evidence confirmed) but
+    the candidate was reviewed anyway (e.g. drift/full mode selects
+    every current candidate regardless of the pre-review disposition --
+    see IncrementalReviewPlanner._full_plan). The AI's actual output for
+    this run must never be silently ignored in favor of the deterministic
+    carry-forward -- reconcile against what was actually found, exactly
+    like a NEEDS_RECHECK match would."""
+
+    symbol_id = uuid.uuid4()
+    finding = _memory_finding(symbol_id=symbol_id, message="there is a bug")
+    pre = PreReviewDecision(
+        memory_finding=finding, disposition=PreReviewDisposition.CARRY_FORWARD,
+        reason=TransitionReasonCode.EVIDENCE_CONFIRMED_UNCHANGED, detail="evidence confirmed",
+        updated_symbol_id=symbol_id, updated_file_path="a.py", updated_start_line=1, updated_end_line=2,
+    )
+    final = _final_finding(
+        symbol_id=symbol_id, file_path="a.py", category=FindingCategory.CORRECTNESS,
+        severity=Severity.HIGH, message="there is a bug",
+    )
+    current = _current_finding_from_final(final)
+    decisions = ReviewMemoryResolver().reconcile_post_review(pre_review_decisions=[pre], current_findings=[current])
+    assert decisions[0].new_status is FindingMemoryStatus.CARRIED_FORWARD
+    assert decisions[0].reason is TransitionReasonCode.RECHECK_CONFIRMED  # not the deterministic reason
+    assert decisions[0].updated_current_finding_id == current.id  # the real, freshly-reviewed finding row
+
+
+def test_reconcile_carry_forward_but_review_found_something_different_is_changed() -> None:
+    """Same drift/full-mode scenario, but this time the AI's actual
+    output genuinely differs (severity changed) -- must resolve to
+    CHANGED, never silently stay CARRIED_FORWARD."""
+
+    symbol_id = uuid.uuid4()
+    finding = _memory_finding(symbol_id=symbol_id, severity=Severity.MEDIUM, message="there is a bug")
+    pre = PreReviewDecision(
+        memory_finding=finding, disposition=PreReviewDisposition.CARRY_FORWARD,
+        reason=TransitionReasonCode.EVIDENCE_CONFIRMED_UNCHANGED, detail="evidence confirmed",
+        updated_symbol_id=symbol_id, updated_file_path="a.py", updated_start_line=1, updated_end_line=2,
+    )
+    final = _final_finding(
+        symbol_id=symbol_id, file_path="a.py", category=FindingCategory.CORRECTNESS,
+        severity=Severity.CRITICAL, message="there is a bug",
+    )
+    current = _current_finding_from_final(final)
+    decisions = ReviewMemoryResolver().reconcile_post_review(pre_review_decisions=[pre], current_findings=[current])
+    assert decisions[0].new_status is FindingMemoryStatus.CHANGED
+    assert decisions[0].updated_current_finding_id == current.id
