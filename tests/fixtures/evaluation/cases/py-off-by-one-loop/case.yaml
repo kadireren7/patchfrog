@@ -1,0 +1,28 @@
+case:
+  id: py-off-by-one-loop
+  title: send_all skips the last message in the list
+  description: >
+    send_all iterates with `range(0, len(messages) - 1)`, which excludes
+    the final index, so the last message in the list is never sent even
+    though the docstring promises every message is sent.
+  language: python
+  difficulty: easy
+  tags: [boundary, correctness]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/batch.py
+    symbol: send_all
+    issue_family: off_by_one
+    severity: medium
+    line: 4
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: >
+      range(0, len(messages) - 1) excludes the last valid index; should be
+      range(0, len(messages)) or equivalently range(len(messages)).
+
+forbidden:
+  - reason: total_length is correct and must not be flagged
+    category: correctness

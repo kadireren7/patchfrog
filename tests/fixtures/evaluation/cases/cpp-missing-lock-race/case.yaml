@@ -1,0 +1,23 @@
+case:
+  id: cpp-missing-lock-race
+  title: record_failure mutates failure_count_ without holding mutex_
+  description: >
+    record_success correctly locks mutex_ before mutating shared
+    state, but record_failure mutates failure_count_ with no lock at
+    all -- concurrent calls to record_failure() from multiple threads
+    race on failure_count_.
+  language: cpp
+  difficulty: medium
+  tags: [concurrency, caller-callee]
+
+expected:
+  - id: ef1
+    category: concurrency
+    file: counter.cpp
+    symbol: record_failure
+    issue_family: missing_lock
+    severity: high
+    line: 15
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: record_failure mutates failure_count_ without acquiring mutex_, unlike its sibling record_success at line 7-8.

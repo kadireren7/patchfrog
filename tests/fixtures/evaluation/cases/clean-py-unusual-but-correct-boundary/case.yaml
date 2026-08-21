@@ -1,0 +1,19 @@
+case:
+  id: clean-py-unusual-but-correct-boundary
+  title: Inclusive time window boundary is correct, not an off-by-one
+  description: >
+    TimeWindow.duration returns end - start + 1 and contains uses <= on
+    both ends, which looks like a possible fencepost/off-by-one bug but
+    is correct given the class's documented inclusive-range semantics.
+  language: python
+  difficulty: medium
+  tags: [false-positive-trap, boundary]
+
+expected: []
+
+forbidden:
+  - reason: >
+      the +1 in duration() and the <= <= comparison in contains() are
+      both correct for this class's documented inclusive [start, end]
+      contract, not an off-by-one bug
+    category: correctness

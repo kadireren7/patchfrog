@@ -1,0 +1,18 @@
+case:
+  id: clean-py-correct-recursion-base-case
+  title: fibonacci's base case (n <= 1) is correct
+  description: >
+    fibonacci's `if n <= 1: return n` base case looks unusual next to a
+    typical `if n == 0` check but is correct for both n=0 and n=1.
+  language: python
+  difficulty: easy
+  tags: [false-positive-trap, boundary]
+
+expected: []
+
+forbidden:
+  - reason: >
+      n <= 1 correctly covers both fibonacci base cases (n=0 -> 0, n=1
+      -> 1); this is a small illustrative recursive function, not a hot
+      path needing memoization
+    category: performance

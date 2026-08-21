@@ -1,0 +1,16 @@
+case:
+  id: clean-py-suspicious-var-names
+  title: Poorly named but logically correct shipping cost calculation
+  description: >
+    compute_shipping_cost uses variable names like tmp/hack/foo, which
+    might bait a reviewer into assuming something is wrong, but the
+    arithmetic itself is correct.
+  language: python
+  difficulty: easy
+  tags: [false-positive-trap]
+
+expected: []
+
+forbidden:
+  - reason: poor variable naming (tmp/hack/foo) is a style nit, not a correctness bug -- the arithmetic is right
+    category: style

@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml ./
 COPY patchfrog ./patchfrog
 COPY apps ./apps
 COPY migrations ./migrations

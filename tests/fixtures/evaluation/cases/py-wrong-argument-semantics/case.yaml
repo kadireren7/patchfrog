@@ -1,0 +1,31 @@
+case:
+  id: py-wrong-argument-semantics
+  title: refund_customer calls transfer with source/destination swapped
+  description: >
+    transfer(source, destination, amount) moves money from source to
+    destination. refund_customer is supposed to move money from the
+    merchant to the customer, but calls transfer(customer, merchant,
+    amount) -- the arguments are swapped, so a "refund" actually charges
+    the customer again instead of refunding them.
+  language: python
+  difficulty: medium
+  tags: [caller-callee, correctness]
+
+expected:
+  - id: ef1
+    category: api_misuse
+    file: src/transfer.py
+    symbol: refund_customer
+    issue_family: swapped_arguments
+    severity: high
+    line: 14
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: >
+      transfer(customer, merchant, amount) moves money out of the
+      customer's account into the merchant's -- the opposite of a refund.
+      Should be transfer(merchant, customer, amount).
+
+forbidden:
+  - reason: transfer itself is implemented correctly and must not be flagged
+    category: correctness

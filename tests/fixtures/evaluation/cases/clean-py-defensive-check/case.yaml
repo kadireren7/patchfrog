@@ -1,0 +1,20 @@
+case:
+  id: clean-py-defensive-check
+  title: Required None check after a third-party SDK call
+  description: >
+    get_display_name's `if user is None` check looks redundant to a
+    naive reader but is required: external_client.fetch_user can return
+    None on a documented-successful call. Must not be flagged as dead
+    code or an unnecessary check.
+  language: python
+  difficulty: hard
+  tags: [false-positive-trap, boundary]
+
+expected: []
+
+forbidden:
+  - reason: >
+      the None check on user is required because external_client.fetch_user
+      can return None on a successful call per the third-party SDK's
+      documented behavior, not dead/unreachable code
+    category: maintainability

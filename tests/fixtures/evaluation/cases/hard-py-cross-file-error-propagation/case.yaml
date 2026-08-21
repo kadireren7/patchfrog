@@ -1,0 +1,30 @@
+case:
+  id: hard-py-cross-file-error-propagation
+  title: handle_request assumes fetch() always succeeds
+  description: >
+    Result (result.py) documents that value is None whenever ok is
+    False, and callers must check ok first. fetch (client.py) can
+    legitimately return ok=False. handle_request (handler.py) calls
+    fetch and immediately does result.value.upper() with no ok check,
+    crashing on any missing key. Requires reading result.py's contract
+    to see the bug in handler.py.
+  language: python
+  difficulty: hard
+  tags: [cross-file, error-propagation, caller-callee]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/handler.py
+    symbol: handle_request
+    issue_family: unchecked_error_result
+    severity: high
+    line: 6
+    ground_truth_source: ai_expected
+    notes: >
+      Result.ok must be checked before reading .value per result.py's
+      documented contract; handle_request skips that check entirely.
+
+forbidden:
+  - reason: fetch(), Result, and handle_default() are all correct and must not be flagged
+    category: maintainability

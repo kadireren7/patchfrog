@@ -1,0 +1,19 @@
+case:
+  id: clean-cpp-unused-looking-branch-required
+  title: Big-endian branch required for cross-platform correctness
+  description: >
+    to_network_order's is_big_endian_host branch looks unreachable on a
+    typical little-endian dev machine but is required for the function
+    to be correct when compiled for a big-endian target.
+  language: cpp
+  difficulty: hard
+  tags: [false-positive-trap, portability]
+
+expected: []
+
+forbidden:
+  - reason: >
+      the is_big_endian_host branch is required for correctness on
+      big-endian platforms, not dead/unreachable code on this
+      development machine
+    category: maintainability

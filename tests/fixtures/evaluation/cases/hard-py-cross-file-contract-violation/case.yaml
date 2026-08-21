@@ -1,0 +1,31 @@
+case:
+  id: hard-py-cross-file-contract-violation
+  title: greet() ignores UserRepository.get_by_id's documented None contract
+  description: >
+    UserRepository.get_by_id (repository.py) is documented to return
+    None for a missing user. GreetingService.greet (greeting_service.py)
+    calls it and immediately accesses user.name without a None check,
+    crashing with AttributeError for any unknown user_id. Requires
+    reading repository.py's docstring to recognize the bug in
+    greeting_service.py.
+  language: python
+  difficulty: hard
+  tags: [cross-file, caller-callee, error-propagation]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/greeting_service.py
+    symbol: greet
+    issue_family: missing_none_check_on_documented_optional_return
+    severity: high
+    line: 9
+    ground_truth_source: ai_expected
+    notes: >
+      get_by_id can return None per its own docstring; greet() accesses
+      user.name unconditionally, causing an AttributeError for any
+      unknown user_id.
+
+forbidden:
+  - reason: greet_default() and get_by_id() themselves are correct and must not be flagged
+    category: maintainability

@@ -1,0 +1,26 @@
+case:
+  id: py-pathological-repeated-work
+  title: apply_rules_to_rows() reparses the same rules for every row
+  description: >
+    apply_rules_to_rows() calls _parse_rules(raw_rules) inside the
+    per-row loop even though raw_rules never changes across iterations,
+    redoing the same parsing work once per row instead of once total.
+  language: python
+  difficulty: easy
+  tags: [caller-callee, false-positive-trap]
+
+expected:
+  - id: ef1
+    category: performance
+    file: src/report.py
+    symbol: apply_rules_to_rows
+    issue_family: repeated_work_in_loop
+    severity: low
+    line: 12
+    line_tolerance: 2
+    ground_truth_source: ai_expected
+    notes: _parse_rules(raw_rules) is pure and input-invariant across the loop; it should be hoisted out once.
+
+forbidden:
+  - reason: _parse_rules() itself is a correct, small pure function; it must not be flagged in isolation.
+    category: performance

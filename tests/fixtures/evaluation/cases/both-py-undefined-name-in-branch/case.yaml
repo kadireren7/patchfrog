@@ -1,0 +1,27 @@
+case:
+  id: both-py-undefined-name-in-branch
+  title: Undefined name inside a conditional branch, catchable by both static and AI
+  description: >
+    format_alert's critical branch references `mesage` (typo for
+    `message`), an undefined name -- a real NameError whenever
+    level == "critical". Marked ground_truth_source: either so this
+    case exercises the static/AI overlap matrix's "both" bucket:
+    ruff's F821 rule and the AI oracle are both expected to report it.
+  language: python
+  difficulty: easy
+  tags: [boundary, error-propagation]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/notifier.py
+    symbol: format_alert
+    issue_family: undefined_name
+    severity: high
+    line: 7
+    ground_truth_source: either
+    notes: mesage is undefined (typo for message); only reachable in the critical branch.
+
+forbidden:
+  - reason: format_footer is correct and must not be flagged
+    category: maintainability

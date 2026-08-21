@@ -1,0 +1,30 @@
+case:
+  id: py-wrong-boolean-branch
+  title: can_view uses AND instead of OR, locking owners out of their own private documents
+  description: >
+    The docstring says a document is viewable if the requester owns it OR
+    it is public, but the implementation uses `and`, so an owner viewing
+    their own private (non-public) document is wrongly denied, and a
+    non-owner viewing a public document is also wrongly denied.
+  language: python
+  difficulty: easy
+  tags: [correctness, caller-callee]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/access.py
+    symbol: can_view
+    issue_family: wrong_boolean_operator
+    severity: high
+    line: 9
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: >
+      document.is_public and requesting_user_id == document.owner_id should
+      be `or`, not `and` -- as written, an owner is denied access to their
+      own private document.
+
+forbidden:
+  - reason: can_edit is correct (owner-only) and must not be flagged
+    category: correctness

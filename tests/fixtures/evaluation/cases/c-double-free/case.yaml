@@ -1,0 +1,26 @@
+case:
+  id: c-double-free
+  title: close_session frees s->token twice when it is short
+  description: >
+    When s->token is shorter than 8 characters, close_session frees it
+    in the conditional branch and then unconditionally frees it again
+    on the line below, a double free.
+  language: c
+  difficulty: easy
+  tags: [resource]
+
+expected:
+  - id: ef1
+    category: memory_safety
+    file: session.c
+    symbol: close_session
+    issue_family: double_free
+    severity: high
+    line: 20
+    line_tolerance: 2
+    ground_truth_source: ai_expected
+    notes: s->token is already freed at line 17 when it is shorter than 8 chars; line 20 frees it again unconditionally.
+
+forbidden:
+  - reason: session_has_token is correct and must not be flagged
+    category: maintainability

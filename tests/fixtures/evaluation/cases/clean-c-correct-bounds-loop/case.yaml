@@ -1,0 +1,16 @@
+case:
+  id: clean-c-correct-bounds-loop
+  title: Standard i < n loop bound is correct, not an off-by-one
+  description: >
+    sum_array and fill_zero both use the standard `i < n` bound for a
+    zero-indexed array of size n -- correct, deliberately included as a
+    contrast case against this corpus's off-by-one bug cases.
+  language: c
+  difficulty: easy
+  tags: [false-positive-trap, boundary]
+
+expected: []
+
+forbidden:
+  - reason: "i < n is the correct bound for a zero-indexed array of size n in both functions -- not an off-by-one"
+    category: correctness

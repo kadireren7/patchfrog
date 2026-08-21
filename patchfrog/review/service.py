@@ -265,6 +265,7 @@ class PullRequestReviewService:
         config: ReviewConfig | None = None,
         candidate_filter: Callable[[ReviewCandidate], bool] | None = None,
         incremental_context_fingerprint: str | None = None,
+        context_config_override: ContextConfig | None = None,
     ) -> ReviewRunSummary:
         """Review a repository already checked out on disk (CLI / dogfood
         use). Context is built against the same local checkout via
@@ -281,7 +282,7 @@ class PullRequestReviewService:
         a substitute for real resolution.
 
         ``candidate_filter``/``incremental_context_fingerprint`` are the
-        only two Phase 7 (:mod:`patchfrog.review_memory`) hooks into this
+        Phase 7 (:mod:`patchfrog.review_memory`) hooks into this
         otherwise-unmodified Phase 5 service: an optional predicate
         applied to Phase 5's own deterministically-generated candidates
         (never a different candidate *set* -- Phase 7 only ever narrows
@@ -289,6 +290,15 @@ class PullRequestReviewService:
         result and an incremental-mode result for the same commit from
         ever being reused for each other. Both default to "Phase 7
         doesn't exist" behavior.
+
+        ``context_config_override`` is the Phase 8 (:mod:`patchfrog.evaluation`)
+        hook: when given, used verbatim in place of this service's own
+        per-candidate :class:`~patchfrog.context.config.ContextConfig`
+        construction -- lets the evaluation harness run a context
+        ablation (target-only / no-extra-context / a smaller
+        ``graph_depth``) without duplicating any context-building logic.
+        ``None`` (the default) is "Phase 8 doesn't exist" behavior --
+        identical to today's per-candidate budget-derived config.
         """
 
         return await self._run(
@@ -302,6 +312,7 @@ class PullRequestReviewService:
             local=True,
             candidate_filter=candidate_filter,
             incremental_context_fingerprint=incremental_context_fingerprint,
+            context_config_override=context_config_override,
         )
 
     async def review_pull_request(
@@ -317,11 +328,13 @@ class PullRequestReviewService:
         config: ReviewConfig | None = None,
         candidate_filter: Callable[[ReviewCandidate], bool] | None = None,
         incremental_context_fingerprint: str | None = None,
+        context_config_override: ContextConfig | None = None,
     ) -> ReviewRunSummary:
         """Review a repository fetched from ``clone_url`` (production /
         Celery-task use). ``config`` is expected to already be resolved by
         the caller -- see :meth:`review_local`'s docstring, including for
-        ``candidate_filter``/``incremental_context_fingerprint``."""
+        ``candidate_filter``/``incremental_context_fingerprint``/
+        ``context_config_override``."""
 
         return await self._run(
             repository_id=repository_id,
@@ -334,6 +347,7 @@ class PullRequestReviewService:
             local=False,
             candidate_filter=candidate_filter,
             incremental_context_fingerprint=incremental_context_fingerprint,
+            context_config_override=context_config_override,
         )
 
     async def _require_matching_index(self, *, repository_id: uuid.UUID, commit_sha: str) -> uuid.UUID:
@@ -354,6 +368,7 @@ class PullRequestReviewService:
         local: bool,
         candidate_filter: Callable[[ReviewCandidate], bool] | None = None,
         incremental_context_fingerprint: str | None = None,
+        context_config_override: ContextConfig | None = None,
     ) -> ReviewRunSummary:
         start = time.monotonic()
         log = logger.bind(repository_id=str(repository_id), commit_sha=commit_sha)
@@ -410,6 +425,7 @@ class PullRequestReviewService:
                 log=log,
                 candidate_filter=candidate_filter,
                 incremental_context_fingerprint=run.incremental_context_fingerprint,
+                context_config_override=context_config_override,
             )
         except Exception as exc:
             async with self._session_factory() as session:
@@ -438,6 +454,7 @@ class PullRequestReviewService:
         log: structlog.stdlib.BoundLogger,
         candidate_filter: Callable[[ReviewCandidate], bool] | None = None,
         incremental_context_fingerprint: str,
+        context_config_override: ContextConfig | None = None,
     ) -> ReviewRunSummary:
         async with self._session_factory() as session:
             static_findings = []
@@ -487,6 +504,7 @@ class PullRequestReviewService:
                     budget_lock=budget_lock,
                     budget_state=budget_state,
                     log=log,
+                    context_config_override=context_config_override,
                 )
 
         await asyncio.gather(*(_process(o) for o in outcomes))
@@ -680,10 +698,11 @@ class PullRequestReviewService:
         budget_lock: asyncio.Lock,
         budget_state: dict[str, int],
         log: structlog.stdlib.BoundLogger,
+        context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
         try:
-            context_config = ContextConfig(
+            context_config = context_config_override or ContextConfig(
                 max_tokens=max(500, int(config.max_input_tokens_per_candidate * 0.6)),
             )
             target_type = ContextTargetType.SYMBOL if candidate.symbol_id else ContextTargetType.LINE

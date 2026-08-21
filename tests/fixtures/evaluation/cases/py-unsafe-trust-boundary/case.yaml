@@ -1,0 +1,27 @@
+case:
+  id: py-unsafe-trust-boundary
+  title: fetch_avatar() fetches an unvalidated user-supplied URL (SSRF)
+  description: >
+    fetch_avatar() passes a user-editable avatar_url straight into
+    urllib.request.urlopen with no scheme/host allowlist, letting a user
+    make the server issue requests to internal hosts (e.g. cloud metadata
+    endpoints or internal services).
+  language: python
+  difficulty: easy
+  tags: [security, resource]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/webhook.py
+    symbol: fetch_avatar
+    issue_family: ssrf_unvalidated_url
+    severity: high
+    line: 7
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: avatar_url is attacker-controlled and never checked against an allowed scheme/host before being fetched.
+
+forbidden:
+  - reason: render_display_name() only truncates and strips a string; it has no network/file side effects and must not be flagged.
+    category: security

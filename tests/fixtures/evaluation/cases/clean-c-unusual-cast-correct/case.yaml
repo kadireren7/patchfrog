@@ -1,0 +1,20 @@
+case:
+  id: clean-c-unusual-cast-correct
+  title: void* to Payment* cast is safe given the only real call site
+  description: >
+    process_callback casts its void* context to Payment* without a
+    runtime type tag, which can look like an unsafe type-punning
+    pattern -- but register_payment_handler is the only caller and
+    always passes a Payment*, so the cast is safe by construction.
+  language: c
+  difficulty: hard
+  tags: [false-positive-trap, caller-callee]
+
+expected: []
+
+forbidden:
+  - reason: >
+      the void* to Payment* cast in process_callback is safe because
+      register_payment_handler is its only caller and always passes a
+      Payment*, not an unsafe/unchecked type-punning cast
+    category: undefined_behavior

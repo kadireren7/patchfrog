@@ -1,0 +1,31 @@
+case:
+  id: py-boundary-condition-fencepost
+  title: get_page slices one element too many, duplicating an item across pages
+  description: >
+    get_page slices `items[start : end + 1]` instead of `items[start :
+    end]`, so each page includes one extra item that also appears as the
+    first item of the next page -- a duplicated item across page
+    boundaries, violating the documented "no item on more than one page"
+    contract.
+  language: python
+  difficulty: medium
+  tags: [boundary, correctness]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/pagination.py
+    symbol: get_page
+    issue_family: fencepost_error
+    severity: medium
+    line: 6
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: >
+      items[start : end + 1] includes index `end`, which belongs to the
+      next page (start of page N+1 == end of page N under this scheme) --
+      should be items[start:end].
+
+forbidden:
+  - reason: total_pages' ceiling-division arithmetic is correct and must not be flagged
+    category: correctness

@@ -1,0 +1,28 @@
+case:
+  id: both-py-eval-usage
+  title: eval() on caller-supplied input, catchable by both static and AI
+  description: >
+    evaluate_expression calls eval() directly on its input, which can
+    execute arbitrary code if the caller ever passes untrusted input --
+    a real security bug. Marked ground_truth_source: either so this
+    case exercises the static/AI overlap matrix's "both" bucket:
+    PatchFrog's bundled semgrep rule (patchfrog-python-eval-usage) and
+    the AI oracle are both expected to report it.
+  language: python
+  difficulty: easy
+  tags: [security]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/calculator.py
+    symbol: evaluate_expression
+    issue_family: eval_usage
+    severity: high
+    line: 8
+    ground_truth_source: either
+    notes: "eval() on the raw expr argument executes arbitrary code if the caller ever passes untrusted input."
+
+forbidden:
+  - reason: add is correct and must not be flagged
+    category: maintainability

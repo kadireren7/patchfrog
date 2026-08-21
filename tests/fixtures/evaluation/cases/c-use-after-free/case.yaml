@@ -1,0 +1,25 @@
+case:
+  id: c-use-after-free
+  title: discard_record reads r->name after freeing it
+  description: >
+    discard_record frees r->name and then passes it to printf on the
+    very next line, a use-after-free read.
+  language: c
+  difficulty: easy
+  tags: [resource]
+
+expected:
+  - id: ef1
+    category: memory_safety
+    file: logger.c
+    symbol: discard_record
+    issue_family: use_after_free
+    severity: high
+    line: 14
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: r->name is freed at line 13 and then read at line 14 via printf.
+
+forbidden:
+  - reason: record_code is correct and must not be flagged
+    category: maintainability

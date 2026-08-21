@@ -1,0 +1,20 @@
+case:
+  id: clean-py-intentional-empty-except
+  title: Deliberately swallowed FileNotFoundError during best-effort cleanup
+  description: >
+    cleanup_temp_file suppresses the specific FileNotFoundError (never
+    a bare except) and does nothing, documented as intentional: a
+    concurrent cleanup pass may have already removed the file. Must not
+    be flagged as a swallowed/blind error handler.
+  language: python
+  difficulty: medium
+  tags: [false-positive-trap, error-propagation]
+
+expected: []
+
+forbidden:
+  - reason: >
+      contextlib.suppress(FileNotFoundError) is a documented
+      best-effort cleanup, not a swallowed/blind error handler -- it
+      suppresses one specific, expected exception type
+    category: correctness

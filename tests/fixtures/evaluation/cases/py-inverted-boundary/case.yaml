@@ -1,0 +1,26 @@
+case:
+  id: py-inverted-boundary
+  title: Inverted comparison in can_withdraw
+  description: >
+    can_withdraw uses `amount >= self.balance` instead of `amount <=
+    self.balance`, allowing a withdrawal larger than the balance to
+    succeed.
+  language: python
+  difficulty: easy
+  tags: [boundary, correctness]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/billing.py
+    symbol: can_withdraw
+    issue_family: inverted_comparison
+    severity: high
+    line: 6
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: amount >= self.balance allows an over-balance withdrawal to succeed.
+
+forbidden:
+  - reason: deposit() is correct and must not be flagged
+    category: maintainability

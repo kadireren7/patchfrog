@@ -1,0 +1,28 @@
+case:
+  id: both-py-bare-except-hides-bug
+  title: Bare except silently zeroes a financial amount, catchable by both static and AI
+  description: >
+    parse_amount's bare `except:` swallows a genuine ValueError from
+    malformed input and silently returns 0.0 instead -- a real,
+    dangerous bug for anything financial. Marked
+    ground_truth_source: either so this case exercises the static/AI
+    overlap matrix's "both" bucket: ruff's E722 rule and the AI oracle
+    are both expected to report it.
+  language: python
+  difficulty: medium
+  tags: [error-propagation, boundary]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/parser.py
+    symbol: parse_amount
+    issue_family: bare_except
+    severity: high
+    line: 4
+    ground_truth_source: either
+    notes: "bare except: silently converts a malformed amount to 0.0 instead of propagating the error."
+
+forbidden:
+  - reason: parse_currency_code is correct and must not be flagged
+    category: maintainability

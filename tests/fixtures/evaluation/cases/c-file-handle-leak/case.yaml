@@ -1,0 +1,26 @@
+case:
+  id: c-file-handle-leak
+  title: load_first_line leaks fp when fgets fails
+  description: >
+    load_first_line opens fp with fopen, and when fgets fails it
+    returns -1 directly without calling fclose(fp), leaking the file
+    handle on that error path.
+  language: c
+  difficulty: easy
+  tags: [resource]
+
+expected:
+  - id: ef1
+    category: resource_management
+    file: config_loader.c
+    symbol: load_first_line
+    issue_family: file_handle_leak
+    severity: medium
+    line: 14
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: fp opened at line 8 is never closed before returning -1 at line 14.
+
+forbidden:
+  - reason: file_exists correctly closes fp on every path and must not be flagged
+    category: maintainability

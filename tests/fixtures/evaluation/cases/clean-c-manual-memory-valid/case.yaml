@@ -1,0 +1,16 @@
+case:
+  id: clean-c-manual-memory-valid
+  title: Correctly paired malloc/free across every path, including allocation failure
+  description: >
+    duplicate_upper allocates a buffer and returns NULL on failure
+    without leaking; free_duplicate correctly releases it. No leak, no
+    double free, no use-after-free on any path.
+  language: c
+  difficulty: medium
+  tags: [false-positive-trap, resource]
+
+expected: []
+
+forbidden:
+  - reason: malloc/free are correctly paired on every path in this fixture, including the allocation-failure early return
+    category: memory_safety

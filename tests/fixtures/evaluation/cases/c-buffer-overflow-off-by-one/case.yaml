@@ -1,0 +1,27 @@
+case:
+  id: c-buffer-overflow-off-by-one
+  title: fill_default_scores writes one element past the end of scores
+  description: >
+    fill_default_scores loops with `i <= size` instead of `i < size`,
+    writing scores[size], one past the end of the caller-provided
+    buffer.
+  language: c
+  difficulty: easy
+  tags: [boundary, resource]
+
+expected:
+  - id: ef1
+    category: memory_safety
+    file: scores.c
+    symbol: fill_default_scores
+    issue_family: buffer_overflow_off_by_one
+    severity: high
+    line: 7
+    line_end: 8
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: the loop bound i <= size writes scores[size], one element past the valid range [0, size).
+
+forbidden:
+  - reason: sum_scores uses the correct bound and must not be flagged
+    category: maintainability

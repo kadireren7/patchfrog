@@ -1,0 +1,30 @@
+case:
+  id: py-wrong-default-fallback
+  title: fetch_with_retry's default of -1 retries silently disables retrying
+  description: >
+    The docstring promises a default of 3 retries when the operator does
+    not configure a value, but the fallback used is -1. range(-1) is
+    empty, so an unconfigured deployment performs zero attempts and
+    fetch_with_retry always returns False without ever calling attempt().
+  language: python
+  difficulty: medium
+  tags: [correctness, state]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/retry.py
+    symbol: fetch_with_retry
+    issue_family: wrong_default_value
+    severity: high
+    line: 4
+    line_tolerance: 2
+    ground_truth_source: ai_expected
+    notes: >
+      config.get("retries", -1) should default to 3 (per the docstring),
+      not -1 -- as written, an unconfigured deployment never calls
+      attempt() at all.
+
+forbidden:
+  - reason: timeout_seconds' default of 30 is correct and must not be flagged
+    category: correctness

@@ -1,0 +1,29 @@
+case:
+  id: py-incorrect-return-propagation
+  title: import_rows ignores validate_row's result and always returns True
+  description: >
+    import_rows's docstring promises it returns True only if every row was
+    valid, but it discards validate_row's return value entirely and always
+    returns True, even when every row is invalid.
+  language: python
+  difficulty: easy
+  tags: [correctness, error-propagation, caller-callee]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/importer.py
+    symbol: import_rows
+    issue_family: dropped_return_value
+    severity: high
+    line: 9
+    line_end: 10
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: >
+      validate_row(row)'s boolean result is never checked or accumulated;
+      import_rows always returns True regardless of row validity.
+
+forbidden:
+  - reason: count_valid correctly uses validate_row's return value and must not be flagged
+    category: correctness
