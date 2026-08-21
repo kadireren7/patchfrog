@@ -1,0 +1,29 @@
+case:
+  id: py-stale-state-update
+  title: remove_item does not invalidate the cached total
+  description: >
+    add_item correctly invalidates _cached_total after mutating _items,
+    but remove_item does not, so total() can return a stale value that
+    still includes a removed item's price.
+  language: python
+  difficulty: medium
+  tags: [state, correctness]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/cart.py
+    symbol: remove_item
+    issue_family: stale_cache_invalidation
+    severity: medium
+    line: 11
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: >
+      remove_item pops the item from _items but never resets
+      _cached_total, so a prior total() call's cached value survives the
+      removal and total() returns a stale, too-high result.
+
+forbidden:
+  - reason: add_item correctly invalidates the cache and must not be flagged
+    category: correctness

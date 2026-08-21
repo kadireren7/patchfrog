@@ -1,0 +1,20 @@
+case:
+  id: clean-c-correct-realloc-pattern
+  title: realloc into a temporary avoids leaking the original buffer on failure
+  description: >
+    int_list_push assigns realloc's result to a temporary tmp and only
+    overwrites list->items after confirming success, so a failed
+    realloc never leaks or corrupts the existing buffer -- the correct
+    realloc pattern, not the classic leak-on-failure bug.
+  language: c
+  difficulty: medium
+  tags: [false-positive-trap, resource]
+
+expected: []
+
+forbidden:
+  - reason: >
+      list->items is only overwritten after a successful realloc into
+      tmp, so the classic "realloc directly into the original pointer"
+      leak bug does not apply here
+    category: memory_safety

@@ -1,0 +1,26 @@
+case:
+  id: cpp-ownership-mistake-raw-pointer
+  title: make_end_token returns a pointer to a local stack variable
+  description: >
+    make_end_token constructs end_token on the stack and returns
+    &end_token; the object is destroyed when the function returns,
+    leaving the caller with a dangling pointer.
+  language: cpp
+  difficulty: medium
+  tags: [resource, caller-callee]
+
+expected:
+  - id: ef1
+    category: memory_safety
+    file: parser.cpp
+    symbol: make_end_token
+    issue_family: dangling_pointer
+    severity: high
+    line: 13
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: end_token (line 12) is a local with automatic storage duration; &end_token is dangling once the function returns.
+
+forbidden:
+  - reason: token_kind is correct and must not be flagged
+    category: maintainability

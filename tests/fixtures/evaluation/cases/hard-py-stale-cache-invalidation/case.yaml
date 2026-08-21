@@ -1,0 +1,31 @@
+case:
+  id: hard-py-stale-cache-invalidation
+  title: bulk_update writes records without invalidating the cache
+  description: >
+    Store.update (store.py) always invalidates the Cache (cache.py)
+    after writing. Store.bulk_update writes records the same way but
+    never calls cache.invalidate, leaving stale cached values readable
+    after a bulk update. Requires comparing bulk_update against its
+    sibling update() and Cache's contract to see the inconsistency.
+  language: python
+  difficulty: hard
+  tags: [cross-file, state, caller-callee]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/store.py
+    symbol: bulk_update
+    issue_family: stale_state_update
+    severity: medium
+    line: 13
+    line_end: 16
+    ground_truth_source: ai_expected
+    notes: >
+      bulk_update writes self._records directly but never calls
+      self.cache.invalidate, unlike its sibling update(), leaving
+      stale cached values readable.
+
+forbidden:
+  - reason: update() and Cache itself are correct and must not be flagged
+    category: correctness

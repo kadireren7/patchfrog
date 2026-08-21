@@ -1,0 +1,26 @@
+case:
+  id: py-missing-validation
+  title: compute_total_cents() trusts the client-supplied unit price
+  description: >
+    compute_total_cents() reads unit_price_cents from the untrusted client
+    request instead of looking it up in the server-side catalog_price_cents
+    map it was given, letting a client pay whatever price it sends.
+  language: python
+  difficulty: medium
+  tags: [security, caller-callee]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/checkout.py
+    symbol: compute_total_cents
+    issue_family: missing_server_side_validation
+    severity: high
+    line: 12
+    line_tolerance: 2
+    ground_truth_source: ai_expected
+    notes: catalog_price_cents is accepted as a parameter but never consulted; the client-supplied price is used as-is.
+
+forbidden:
+  - reason: apply_discount_cents() correctly clamps discount_percent to [0, 100] before use; it must not be flagged.
+    category: security

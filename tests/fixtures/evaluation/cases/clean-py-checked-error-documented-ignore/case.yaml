@@ -1,0 +1,20 @@
+case:
+  id: clean-py-checked-error-documented-ignore
+  title: Ignored close() return value is documented and intentional
+  description: >
+    release_all() calls closer() and discards its return value, with a
+    comment documenting exactly why that's safe (the boolean result has
+    no caller-relevant meaning here). Must not be flagged as an ignored
+    error return.
+  language: python
+  difficulty: medium
+  tags: [false-positive-trap, error-propagation]
+
+expected: []
+
+forbidden:
+  - reason: >
+      the ignored return value of closer() is documented and
+      intentional -- release_all()'s callers only care that shutdown
+      completes, not the boolean it returns
+    category: api_misuse

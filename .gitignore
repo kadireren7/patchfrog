@@ -42,3 +42,9 @@ docker-compose.override.yml
 *.pem
 *.key
 secrets/
+
+# Phase 8 evaluation harness: the golden baseline is committed
+# (evaluation_baselines/phase8_baseline.json[.md]); a plain `eval run`'s
+# own output is a reproducible-on-demand artifact, not something to
+# track in git history.
+evaluation_baselines/latest_run.json

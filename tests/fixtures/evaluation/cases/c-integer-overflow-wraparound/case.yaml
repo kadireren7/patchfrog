@@ -1,0 +1,27 @@
+case:
+  id: c-integer-overflow-wraparound
+  title: allocate_row's size computation can integer-overflow
+  description: >
+    allocate_row computes byte_size as `count * (int)sizeof(double)`
+    with no overflow check; for a large untrusted count this wraps
+    around to a small or negative int, malloc under-allocates, and
+    later writes of `count` doubles overflow the buffer.
+  language: c
+  difficulty: medium
+  tags: [boundary, resource, security]
+
+expected:
+  - id: ef1
+    category: undefined_behavior
+    file: matrix.c
+    symbol: allocate_row
+    issue_family: integer_overflow_wraparound
+    severity: high
+    line: 10
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: count * (int)sizeof(double) can overflow a signed int for large, untrusted count, producing an under-sized allocation.
+
+forbidden:
+  - reason: row_is_valid is correct and must not be flagged
+    category: maintainability

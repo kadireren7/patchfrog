@@ -1,0 +1,26 @@
+case:
+  id: py-auth-bypass
+  title: can_edit() lets anyone edit a public document
+  description: >
+    can_edit() ORs in document.is_public, so any public document becomes
+    editable by any user, not just its owner or a site admin. Read access
+    (can_view) is supposed to be public; write access is not.
+  language: python
+  difficulty: easy
+  tags: [security, false-positive-trap]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/permissions.py
+    symbol: can_edit
+    issue_family: auth_bypass
+    severity: critical
+    line: 9
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: document.is_public should never grant edit rights, only view rights.
+
+forbidden:
+  - reason: can_view() correctly allows public documents to be viewed by anyone; it must not be flagged.
+    category: security

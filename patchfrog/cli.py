@@ -6,6 +6,10 @@
     python -m patchfrog.cli context --repository /path/to/repo --file src/foo.py --line 42
     python -m patchfrog.cli review --repository /path/to/repo --base main [--dry-run]
     python -m patchfrog.cli publish --review-run-id <id> [--publish]
+    python -m patchfrog.cli eval run [--mode full_pipeline] [--tag T] [--critic on|off|both]
+    python -m patchfrog.cli eval compare [--baseline PATH] [--current PATH]
+    python -m patchfrog.cli eval report --input PATH
+    python -m patchfrog.cli eval update-baseline --confirm [--input PATH]
 
 Deliberately minimal — a couple of subcommands, argparse only. This
 exists purely as a controlled way to trigger indexing/analysis/context
@@ -19,9 +23,13 @@ import argparse
 import asyncio
 import hashlib
 import sys
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 import structlog
@@ -30,9 +38,37 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from patchfrog.analysis.domain import AnalysisRunSummary
 from patchfrog.analysis.service import StaleIndexError, StaticAnalysisService
 from patchfrog.config.logging import configure_logging
-from patchfrog.config.settings import get_settings
-from patchfrog.context.domain import ContextBundle, ContextTargetType
+from patchfrog.config.settings import Settings, get_settings
+from patchfrog.context.config import ContextConfig
+from patchfrog.context.domain import ContextBundle, ContextItemKind, ContextTargetType
 from patchfrog.context.service import ContextService, StaleContextIndexError
+from patchfrog.evaluation.domain import (
+    CaseStatus,
+    EvaluationCase,
+    EvaluationMode,
+    EvaluationRunResult,
+    IncrementalScenarioResult,
+)
+from patchfrog.evaluation.fixtures import (
+    DEFAULT_CASES_ROOT,
+    fixture_info_for_case,
+    load_all_cases,
+    validate_and_raise,
+)
+from patchfrog.evaluation.fixtures import (
+    BenchmarkValidationError as EvalBenchmarkValidationError,
+)
+from patchfrog.evaluation.incremental import run_all_incremental_scenarios
+from patchfrog.evaluation.metrics import compute_critic_comparison
+from patchfrog.evaluation.queries import DEFAULT_BASELINES_ROOT, default_baseline_path
+from patchfrog.evaluation.regression import RegressionThresholds
+from patchfrog.evaluation.regression import compare as compare_evaluation_runs
+from patchfrog.evaluation.reporting import build_report, read_json, render_markdown, write_json
+from patchfrog.evaluation.runner import (
+    EvaluationRunner,
+    build_evaluation_identity,
+    oracle_reviewer_provider_factory,
+)
 from patchfrog.github.auth import InstallationTokenProvider
 from patchfrog.github.client import GitHubClient
 from patchfrog.indexing.models import IndexingSummary
@@ -59,6 +95,7 @@ from patchfrog.review.config import MalformedReviewConfigError, ReviewConfig
 from patchfrog.review.config_resolution import resolve_repository_review_config
 from patchfrog.review.domain import ReviewCandidate, ReviewRunSummary
 from patchfrog.review.local_diff import diff_against_base
+from patchfrog.review.provider import LLMProvider
 from patchfrog.review.provider_factory import (
     MissingProviderCredentialsError,
     build_critic_provider,
@@ -754,6 +791,273 @@ def _run_publish(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Phase 8: quality evaluation harness (patchfrog.evaluation)
+# ---------------------------------------------------------------------------
+
+_ABLATION_KIND_SETS: dict[str, tuple[ContextItemKind, ...] | None] = {
+    "normal": None,  # None -> production default (all relationship kinds)
+    "target-only": (ContextItemKind.TARGET_SYMBOL, ContextItemKind.TARGET_FILE_REGION),
+}
+
+
+def _filter_cases(cases: list[EvaluationCase], args: argparse.Namespace) -> list[EvaluationCase]:
+    from patchfrog.evaluation.domain import Difficulty, Language
+
+    filtered = cases
+    if args.case:
+        wanted = set(args.case)
+        filtered = [c for c in filtered if c.id in wanted]
+    if args.tag:
+        wanted_tags = set(args.tag)
+        filtered = [c for c in filtered if wanted_tags & set(c.tags)]
+    if args.language:
+        filtered = [c for c in filtered if c.language is Language(args.language)]
+    if args.difficulty:
+        filtered = [c for c in filtered if c.difficulty is Difficulty(args.difficulty)]
+    return filtered
+
+
+def _build_provider_factory(
+    args: argparse.Namespace, *, settings: Settings
+) -> Callable[[EvaluationCase], LLMProvider]:
+    if args.provider == "fake":
+        return oracle_reviewer_provider_factory(cases_root=DEFAULT_CASES_ROOT)
+
+    from patchfrog.review.config import ReviewConfig
+    from patchfrog.review.provider_factory import build_reviewer_provider
+
+    provider = build_reviewer_provider(ReviewConfig(), settings=settings)
+    return lambda case: provider
+
+
+async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+
+    all_cases = load_all_cases(DEFAULT_CASES_ROOT)
+    validate_and_raise(all_cases, cases_root=DEFAULT_CASES_ROOT)
+    cases = _filter_cases(all_cases, args)
+    if not cases:
+        raise ValueError("no benchmark cases matched the given --case/--tag/--language/--difficulty filters")
+
+    mode = EvaluationMode(args.mode)
+    provider_factory = _build_provider_factory(args, settings=settings)
+
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        runner = EvaluationRunner(session_factory=session_factory)
+        context_override = None  # normal, production-equivalent context by default
+
+        start = time.monotonic()
+        critic_comparison_report: dict[str, Any] | None = None
+        if args.critic == "both":
+            results_off = await runner.run_suite(
+                cases, cases_root=DEFAULT_CASES_ROOT, mode=mode, reviewer_provider_factory=provider_factory,
+                critic_provider_factory=provider_factory, critic_enabled=False,
+                context_config_override=context_override, timeout_seconds=args.timeout,
+            )
+            results_on = await runner.run_suite(
+                cases, cases_root=DEFAULT_CASES_ROOT, mode=mode, reviewer_provider_factory=provider_factory,
+                critic_provider_factory=provider_factory, critic_enabled=True,
+                context_config_override=context_override, timeout_seconds=args.timeout,
+            )
+            case_results = results_on
+            critic_enabled_flag = True
+            comparison = compute_critic_comparison(results_off, results_on)
+            critic_comparison_report = {
+                "critic_off": _asdict_metrics(comparison.critic_off),
+                "critic_on": _asdict_metrics(comparison.critic_on),
+                "precision_delta": comparison.precision_delta,
+                "recall_delta": comparison.recall_delta,
+                "false_positive_delta": comparison.false_positive_delta,
+                "unsupported_delta": comparison.unsupported_delta,
+            }
+        else:
+            critic_enabled_flag = args.critic != "off"
+            case_results = await runner.run_suite(
+                cases, cases_root=DEFAULT_CASES_ROOT, mode=mode, reviewer_provider_factory=provider_factory,
+                critic_provider_factory=provider_factory, critic_enabled=critic_enabled_flag,
+                context_config_override=context_override, timeout_seconds=args.timeout,
+            )
+
+        context_ablation_report: dict[str, Any] | None = None
+        if args.context_ablation:
+            context_ablation_report = await _run_context_ablation(
+                runner, cases, mode=mode, provider_factory=provider_factory, timeout=args.timeout,
+            )
+
+        incremental_scenarios: tuple[IncrementalScenarioResult, ...] = ()
+        if args.incremental_scenarios:
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as tmp:
+                incremental_scenarios = tuple(
+                    await run_all_incremental_scenarios(session_factory, tmp_path_root=Path(tmp))
+                )
+
+        duration_ms = (time.monotonic() - start) * 1000
+
+        identity = build_evaluation_identity(
+            mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=critic_enabled_flag,
+            cases=cases, cases_root=DEFAULT_CASES_ROOT,
+        )
+        cases_by_id = {c.id: c for c in cases}
+        fixture_info = {c.id: fixture_info_for_case(c, cases_root=DEFAULT_CASES_ROOT) for c in cases}
+
+        result = EvaluationRunResult(
+            identity=identity, generated_at=datetime.now(UTC).isoformat(), duration_ms=duration_ms,
+            case_results=tuple(case_results), incremental_scenarios=incremental_scenarios,
+        )
+        report = build_report(result, cases_by_id=cases_by_id, fixture_info=fixture_info)
+        report["benchmark_label"] = "pipeline_correctness" if args.provider == "fake" else "ai_quality"
+        report["ai_quality_measured"] = args.provider == "live"
+        if critic_comparison_report is not None:
+            report["critic_comparison"] = critic_comparison_report
+        if context_ablation_report is not None:
+            report["context_ablation"] = context_ablation_report
+        return report
+    finally:
+        await engine.dispose()
+
+
+def _asdict_metrics(metrics: Any) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    return asdict(metrics)
+
+
+async def _run_context_ablation(
+    runner: EvaluationRunner,
+    cases: list[EvaluationCase],
+    *,
+    mode: EvaluationMode,
+    provider_factory: Callable[[EvaluationCase], LLMProvider],
+    timeout: float,
+) -> dict[str, Any]:
+    from patchfrog.evaluation.metrics import compute_overall_metrics
+
+    variants: dict[str, Any] = {}
+    for label, kinds in _ABLATION_KIND_SETS.items():
+        override = ContextConfig(enabled_kinds=kinds) if kinds is not None else None
+        results = await runner.run_suite(
+            cases, cases_root=DEFAULT_CASES_ROOT, mode=mode, reviewer_provider_factory=provider_factory,
+            critic_provider_factory=provider_factory, critic_enabled=True, context_config_override=override,
+            timeout_seconds=timeout,
+        )
+        variants[label] = _asdict_metrics(compute_overall_metrics(results))
+    return variants
+
+
+def _print_eval_summary(report: dict[str, Any]) -> None:
+    m = report["metrics"]["overall"]
+    print(
+        f"eval run: cases={m['cases']} (errors={m['error_cases']}) "
+        f"TP={m['confusion']['true_positives']} FP={m['confusion']['false_positives']} "
+        f"missed={m['confusion']['missed']} precision={m['scores']['precision']:.3f} "
+        f"recall={m['scores']['recall']:.3f} f1={m['scores']['f1']:.3f} "
+        f"[{report['benchmark_label']}]"
+    )
+    clean = report["metrics"]["clean"]
+    print(
+        f"  clean-case pass rate: {clean['pass_rate']:.3f} "
+        f"({clean['clean_cases_passed']}/{clean['clean_cases']})"
+    )
+
+
+def _run_eval_run(args: argparse.Namespace) -> int:
+    try:
+        report = asyncio.run(_eval_run_async(args))
+    except EvalBenchmarkValidationError as exc:
+        print(f"error: benchmark ground truth invalid:\n{exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    output_path = Path(args.output) if args.output else DEFAULT_BASELINES_ROOT / "latest_run.json"
+    write_json(report, output_path)
+    print(f"wrote JSON report to {output_path}")
+    if args.markdown_output:
+        Path(args.markdown_output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.markdown_output).write_text(render_markdown(report))
+        print(f"wrote Markdown report to {args.markdown_output}")
+
+    if args.json:
+        import json as _json
+
+        print(_json.dumps(report, indent=2, sort_keys=True))
+    else:
+        _print_eval_summary(report)
+
+    timed_out = sum(1 for r in report["case_results"] if r["status"] == CaseStatus.TIMEOUT.value)
+    infra_errors = sum(1 for r in report["case_results"] if r["status"] == CaseStatus.INFRASTRUCTURE_ERROR.value)
+    if timed_out or infra_errors:
+        print(f"  warning: {timed_out} case(s) timed out, {infra_errors} infrastructure error(s)", file=sys.stderr)
+    return 0
+
+
+def _run_eval_compare(args: argparse.Namespace) -> int:
+    baseline_path = Path(args.baseline) if args.baseline else default_baseline_path()
+    current_path = Path(args.current) if args.current else DEFAULT_BASELINES_ROOT / "latest_run.json"
+    try:
+        baseline = read_json(baseline_path)
+        current = read_json(current_path)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    thresholds = RegressionThresholds(
+        max_precision_drop=args.max_precision_drop, max_clean_pass_rate_drop=args.max_clean_pass_rate_drop,
+        max_recall_drop=args.max_recall_drop,
+    )
+    verdict = compare_evaluation_runs(baseline, current, thresholds=thresholds)
+
+    if not verdict.identity_compatible:
+        print(f"error: baseline and current run identities are not comparable: {verdict.identity_mismatch_detail}", file=sys.stderr)
+        return verdict.exit_code
+
+    for check in verdict.checks:
+        status = "PASS" if check.passed else "FAIL"
+        print(f"[{status}] {check.name}: {check.detail}")
+    print(f"overall: {'PASS' if verdict.passed else 'REGRESSION'} (exit_code={verdict.exit_code})")
+    return verdict.exit_code
+
+
+def _run_eval_report(args: argparse.Namespace) -> int:
+    input_path = Path(args.input) if args.input else DEFAULT_BASELINES_ROOT / "latest_run.json"
+    try:
+        report = read_json(input_path)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    markdown = render_markdown(report)
+    if args.output:
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(markdown)
+        print(f"wrote {args.output}")
+    else:
+        print(markdown)
+    return 0
+
+
+def _run_eval_update_baseline(args: argparse.Namespace) -> int:
+    if not args.confirm:
+        print("error: refusing to overwrite the golden baseline without --confirm", file=sys.stderr)
+        return 1
+    input_path = Path(args.input) if args.input else DEFAULT_BASELINES_ROOT / "latest_run.json"
+    baseline_path = Path(args.baseline) if args.baseline else default_baseline_path()
+    try:
+        report = read_json(input_path)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    write_json(report, baseline_path)
+    print(f"updated golden baseline: {baseline_path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="patchfrog.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -861,6 +1165,61 @@ def main(argv: list[str] | None = None) -> int:
         help="Actually write the review to GitHub. Without this flag, only plans and reports (no write).",
     )
 
+    eval_parser = subparsers.add_parser("eval", help="Phase 8 quality evaluation harness (patchfrog.evaluation)")
+    eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
+
+    eval_run_parser = eval_subparsers.add_parser(
+        "run", help="Run the benchmark corpus (or a filtered subset) and write a JSON/Markdown report"
+    )
+    eval_run_parser.add_argument(
+        "--mode", choices=[m.value for m in EvaluationMode], default=EvaluationMode.FULL_PIPELINE.value,
+    )
+    eval_run_parser.add_argument("--case", action="append", default=[], help="Run only this case id (repeatable)")
+    eval_run_parser.add_argument("--tag", action="append", default=[], help="Run only cases with this tag (repeatable)")
+    eval_run_parser.add_argument("--language", default=None, help="Run only cases in this language")
+    eval_run_parser.add_argument("--difficulty", default=None, help="Run only cases at this difficulty")
+    eval_run_parser.add_argument(
+        "--critic", choices=["on", "off", "both"], default="on",
+        help="'both' additionally runs critic-off and reports the precision/recall delta",
+    )
+    eval_run_parser.add_argument(
+        "--provider", choices=["fake", "live"], default="fake",
+        help="'fake' scripts a deterministic oracle from each case's own ground truth (pipeline-correctness "
+        "benchmark, never AI quality). 'live' calls the real configured provider and requires "
+        "ANTHROPIC_API_KEY.",
+    )
+    eval_run_parser.add_argument(
+        "--context-ablation", action="store_true",
+        help="Additionally run normal vs. target-only context and report the quality delta",
+    )
+    eval_run_parser.add_argument(
+        "--incremental-scenarios", action="store_true", help="Additionally run the Phase 7 incremental benchmark scenarios"
+    )
+    eval_run_parser.add_argument("--timeout", type=float, default=120.0, help="Per-case timeout in seconds")
+    eval_run_parser.add_argument("--output", default=None, help="JSON report path (default: evaluation_baselines/latest_run.json)")
+    eval_run_parser.add_argument("--markdown-output", default=None, help="Also write a Markdown report to this path")
+    eval_run_parser.add_argument("--json", action="store_true", help="Print the full JSON report to stdout")
+
+    eval_compare_parser = eval_subparsers.add_parser(
+        "compare", help="Compare a run's JSON report against the golden baseline and apply regression thresholds"
+    )
+    eval_compare_parser.add_argument("--baseline", default=None, help="Baseline JSON path (default: evaluation_baselines/phase8_baseline.json)")
+    eval_compare_parser.add_argument("--current", default=None, help="Current run JSON path (default: evaluation_baselines/latest_run.json)")
+    eval_compare_parser.add_argument("--max-precision-drop", type=float, default=RegressionThresholds().max_precision_drop)
+    eval_compare_parser.add_argument("--max-clean-pass-rate-drop", type=float, default=RegressionThresholds().max_clean_pass_rate_drop)
+    eval_compare_parser.add_argument("--max-recall-drop", type=float, default=RegressionThresholds().max_recall_drop)
+
+    eval_report_parser = eval_subparsers.add_parser("report", help="Render a JSON report as Markdown")
+    eval_report_parser.add_argument("--input", default=None, help="JSON report path (default: evaluation_baselines/latest_run.json)")
+    eval_report_parser.add_argument("--output", default=None, help="Write Markdown here instead of stdout")
+
+    eval_update_baseline_parser = eval_subparsers.add_parser(
+        "update-baseline", help="Explicitly promote a run's JSON report to the golden baseline"
+    )
+    eval_update_baseline_parser.add_argument("--confirm", action="store_true", help="Required -- refuses to overwrite the baseline otherwise")
+    eval_update_baseline_parser.add_argument("--input", default=None, help="JSON report path (default: evaluation_baselines/latest_run.json)")
+    eval_update_baseline_parser.add_argument("--baseline", default=None, help="Baseline path (default: evaluation_baselines/phase8_baseline.json)")
+
     args = parser.parse_args(argv)
     if args.command == "index":
         return _run_index(args)
@@ -874,6 +1233,15 @@ def main(argv: list[str] | None = None) -> int:
         return _run_review_history(args)
     if args.command == "publish":
         return _run_publish(args)
+    if args.command == "eval":
+        if args.eval_command == "run":
+            return _run_eval_run(args)
+        if args.eval_command == "compare":
+            return _run_eval_compare(args)
+        if args.eval_command == "report":
+            return _run_eval_report(args)
+        if args.eval_command == "update-baseline":
+            return _run_eval_update_baseline(args)
 
     return 1
 

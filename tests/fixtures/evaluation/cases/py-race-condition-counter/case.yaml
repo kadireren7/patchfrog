@@ -1,0 +1,28 @@
+case:
+  id: py-race-condition-counter
+  title: record() has a lost-update race across an await point
+  description: >
+    record() reads self.total, awaits (yielding control to the event
+    loop), then writes current + 1 back. When called concurrently by many
+    request handlers, two calls can both read the same value before
+    either writes, losing one of the increments.
+  language: python
+  difficulty: medium
+  tags: [concurrency, state]
+
+expected:
+  - id: ef1
+    category: concurrency
+    file: src/metrics.py
+    symbol: record
+    issue_family: lost_update_race
+    severity: medium
+    line: 10
+    line_end: 12
+    line_tolerance: 2
+    ground_truth_source: ai_expected
+    notes: the read-await-write sequence is not atomic; concurrent callers can lose increments.
+
+forbidden:
+  - reason: snapshot() is a plain read with no read-modify-write; it must not be flagged as racy.
+    category: concurrency

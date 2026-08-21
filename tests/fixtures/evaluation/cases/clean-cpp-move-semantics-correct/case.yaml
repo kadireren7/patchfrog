@@ -1,0 +1,20 @@
+case:
+  id: clean-cpp-move-semantics-correct
+  title: Move constructor and move assignment correctly null out the source
+  description: >
+    Buffer's move constructor and move-assignment operator both
+    transfer ownership and null out the source's pointer, so its
+    destructor becomes a safe no-op. Correct move semantics, not a
+    double-free or ownership bug.
+  language: cpp
+  difficulty: hard
+  tags: [false-positive-trap, resource]
+
+expected: []
+
+forbidden:
+  - reason: >
+      Buffer's move operations correctly null out the moved-from
+      object's pointer, so no double delete[] occurs; this is correct
+      move semantics, not an ownership/memory bug
+    category: memory_safety

@@ -1,0 +1,29 @@
+case:
+  id: hard-c-cross-file-null-check-removed
+  title: print_entry dereferences parse_line's result without the documented NULL check
+  description: >
+    parse_line (parse.c) is documented to return NULL for a malformed
+    line. print_entry (main.c) calls it and dereferences the result
+    immediately with no NULL check, crashing on any malformed input.
+    Requires reading parse.c's documented contract to see the bug in
+    main.c.
+  language: c
+  difficulty: hard
+  tags: [cross-file, caller-callee, memory]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: main.c
+    symbol: print_entry
+    issue_family: missing_none_check_on_documented_optional_return
+    severity: high
+    line: 9
+    ground_truth_source: ai_expected
+    notes: >
+      parse_line can return NULL per its own documented contract;
+      print_entry dereferences the result unconditionally.
+
+forbidden:
+  - reason: parse_line itself is correct and must not be flagged
+    category: memory_safety

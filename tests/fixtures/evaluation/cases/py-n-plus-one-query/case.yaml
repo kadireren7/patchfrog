@@ -1,0 +1,26 @@
+case:
+  id: py-n-plus-one-query
+  title: load_comment_authors() issues one query per author instead of batching
+  description: >
+    load_comment_authors() calls repo.get_by_id() inside a loop, issuing
+    one round-trip query per comment author, even though the repository
+    already exposes a batch get_by_ids() method for exactly this case.
+  language: python
+  difficulty: medium
+  tags: [caller-callee, false-positive-trap]
+
+expected:
+  - id: ef1
+    category: performance
+    file: src/repository.py
+    symbol: load_comment_authors
+    issue_family: n_plus_one_query
+    severity: medium
+    line: 15
+    line_tolerance: 2
+    ground_truth_source: ai_expected
+    notes: get_by_ids() exists on the same repository and is never used; the loop issues N queries instead of one.
+
+forbidden:
+  - reason: get_by_id() and get_by_ids() are both correct single-purpose repository methods; neither should be flagged in isolation.
+    category: performance

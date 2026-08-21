@@ -1,0 +1,17 @@
+case:
+  id: clean-c-safe-lock-sequence
+  title: Mutex correctly unlocked on every return path, including early return
+  description: >
+    counter_get_if_positive locks, then correctly unlocks before *each*
+    return (including the early-return branch) rather than a single
+    unlock at the end. This is a safe, if slightly repetitive, lock
+    sequence -- not a missing-unlock bug.
+  language: c
+  difficulty: medium
+  tags: [false-positive-trap, concurrency]
+
+expected: []
+
+forbidden:
+  - reason: the mutex is unlocked before every return in counter_get_if_positive, including the early-return branch -- no path leaves it held
+    category: concurrency

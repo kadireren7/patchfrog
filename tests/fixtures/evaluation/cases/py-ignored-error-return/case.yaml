@@ -1,0 +1,29 @@
+case:
+  id: py-ignored-error-return
+  title: save_and_notify ignores save()'s failure return value
+  description: >
+    Document.save() returns False on failure and its docstring explicitly
+    warns callers to check the result, but save_and_notify calls it and
+    discards the result, notifying "document saved" even when the save
+    actually failed.
+  language: python
+  difficulty: easy
+  tags: [error-propagation, caller-callee]
+
+expected:
+  - id: ef1
+    category: api_misuse
+    file: src/persistence.py
+    symbol: save_and_notify
+    issue_family: ignored_error_return
+    severity: medium
+    line: 18
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: >
+      document.save()'s boolean result is discarded; notifier() fires
+      unconditionally even when save() returned False.
+
+forbidden:
+  - reason: save_or_raise correctly checks save()'s return value and must not be flagged
+    category: api_misuse

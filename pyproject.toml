@@ -62,12 +62,12 @@ include = ["patchfrog*", "apps*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-ra --ignore=tests/fixtures/repos"
+addopts = "-ra --ignore=tests/fixtures/repos --ignore=tests/fixtures/evaluation/cases"
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["tests/fixtures/repos"]
+extend-exclude = ["tests/fixtures/repos", "tests/fixtures/evaluation/cases"]
 
 [tool.ruff.lint]
 select = [
@@ -85,7 +85,7 @@ strict = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
-exclude = ["migrations/", "\\.venv/", "tests/fixtures/repos/"]
+exclude = ["migrations/", "\\.venv/", "tests/fixtures/repos/", "tests/fixtures/evaluation/cases/"]
 
 [[tool.mypy.overrides]]
 module = "celery.*"

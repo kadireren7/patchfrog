@@ -1,0 +1,20 @@
+case:
+  id: clean-cpp-raii-correct
+  title: RAII file handle correctly closes on destruction
+  description: >
+    FileHandle's destructor closes the underlying FILE* if it was
+    successfully opened; copying is deleted so no double-close via a
+    copied handle is possible. This looks like manual resource
+    management but is a correct RAII wrapper.
+  language: cpp
+  difficulty: hard
+  tags: [false-positive-trap, resource]
+
+expected: []
+
+forbidden:
+  - reason: >
+      FileHandle is a correct RAII wrapper -- the destructor always
+      closes an opened file exactly once, and the deleted copy
+      constructor/assignment prevent a double-close via a copy
+    category: resource_management

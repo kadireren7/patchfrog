@@ -1,0 +1,30 @@
+case:
+  id: hard-py-caller-callee-argument-swap
+  title: apply_price calls within_bounds with arguments in the wrong order
+  description: >
+    within_bounds (validators.py) has signature (minimum, maximum,
+    value). apply_price (pricing.py) calls it as
+    within_bounds(value, minimum, maximum) -- the value ends up in the
+    minimum slot, silently changing which prices are accepted/rejected.
+    Requires reading validators.py's documented argument order to see
+    the bug in pricing.py.
+  language: python
+  difficulty: hard
+  tags: [cross-file, caller-callee, boundary]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/pricing.py
+    symbol: apply_price
+    issue_family: wrong_argument_order
+    severity: high
+    line: 5
+    ground_truth_source: ai_expected
+    notes: >
+      within_bounds expects (minimum, maximum, value); apply_price
+      passes (value, minimum, maximum), transposing the arguments.
+
+forbidden:
+  - reason: clamp_quantity and within_bounds themselves are correct and must not be flagged
+    category: maintainability

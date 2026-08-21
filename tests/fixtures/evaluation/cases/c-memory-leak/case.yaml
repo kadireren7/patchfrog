@@ -1,0 +1,26 @@
+case:
+  id: c-memory-leak
+  title: load_message leaks buf on the too-long error path
+  description: >
+    load_message mallocs buf, then returns NULL directly (without
+    freeing buf) when the message exceeds max_len, leaking the buffer
+    on that error path.
+  language: c
+  difficulty: easy
+  tags: [resource]
+
+expected:
+  - id: ef1
+    category: memory_safety
+    file: buffer.c
+    symbol: load_message
+    issue_family: memory_leak
+    severity: medium
+    line: 14
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: buf allocated at line 8 is never freed before returning NULL at line 14.
+
+forbidden:
+  - reason: buffer_is_empty is correct and must not be flagged
+    category: maintainability

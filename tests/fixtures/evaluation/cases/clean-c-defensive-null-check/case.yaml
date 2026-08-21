@@ -1,0 +1,20 @@
+case:
+  id: clean-c-defensive-null-check
+  title: NULL checks after malloc are correct defensive code, not dead code
+  description: >
+    buffer_create checks both malloc results for NULL and cleans up
+    correctly on the second allocation's failure (freeing buf before
+    returning); buffer_destroy correctly tolerates a NULL buf. No leak,
+    no dead code.
+  language: c
+  difficulty: medium
+  tags: [false-positive-trap, resource]
+
+expected: []
+
+forbidden:
+  - reason: >
+      every NULL check in buffer_create/buffer_destroy is required
+      defensive code with correct cleanup, not redundant or
+      unreachable
+    category: memory_safety

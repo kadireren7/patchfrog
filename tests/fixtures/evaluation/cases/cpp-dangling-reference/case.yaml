@@ -1,0 +1,27 @@
+case:
+  id: cpp-dangling-reference
+  title: build_greeting returns a reference to a destroyed local
+  description: >
+    build_greeting's return type is const std::string&, but it
+    returns the local `greeting` by reference; greeting is destroyed
+    when the function returns, leaving the caller with a dangling
+    reference.
+  language: cpp
+  difficulty: medium
+  tags: [resource, caller-callee]
+
+expected:
+  - id: ef1
+    category: memory_safety
+    file: greeting.cpp
+    symbol: build_greeting
+    issue_family: dangling_reference
+    severity: high
+    line: 8
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: greeting (line 7) is a local std::string; returning it by reference from a function declared to return const std::string& is dangling.
+
+forbidden:
+  - reason: build_farewell returns by value and is correct; must not be flagged
+    category: maintainability

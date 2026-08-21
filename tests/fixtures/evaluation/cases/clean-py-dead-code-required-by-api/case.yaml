@@ -1,0 +1,20 @@
+case:
+  id: clean-py-dead-code-required-by-api
+  title: Empty-input early return required by Exporter's documented contract
+  description: >
+    CsvExporter.export's `if not rows: return ""` looks like a
+    superfluous/dead special case but is required by the abstract
+    Exporter contract callers rely on (empty string, never an
+    exception, for an empty dataset).
+  language: python
+  difficulty: hard
+  tags: [false-positive-trap, caller-callee]
+
+expected: []
+
+forbidden:
+  - reason: >
+      the empty-rows early return is required by Exporter's documented
+      API contract (callers pipe the string straight to a file write),
+      not dead or redundant code
+    category: maintainability

@@ -1,0 +1,26 @@
+case:
+  id: py-path-traversal
+  title: read_upload() joins an unvalidated filename onto the uploads dir
+  description: >
+    read_upload() joins the caller-supplied filename directly onto
+    _UPLOADS_DIR with no normalization or rejection of ".." components,
+    so a filename like "../../etc/passwd" escapes the uploads directory.
+  language: python
+  difficulty: easy
+  tags: [security, resource]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/files.py
+    symbol: read_upload
+    issue_family: path_traversal
+    severity: high
+    line: 8
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: filename is never validated against ".." or an absolute path before being joined.
+
+forbidden:
+  - reason: list_upload_names() takes no user input and is unrelated to the traversal; it must not be flagged.
+    category: security

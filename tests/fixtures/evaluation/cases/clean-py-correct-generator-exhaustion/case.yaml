@@ -1,0 +1,16 @@
+case:
+  id: clean-py-correct-generator-exhaustion
+  title: Single-use generator consumed exactly once is correct
+  description: >
+    sum_of_squares builds a generator and consumes it exactly once via
+    sum(). This is correct -- the generator is never referenced again,
+    so exhausting it is not a bug.
+  language: python
+  difficulty: easy
+  tags: [false-positive-trap, state]
+
+expected: []
+
+forbidden:
+  - reason: the generator is consumed exactly once by design and never reused, so exhaustion is not a bug
+    category: correctness

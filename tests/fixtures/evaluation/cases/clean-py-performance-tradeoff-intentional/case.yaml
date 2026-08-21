@@ -1,0 +1,20 @@
+case:
+  id: clean-py-performance-tradeoff-intentional
+  title: Re-reading the clock every call is required, not a caching bug
+  description: >
+    RateLimiter.allow() calls time.monotonic() fresh on every
+    invocation rather than caching it, which could look like a missed
+    caching opportunity but is required for correctness -- the limiter
+    measures real elapsed time between calls.
+  language: python
+  difficulty: medium
+  tags: [false-positive-trap, state]
+
+expected: []
+
+forbidden:
+  - reason: >
+      re-reading time.monotonic() on every call is required for a rate
+      limiter to work at all; caching it would be the actual bug, not
+      an optimization opportunity
+    category: performance

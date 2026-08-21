@@ -1,0 +1,26 @@
+case:
+  id: py-missing-lock-shared-state
+  title: bulk_reset() mutates _store without holding the lock
+  description: >
+    increment() correctly guards _store with self._lock, but bulk_reset()
+    mutates the same shared dict from multiple worker threads without
+    acquiring it, racing with concurrent increment() calls.
+  language: python
+  difficulty: medium
+  tags: [concurrency, state, caller-callee]
+
+expected:
+  - id: ef1
+    category: concurrency
+    file: src/cache.py
+    symbol: bulk_reset
+    issue_family: missing_lock
+    severity: medium
+    line: 17
+    line_tolerance: 2
+    ground_truth_source: ai_expected
+    notes: bulk_reset writes self._store outside self._lock, unlike the sibling increment() method.
+
+forbidden:
+  - reason: increment() correctly acquires self._lock around its read-modify-write; it must not be flagged.
+    category: concurrency

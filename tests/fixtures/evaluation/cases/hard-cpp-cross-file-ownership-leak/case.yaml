@@ -1,0 +1,31 @@
+case:
+  id: hard-cpp-cross-file-ownership-leak
+  title: total_weight_for_batch never deletes the Widget it owns
+  description: >
+    create_widget (widget_factory.cpp) documents that the caller owns
+    the returned Widget* and must delete it. total_weight_for_batch
+    (inventory.cpp) calls create_widget in a loop and never deletes the
+    result, leaking one Widget per iteration. Requires reading
+    widget_factory.cpp's ownership contract to see the bug in
+    inventory.cpp.
+  language: cpp
+  difficulty: hard
+  tags: [cross-file, caller-callee, resource]
+
+expected:
+  - id: ef1
+    category: memory_safety
+    file: inventory.cpp
+    symbol: total_weight_for_batch
+    issue_family: missing_delete_per_documented_ownership_contract
+    severity: high
+    line: 6
+    ground_truth_source: ai_expected
+    notes: >
+      create_widget's contract requires the caller to delete the
+      returned Widget*; total_weight_for_batch never does, leaking one
+      Widget per loop iteration.
+
+forbidden:
+  - reason: create_widget itself correctly allocates and returns ownership; it must not be flagged
+    category: memory_safety

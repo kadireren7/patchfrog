@@ -1,0 +1,20 @@
+case:
+  id: clean-cpp-empty-catch-rethrow-documented
+  title: Narrow catch translating one specific exception type is intentional
+  description: >
+    parse_port only catches std::invalid_argument and rethrows as a
+    domain-specific ConfigError; std::out_of_range is deliberately left
+    to propagate untouched. A narrow, documented catch, not an overly
+    broad or swallowed exception handler.
+  language: cpp
+  difficulty: hard
+  tags: [false-positive-trap, error-propagation]
+
+expected: []
+
+forbidden:
+  - reason: >
+      catching only std::invalid_argument (and letting std::out_of_range
+      propagate) is a deliberate, documented narrowing, not a swallowed
+      or overly broad exception handler
+    category: correctness
