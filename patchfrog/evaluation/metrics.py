@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from patchfrog.analysis.domain import FindingCategory
 from patchfrog.evaluation.domain import (
+    AnalyzerExecutionSummary,
     CaseResult,
     Difficulty,
     EvaluationCase,
@@ -131,6 +132,24 @@ class HallucinationMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class AnalyzerCoverage:
+    """Aggregated per-analyzer execution outcome across every case in a
+    run -- the "is this capability actually present" answer Phase 8
+    spec section 45 requires: an analyzer with zero ``succeeded``
+    executions and only ``unsupported`` ones is a missing capability,
+    never silently reported as "zero findings means clean code"."""
+
+    analyzer: str
+    attempted: int
+    succeeded: int
+    failed: int
+    skipped: int
+    unsupported: int
+    timed_out: int
+    total_raw_findings: int
+
+
+@dataclass(frozen=True, slots=True)
 class EvaluationMetrics:
     overall: OverallMetrics
     clean: CleanCaseMetrics
@@ -142,6 +161,7 @@ class EvaluationMetrics:
     hallucination: HallucinationMetrics
     worst_false_positive_cases: tuple[tuple[str, int], ...] = field(default_factory=tuple)
     missed_expected: tuple[tuple[str, str], ...] = field(default_factory=tuple)  # (case_id, expected_id)
+    static_analyzer_coverage: tuple[AnalyzerCoverage, ...] = field(default_factory=tuple)
 
 
 def _confusion_from_results(results: Sequence[CaseResult]) -> ConfusionCounts:
@@ -421,7 +441,34 @@ def compute_metrics(
         hallucination=compute_hallucination_metrics(results, fixture_info),
         worst_false_positive_cases=tuple(pair for pair in worst_fp[:10] if pair[1] > 0),
         missed_expected=missed,
+        static_analyzer_coverage=compute_static_analyzer_coverage(results),
     )
+
+
+def compute_static_analyzer_coverage(results: Sequence[CaseResult]) -> tuple[AnalyzerCoverage, ...]:
+    by_analyzer: dict[str, list[AnalyzerExecutionSummary]] = {}
+    for r in results:
+        if r.is_error:
+            continue
+        for e in r.analyzer_executions:
+            by_analyzer.setdefault(e.analyzer, []).append(e)
+
+    out: list[AnalyzerCoverage] = []
+    for name in sorted(by_analyzer):
+        executions = by_analyzer[name]
+        out.append(
+            AnalyzerCoverage(
+                analyzer=name,
+                attempted=len(executions),
+                succeeded=sum(1 for e in executions if e.status == "succeeded"),
+                failed=sum(1 for e in executions if e.status == "failed"),
+                skipped=sum(1 for e in executions if e.status == "skipped"),
+                unsupported=sum(1 for e in executions if e.status == "unsupported"),
+                timed_out=sum(1 for e in executions if e.status == "timed_out"),
+                total_raw_findings=sum(e.raw_findings_count for e in executions),
+            )
+        )
+    return tuple(out)
 
 
 @dataclass(frozen=True, slots=True)

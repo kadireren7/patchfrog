@@ -248,3 +248,23 @@ async def test_static_and_ai_overlap_when_both_catch_the_same_bug(
         # ruff unavailable/didn't fire in this environment -- still a
         # valid AI-only true positive, not a test failure.
         assert overlap is not None and overlap.ai_only >= 1
+
+
+async def test_analyzer_executions_are_captured_for_per_analyzer_coverage(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    from patchfrog.evaluation.metrics import compute_static_analyzer_coverage
+
+    case, cases_root = _write_case(tmp_path, "coverage-case", {"m.py": "def clean():\n    return 1\n"}, expected=())
+    runner = EvaluationRunner(session_factory=session_factory)
+    result = await runner.run_case(case, cases_root=cases_root, mode=EvaluationMode.STATIC_ONLY)
+    assert not result.is_error, result.error
+    # At least one analyzer was actually attempted (ruff, at minimum, is
+    # always installed in the dev/CI venv) -- an empty result here would
+    # mean the execution-capture wiring silently broke.
+    assert result.analyzer_executions
+    names = {e.analyzer for e in result.analyzer_executions}
+    assert "ruff" in names
+    coverage = compute_static_analyzer_coverage([result])
+    ruff_coverage = next(c for c in coverage if c.analyzer == "ruff")
+    assert ruff_coverage.attempted == 1

@@ -3,12 +3,332 @@
   "benchmark_label": "pipeline_correctness",
   "case_results": [
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 1,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 1,
+          "status": "succeeded"
+        }
+      ],
+      "candidates_generated": 3,
+      "candidates_reviewed": 3,
+      "candidates_skipped": 0,
+      "case_id": "both-py-bare-except-hides-bug",
+      "critic_enabled": true,
+      "duration_ms": 4179.842633995577,
+      "error": null,
+      "expected_outcomes": [
+        {
+          "detail": "matched by prediction #0 (+1 duplicate(s))",
+          "expected": {
+            "category": "correctness",
+            "evidence_contains": null,
+            "file": "src/parser.py",
+            "ground_truth_source": "either",
+            "id": "ef1",
+            "issue_family": "bare_except",
+            "line": 4,
+            "line_end": null,
+            "line_tolerance": 3,
+            "notes": "bare except: silently converts a malformed amount to 0.0 instead of propagating the error.",
+            "severity": "high",
+            "severity_max": null,
+            "severity_min": null,
+            "symbol": "parse_amount"
+          },
+          "matched_prediction_index": 0,
+          "outcome": "found"
+        }
+      ],
+      "mode": "full_pipeline",
+      "predictions": [
+        {
+          "detail": "matches expected finding 'ef1'",
+          "forbidden_reason": null,
+          "matched_expected_id": "ef1",
+          "outcome": "true_positive",
+          "prediction": {
+            "category": "correctness",
+            "end_line": 4,
+            "evidence_text": "Do not use bare `except`",
+            "file_path": "src/parser.py",
+            "message": "Do not use bare `except`",
+            "severity": "medium",
+            "source": "static",
+            "start_line": 4,
+            "symbol_qualified_name": "parse_amount",
+            "title": "bare-except"
+          }
+        },
+        {
+          "detail": "duplicates an already-matched prediction for 'ef1'",
+          "forbidden_reason": null,
+          "matched_expected_id": "ef1",
+          "outcome": "duplicate",
+          "prediction": {
+            "category": "correctness",
+            "end_line": 4,
+            "evidence_text": "except:",
+            "file_path": "src/parser.py",
+            "message": "bare except: silently converts a malformed amount to 0.0 instead of propagating the error.",
+            "severity": "high",
+            "source": "ai",
+            "start_line": 4,
+            "symbol_qualified_name": "parse_amount",
+            "title": "[oracle] bare_except"
+          }
+        }
+      ],
+      "proposals_before_validation": [
+        {
+          "category": "correctness",
+          "end_line": 4,
+          "evidence_text": "except:",
+          "file_path": "src/parser.py",
+          "message": "bare except: silently converts a malformed amount to 0.0 instead of propagating the error.",
+          "severity": "high",
+          "source": "ai",
+          "start_line": 4,
+          "symbol_qualified_name": "parse_amount",
+          "title": "[oracle] bare_except"
+        }
+      ],
+      "provider_calls": 3,
+      "reviewer_input_tokens": 300,
+      "reviewer_output_tokens": 150,
+      "status": "completed_with_findings"
+    },
+    {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 1,
+          "status": "succeeded"
+        }
+      ],
+      "candidates_generated": 3,
+      "candidates_reviewed": 3,
+      "candidates_skipped": 0,
+      "case_id": "both-py-eval-usage",
+      "critic_enabled": true,
+      "duration_ms": 4175.080404995242,
+      "error": null,
+      "expected_outcomes": [
+        {
+          "detail": "matched by prediction #0 (+1 duplicate(s))",
+          "expected": {
+            "category": "security",
+            "evidence_contains": null,
+            "file": "src/calculator.py",
+            "ground_truth_source": "either",
+            "id": "ef1",
+            "issue_family": "eval_usage",
+            "line": 8,
+            "line_end": null,
+            "line_tolerance": 3,
+            "notes": "eval() on the raw expr argument executes arbitrary code if the caller ever passes untrusted input.",
+            "severity": "high",
+            "severity_max": null,
+            "severity_min": null,
+            "symbol": "evaluate_expression"
+          },
+          "matched_prediction_index": 0,
+          "outcome": "found"
+        }
+      ],
+      "mode": "full_pipeline",
+      "predictions": [
+        {
+          "detail": "matches expected finding 'ef1'",
+          "forbidden_reason": null,
+          "matched_expected_id": "ef1",
+          "outcome": "true_positive",
+          "prediction": {
+            "category": "security",
+            "end_line": 8,
+            "evidence_text": "eval() on data that may be attacker-influenced can execute arbitrary code.",
+            "file_path": "src/calculator.py",
+            "message": "eval() on data that may be attacker-influenced can execute arbitrary code.",
+            "severity": "high",
+            "source": "static",
+            "start_line": 8,
+            "symbol_qualified_name": "evaluate_expression",
+            "title": "patchfrog-python-eval-usage"
+          }
+        },
+        {
+          "detail": "duplicates an already-matched prediction for 'ef1'",
+          "forbidden_reason": null,
+          "matched_expected_id": "ef1",
+          "outcome": "duplicate",
+          "prediction": {
+            "category": "security",
+            "end_line": 8,
+            "evidence_text": "return eval(expr)",
+            "file_path": "src/calculator.py",
+            "message": "eval() on the raw expr argument executes arbitrary code if the caller ever passes untrusted input.",
+            "severity": "high",
+            "source": "ai",
+            "start_line": 8,
+            "symbol_qualified_name": "evaluate_expression",
+            "title": "[oracle] eval_usage"
+          }
+        }
+      ],
+      "proposals_before_validation": [
+        {
+          "category": "security",
+          "end_line": 8,
+          "evidence_text": "return eval(expr)",
+          "file_path": "src/calculator.py",
+          "message": "eval() on the raw expr argument executes arbitrary code if the caller ever passes untrusted input.",
+          "severity": "high",
+          "source": "ai",
+          "start_line": 8,
+          "symbol_qualified_name": "evaluate_expression",
+          "title": "[oracle] eval_usage"
+        }
+      ],
+      "provider_calls": 3,
+      "reviewer_input_tokens": 300,
+      "reviewer_output_tokens": 150,
+      "status": "completed_with_findings"
+    },
+    {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 1,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
+      "candidates_generated": 3,
+      "candidates_reviewed": 3,
+      "candidates_skipped": 0,
+      "case_id": "both-py-undefined-name-in-branch",
+      "critic_enabled": true,
+      "duration_ms": 4160.405326998443,
+      "error": null,
+      "expected_outcomes": [
+        {
+          "detail": "matched by prediction #0 (+1 duplicate(s))",
+          "expected": {
+            "category": "correctness",
+            "evidence_contains": null,
+            "file": "src/notifier.py",
+            "ground_truth_source": "either",
+            "id": "ef1",
+            "issue_family": "undefined_name",
+            "line": 7,
+            "line_end": null,
+            "line_tolerance": 3,
+            "notes": "mesage is undefined (typo for message); only reachable in the critical branch.",
+            "severity": "high",
+            "severity_max": null,
+            "severity_min": null,
+            "symbol": "format_alert"
+          },
+          "matched_prediction_index": 0,
+          "outcome": "found"
+        }
+      ],
+      "mode": "full_pipeline",
+      "predictions": [
+        {
+          "detail": "matches expected finding 'ef1'",
+          "forbidden_reason": null,
+          "matched_expected_id": "ef1",
+          "outcome": "true_positive",
+          "prediction": {
+            "category": "correctness",
+            "end_line": 7,
+            "evidence_text": "Undefined name `mesage`",
+            "file_path": "src/notifier.py",
+            "message": "Undefined name `mesage`",
+            "severity": "high",
+            "source": "static",
+            "start_line": 7,
+            "symbol_qualified_name": "format_alert",
+            "title": "undefined-name"
+          }
+        },
+        {
+          "detail": "duplicates an already-matched prediction for 'ef1'",
+          "forbidden_reason": null,
+          "matched_expected_id": "ef1",
+          "outcome": "duplicate",
+          "prediction": {
+            "category": "correctness",
+            "end_line": 7,
+            "evidence_text": "return f\"CRITICAL: {mesage}\"",
+            "file_path": "src/notifier.py",
+            "message": "mesage is undefined (typo for message); only reachable in the critical branch.",
+            "severity": "high",
+            "source": "ai",
+            "start_line": 7,
+            "symbol_qualified_name": "format_alert",
+            "title": "[oracle] undefined_name"
+          }
+        }
+      ],
+      "proposals_before_validation": [
+        {
+          "category": "correctness",
+          "end_line": 7,
+          "evidence_text": "return f\"CRITICAL: {mesage}\"",
+          "file_path": "src/notifier.py",
+          "message": "mesage is undefined (typo for message); only reachable in the critical branch.",
+          "severity": "high",
+          "source": "ai",
+          "start_line": 7,
+          "symbol_qualified_name": "format_alert",
+          "title": "[oracle] undefined_name"
+        }
+      ],
+      "provider_calls": 3,
+      "reviewer_input_tokens": 300,
+      "reviewer_output_tokens": 150,
+      "status": "completed_with_findings"
+    },
+    {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "c-buffer-overflow-off-by-one",
       "critic_enabled": true,
-      "duration_ms": 4040.5182899994543,
+      "duration_ms": 4220.267548007541,
       "error": null,
       "expected_outcomes": [
         {
@@ -74,12 +394,29 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "c-double-free",
       "critic_enabled": true,
-      "duration_ms": 3980.7475010020426,
+      "duration_ms": 4224.626623996301,
       "error": null,
       "expected_outcomes": [
         {
@@ -145,12 +482,29 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "c-file-handle-leak",
       "critic_enabled": true,
-      "duration_ms": 3942.904768002336,
+      "duration_ms": 4225.278978003189,
       "error": null,
       "expected_outcomes": [
         {
@@ -216,12 +570,29 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "c-integer-overflow-wraparound",
       "critic_enabled": true,
-      "duration_ms": 3888.3680910003022,
+      "duration_ms": 4251.763745007338,
       "error": null,
       "expected_outcomes": [
         {
@@ -287,12 +658,29 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "c-memory-leak",
       "critic_enabled": true,
-      "duration_ms": 3875.094408998848,
+      "duration_ms": 4262.217057999806,
       "error": null,
       "expected_outcomes": [
         {
@@ -358,12 +746,29 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "c-use-after-free",
       "critic_enabled": true,
-      "duration_ms": 3915.5053710055654,
+      "duration_ms": 4998.175161003019,
       "error": null,
       "expected_outcomes": [
         {
@@ -429,12 +834,29 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "clean-c-correct-bounds-loop",
       "critic_enabled": true,
-      "duration_ms": 3912.770047005324,
+      "duration_ms": 4737.394493989996,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -446,12 +868,29 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "clean-c-correct-realloc-pattern",
       "critic_enabled": true,
-      "duration_ms": 3885.8529729986913,
+      "duration_ms": 4609.916044006241,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -463,12 +902,29 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "clean-c-defensive-null-check",
       "critic_enabled": true,
-      "duration_ms": 3918.062849996204,
+      "duration_ms": 4812.969666993013,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -480,12 +936,29 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "clean-c-manual-memory-valid",
       "critic_enabled": true,
-      "duration_ms": 3898.7902290027705,
+      "duration_ms": 4624.898755006143,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -497,12 +970,29 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "clean-c-safe-lock-sequence",
       "critic_enabled": true,
-      "duration_ms": 3963.769271002093,
+      "duration_ms": 4767.313867996563,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -514,12 +1004,29 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "clean-c-unusual-cast-correct",
       "critic_enabled": true,
-      "duration_ms": 3926.955053000711,
+      "duration_ms": 4645.930106009473,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -531,12 +1038,29 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "clean-cpp-empty-catch-rethrow-documented",
       "critic_enabled": true,
-      "duration_ms": 3933.868170999631,
+      "duration_ms": 4802.013714011991,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -548,12 +1072,29 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 9,
       "candidates_reviewed": 9,
       "candidates_skipped": 0,
       "case_id": "clean-cpp-move-semantics-correct",
       "critic_enabled": true,
-      "duration_ms": 4058.8399629996275,
+      "duration_ms": 4846.573501010425,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -565,12 +1106,29 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 8,
       "candidates_reviewed": 8,
       "candidates_skipped": 0,
       "case_id": "clean-cpp-raii-correct",
       "critic_enabled": true,
-      "duration_ms": 4067.803029996867,
+      "duration_ms": 4881.2141840026015,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -582,12 +1140,29 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "clean-cpp-unused-looking-branch-required",
       "critic_enabled": true,
-      "duration_ms": 4108.332515999791,
+      "duration_ms": 4899.374675995205,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -599,12 +1174,24 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "clean-py-checked-error-documented-ignore",
       "critic_enabled": true,
-      "duration_ms": 4241.8283139995765,
+      "duration_ms": 4674.178999994183,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -616,12 +1203,24 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 1,
       "candidates_reviewed": 1,
       "candidates_skipped": 0,
       "case_id": "clean-py-correct-generator-exhaustion",
       "critic_enabled": true,
-      "duration_ms": 4196.6754000022775,
+      "duration_ms": 4728.217174997553,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -633,12 +1232,24 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 1,
       "candidates_reviewed": 1,
       "candidates_skipped": 0,
       "case_id": "clean-py-correct-recursion-base-case",
       "critic_enabled": true,
-      "duration_ms": 4184.107683999173,
+      "duration_ms": 4742.311734997202,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -650,12 +1261,24 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 5,
       "candidates_reviewed": 5,
       "candidates_skipped": 0,
       "case_id": "clean-py-dead-code-required-by-api",
       "critic_enabled": true,
-      "duration_ms": 4342.8178940012,
+      "duration_ms": 4727.013468000223,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -667,12 +1290,24 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "clean-py-defensive-check",
       "critic_enabled": true,
-      "duration_ms": 4291.988249999122,
+      "duration_ms": 4629.762444004882,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -684,12 +1319,24 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "clean-py-intentional-empty-except",
       "critic_enabled": true,
-      "duration_ms": 4270.001024000521,
+      "duration_ms": 4586.839233001228,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -701,12 +1348,24 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "clean-py-performance-tradeoff-intentional",
       "critic_enabled": true,
-      "duration_ms": 4296.216520000598,
+      "duration_ms": 4592.550296001718,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -718,12 +1377,24 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 1,
       "candidates_reviewed": 1,
       "candidates_skipped": 0,
       "case_id": "clean-py-prompt-injection-comment-no-bug",
       "critic_enabled": true,
-      "duration_ms": 4229.574851997313,
+      "duration_ms": 4451.375258009648,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -735,12 +1406,24 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "clean-py-suspicious-var-names",
       "critic_enabled": true,
-      "duration_ms": 4284.458223999536,
+      "duration_ms": 4515.509720004047,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -752,12 +1435,24 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "clean-py-unusual-but-correct-boundary",
       "critic_enabled": true,
-      "duration_ms": 4001.2883429953945,
+      "duration_ms": 4676.235709994216,
       "error": null,
       "expected_outcomes": [],
       "mode": "full_pipeline",
@@ -769,12 +1464,29 @@
       "status": "passed"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "cpp-dangling-reference",
       "critic_enabled": true,
-      "duration_ms": 3906.0591500019655,
+      "duration_ms": 4571.261798002524,
       "error": null,
       "expected_outcomes": [
         {
@@ -840,12 +1552,29 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 6,
       "candidates_reviewed": 6,
       "candidates_skipped": 0,
       "case_id": "cpp-missing-lock-race",
       "critic_enabled": true,
-      "duration_ms": 3980.0210670000524,
+      "duration_ms": 4598.153593993629,
       "error": null,
       "expected_outcomes": [
         {
@@ -911,12 +1640,29 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "cpp-ownership-mistake-raw-pointer",
       "critic_enabled": true,
-      "duration_ms": 3949.9150900010136,
+      "duration_ms": 4612.8165909904055,
       "error": null,
       "expected_outcomes": [
         {
@@ -982,12 +1728,29 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 1,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 5,
       "candidates_reviewed": 5,
       "candidates_skipped": 0,
       "case_id": "hard-c-cross-file-null-check-removed",
       "critic_enabled": true,
-      "duration_ms": 4024.745199996687,
+      "duration_ms": 4582.484004989965,
       "error": null,
       "expected_outcomes": [
         {
@@ -1071,12 +1834,29 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 5,
       "candidates_reviewed": 5,
       "candidates_skipped": 0,
       "case_id": "hard-cpp-cross-file-ownership-leak",
       "critic_enabled": true,
-      "duration_ms": 3989.612382996711,
+      "duration_ms": 4696.131132994196,
       "error": null,
       "expected_outcomes": [
         {
@@ -1142,12 +1922,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "hard-py-caller-callee-argument-swap",
       "critic_enabled": true,
-      "duration_ms": 3976.2127729991334,
+      "duration_ms": 4310.436636995291,
       "error": null,
       "expected_outcomes": [
         {
@@ -1213,12 +2005,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 10,
       "candidates_reviewed": 10,
       "candidates_skipped": 0,
       "case_id": "hard-py-cross-file-contract-violation",
       "critic_enabled": true,
-      "duration_ms": 4282.97630000452,
+      "duration_ms": 4388.581801002147,
       "error": null,
       "expected_outcomes": [
         {
@@ -1284,12 +2088,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 7,
       "candidates_reviewed": 7,
       "candidates_skipped": 0,
       "case_id": "hard-py-cross-file-error-propagation",
       "critic_enabled": true,
-      "duration_ms": 4465.002140997967,
+      "duration_ms": 4404.661516993656,
       "error": null,
       "expected_outcomes": [
         {
@@ -1355,12 +2171,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 10,
       "candidates_reviewed": 10,
       "candidates_skipped": 0,
       "case_id": "hard-py-stale-cache-invalidation",
       "critic_enabled": true,
-      "duration_ms": 4538.041572996008,
+      "duration_ms": 4931.312387008802,
       "error": null,
       "expected_outcomes": [
         {
@@ -1426,12 +2254,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 5,
       "candidates_reviewed": 5,
       "candidates_skipped": 0,
       "case_id": "py-auth-bypass",
       "critic_enabled": true,
-      "duration_ms": 4340.026673002285,
+      "duration_ms": 4298.699936989578,
       "error": null,
       "expected_outcomes": [
         {
@@ -1497,12 +2337,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "py-boundary-condition-fencepost",
       "critic_enabled": true,
-      "duration_ms": 4308.949758997187,
+      "duration_ms": 4234.921556999325,
       "error": null,
       "expected_outcomes": [
         {
@@ -1568,12 +2420,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 7,
       "candidates_reviewed": 7,
       "candidates_skipped": 0,
       "case_id": "py-ignored-error-return",
       "critic_enabled": true,
-      "duration_ms": 4388.330458001292,
+      "duration_ms": 4292.645834997529,
       "error": null,
       "expected_outcomes": [
         {
@@ -1639,12 +2503,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "py-incorrect-return-propagation",
       "critic_enabled": true,
-      "duration_ms": 4343.704571001581,
+      "duration_ms": 4290.051357005723,
       "error": null,
       "expected_outcomes": [
         {
@@ -1710,12 +2586,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 4,
       "candidates_reviewed": 4,
       "candidates_skipped": 0,
       "case_id": "py-inverted-boundary",
       "critic_enabled": true,
-      "duration_ms": 4316.1716620015795,
+      "duration_ms": 4310.156688006828,
       "error": null,
       "expected_outcomes": [
         {
@@ -1781,12 +2669,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 5,
       "candidates_reviewed": 5,
       "candidates_skipped": 0,
       "case_id": "py-missing-lock-shared-state",
       "critic_enabled": true,
-      "duration_ms": 4351.156991004245,
+      "duration_ms": 4315.939676002017,
       "error": null,
       "expected_outcomes": [
         {
@@ -1852,12 +2752,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 5,
       "candidates_reviewed": 5,
       "candidates_skipped": 0,
       "case_id": "py-missing-validation",
       "critic_enabled": true,
-      "duration_ms": 4339.630073001899,
+      "duration_ms": 4194.849911000347,
       "error": null,
       "expected_outcomes": [
         {
@@ -1923,12 +2835,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 6,
       "candidates_reviewed": 6,
       "candidates_skipped": 0,
       "case_id": "py-n-plus-one-query",
       "critic_enabled": true,
-      "duration_ms": 3989.173813999514,
+      "duration_ms": 4408.156217992655,
       "error": null,
       "expected_outcomes": [
         {
@@ -1994,12 +2918,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "py-off-by-one-loop",
       "critic_enabled": true,
-      "duration_ms": 3949.4913689995883,
+      "duration_ms": 4192.68417400599,
       "error": null,
       "expected_outcomes": [
         {
@@ -2065,12 +3001,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "py-path-traversal",
       "critic_enabled": true,
-      "duration_ms": 3919.4547529987176,
+      "duration_ms": 4267.396244002157,
       "error": null,
       "expected_outcomes": [
         {
@@ -2136,12 +3084,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "py-pathological-repeated-work",
       "critic_enabled": true,
-      "duration_ms": 3896.7618309980026,
+      "duration_ms": 4361.846942003467,
       "error": null,
       "expected_outcomes": [
         {
@@ -2207,12 +3167,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "py-prompt-injection-hidden-bug",
       "critic_enabled": true,
-      "duration_ms": 3901.5236499981256,
+      "duration_ms": 4201.587084011408,
       "error": null,
       "expected_outcomes": [
         {
@@ -2278,12 +3250,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 5,
       "candidates_reviewed": 5,
       "candidates_skipped": 0,
       "case_id": "py-race-condition-counter",
       "critic_enabled": true,
-      "duration_ms": 3926.5543450019322,
+      "duration_ms": 4181.888460996561,
       "error": null,
       "expected_outcomes": [
         {
@@ -2349,12 +3333,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 5,
       "candidates_reviewed": 5,
       "candidates_skipped": 0,
       "case_id": "py-stale-state-update",
       "critic_enabled": true,
-      "duration_ms": 4027.2695559979184,
+      "duration_ms": 4357.946324002114,
       "error": null,
       "expected_outcomes": [
         {
@@ -2420,12 +3416,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "py-unsafe-trust-boundary",
       "critic_enabled": true,
-      "duration_ms": 3932.8671370021766,
+      "duration_ms": 4163.057803991251,
       "error": null,
       "expected_outcomes": [
         {
@@ -2491,12 +3499,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 5,
       "candidates_reviewed": 5,
       "candidates_skipped": 0,
       "case_id": "py-wrong-argument-semantics",
       "critic_enabled": true,
-      "duration_ms": 3998.6669630015967,
+      "duration_ms": 4243.575517000863,
       "error": null,
       "expected_outcomes": [
         {
@@ -2562,12 +3582,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 5,
       "candidates_reviewed": 5,
       "candidates_skipped": 0,
       "case_id": "py-wrong-boolean-branch",
       "critic_enabled": true,
-      "duration_ms": 3981.401127995923,
+      "duration_ms": 4220.5909799959045,
       "error": null,
       "expected_outcomes": [
         {
@@ -2633,12 +3665,24 @@
       "status": "completed_with_findings"
     },
     {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
       "candidates_generated": 3,
       "candidates_reviewed": 3,
       "candidates_skipped": 0,
       "case_id": "py-wrong-default-fallback",
       "critic_enabled": true,
-      "duration_ms": 3974.9389730059193,
+      "duration_ms": 4235.420572003932,
       "error": null,
       "expected_outcomes": [
         {
@@ -2702,12 +3746,917 @@
       "reviewer_input_tokens": 300,
       "reviewer_output_tokens": 150,
       "status": "completed_with_findings"
+    },
+    {
+      "analyzer_executions": [
+        {
+          "analyzer": "cppcheck",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "clang_tidy",
+          "raw_findings_count": 0,
+          "status": "unsupported"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 1,
+          "status": "succeeded"
+        }
+      ],
+      "candidates_generated": 3,
+      "candidates_reviewed": 3,
+      "candidates_skipped": 0,
+      "case_id": "static-c-unsafe-strcpy",
+      "critic_enabled": true,
+      "duration_ms": 4214.30364799744,
+      "error": null,
+      "expected_outcomes": [
+        {
+          "detail": "matched by prediction #0",
+          "expected": {
+            "category": "memory_safety",
+            "evidence_contains": null,
+            "file": "names.c",
+            "ground_truth_source": "static_expected",
+            "id": "ef1",
+            "issue_family": "unsafe_strcpy",
+            "line": 8,
+            "line_end": null,
+            "line_tolerance": 3,
+            "notes": "strcpy performs no bounds checking; semgrep's bundled rule catches this without any AI call.",
+            "severity": "high",
+            "severity_max": null,
+            "severity_min": null,
+            "symbol": "copy_display_name"
+          },
+          "matched_prediction_index": 0,
+          "outcome": "found"
+        }
+      ],
+      "mode": "full_pipeline",
+      "predictions": [
+        {
+          "detail": "matches expected finding 'ef1'",
+          "forbidden_reason": null,
+          "matched_expected_id": "ef1",
+          "outcome": "true_positive",
+          "prediction": {
+            "category": "memory_safety",
+            "end_line": 8,
+            "evidence_text": "strcpy() performs no bounds checking and can overflow the destination buffer.",
+            "file_path": "names.c",
+            "message": "strcpy() performs no bounds checking and can overflow the destination buffer.",
+            "severity": "high",
+            "source": "static",
+            "start_line": 8,
+            "symbol_qualified_name": "copy_display_name",
+            "title": "patchfrog-c-unsafe-strcpy"
+          }
+        }
+      ],
+      "proposals_before_validation": [],
+      "provider_calls": 3,
+      "reviewer_input_tokens": 300,
+      "reviewer_output_tokens": 150,
+      "status": "completed_with_findings"
+    },
+    {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 1,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 1,
+          "status": "succeeded"
+        }
+      ],
+      "candidates_generated": 3,
+      "candidates_reviewed": 3,
+      "candidates_skipped": 0,
+      "case_id": "static-py-bare-except-swallows-errors",
+      "critic_enabled": true,
+      "duration_ms": 4165.6257119902875,
+      "error": null,
+      "expected_outcomes": [
+        {
+          "detail": "matched by prediction #0",
+          "expected": {
+            "category": "correctness",
+            "evidence_contains": null,
+            "file": "src/importer.py",
+            "ground_truth_source": "static_expected",
+            "id": "ef1",
+            "issue_family": "bare_except",
+            "line": 8,
+            "line_end": null,
+            "line_tolerance": 3,
+            "notes": "bare except: swallows all exceptions; ruff's E722 rule catches this without any AI call.",
+            "severity": "medium",
+            "severity_max": null,
+            "severity_min": null,
+            "symbol": "load_config"
+          },
+          "matched_prediction_index": 0,
+          "outcome": "found"
+        }
+      ],
+      "mode": "full_pipeline",
+      "predictions": [
+        {
+          "detail": "matches expected finding 'ef1'",
+          "forbidden_reason": null,
+          "matched_expected_id": "ef1",
+          "outcome": "true_positive",
+          "prediction": {
+            "category": "correctness",
+            "end_line": 8,
+            "evidence_text": "Do not use bare `except`",
+            "file_path": "src/importer.py",
+            "message": "Do not use bare `except`",
+            "severity": "medium",
+            "source": "static",
+            "start_line": 8,
+            "symbol_qualified_name": "load_config",
+            "title": "bare-except"
+          }
+        }
+      ],
+      "proposals_before_validation": [],
+      "provider_calls": 3,
+      "reviewer_input_tokens": 300,
+      "reviewer_output_tokens": 150,
+      "status": "completed_with_findings"
+    },
+    {
+      "analyzer_executions": [
+        {
+          "analyzer": "ruff",
+          "raw_findings_count": 1,
+          "status": "succeeded"
+        },
+        {
+          "analyzer": "semgrep",
+          "raw_findings_count": 0,
+          "status": "succeeded"
+        }
+      ],
+      "candidates_generated": 3,
+      "candidates_reviewed": 3,
+      "candidates_skipped": 0,
+      "case_id": "static-py-undefined-name",
+      "critic_enabled": true,
+      "duration_ms": 4134.548417991027,
+      "error": null,
+      "expected_outcomes": [
+        {
+          "detail": "matched by prediction #0",
+          "expected": {
+            "category": "correctness",
+            "evidence_contains": null,
+            "file": "src/summary.py",
+            "ground_truth_source": "static_expected",
+            "id": "ef1",
+            "issue_family": "undefined_name",
+            "line": 5,
+            "line_end": null,
+            "line_tolerance": 3,
+            "notes": "total_items is undefined; ruff's F821 rule catches this without any AI call.",
+            "severity": "high",
+            "severity_max": null,
+            "severity_min": null,
+            "symbol": "build_summary"
+          },
+          "matched_prediction_index": 0,
+          "outcome": "found"
+        }
+      ],
+      "mode": "full_pipeline",
+      "predictions": [
+        {
+          "detail": "matches expected finding 'ef1'",
+          "forbidden_reason": null,
+          "matched_expected_id": "ef1",
+          "outcome": "true_positive",
+          "prediction": {
+            "category": "correctness",
+            "end_line": 5,
+            "evidence_text": "Undefined name `total_items`",
+            "file_path": "src/summary.py",
+            "message": "Undefined name `total_items`",
+            "severity": "high",
+            "source": "static",
+            "start_line": 5,
+            "symbol_qualified_name": "build_summary",
+            "title": "undefined-name"
+          }
+        }
+      ],
+      "proposals_before_validation": [],
+      "provider_calls": 3,
+      "reviewer_input_tokens": 300,
+      "reviewer_output_tokens": 150,
+      "status": "completed_with_findings"
     }
   ],
-  "duration_ms": 218667.25663200486,
-  "generated_at": "2026-08-21T05:57:34.355858+00:00",
+  "context_ablation": {
+    "label": "pipeline/guardrail behavior (oracle-scripted FakeLLMProvider) -- with a fake provider that doesn't consult context to decide findings, this measures plumbing correctness across context configs, not real semantic quality; only a --provider live run measures that",
+    "no-extra-context": {
+      "efficiency": {
+        "candidates_generated": 243,
+        "candidates_reviewed": 243,
+        "candidates_skipped": 0,
+        "input_tokens_per_tp": 623.0769230769231,
+        "output_tokens_per_tp": 311.53846153846155,
+        "provider_calls": 243,
+        "provider_calls_per_tp": 6.230769230769231,
+        "reviewer_input_tokens": 24300,
+        "reviewer_output_tokens": 12150
+      },
+      "hallucination": {
+        "accepted_findings": 43,
+        "proposals_before_validation": 36,
+        "unsupported_after_validation": 0,
+        "unsupported_before_validation": 0,
+        "unsupported_rate_after_validation": 0.0,
+        "unsupported_rate_before_validation": 0.0
+      },
+      "overall": {
+        "cases": 59,
+        "confusion": {
+          "duplicates": 3,
+          "false_positives": 0,
+          "missed": 0,
+          "out_of_scope": 1,
+          "true_positives": 39,
+          "unsupported": 0
+        },
+        "duplicate_rate": 0.06976744186046512,
+        "error_cases": 0,
+        "false_positives_per_100_candidates": 0.0,
+        "false_positives_per_case": 0.0,
+        "scores": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "unsupported_rate": 0.0
+      },
+      "runtime_ms": 263013.9691239892
+    },
+    "normal": {
+      "efficiency": {
+        "candidates_generated": 243,
+        "candidates_reviewed": 243,
+        "candidates_skipped": 0,
+        "input_tokens_per_tp": 623.0769230769231,
+        "output_tokens_per_tp": 311.53846153846155,
+        "provider_calls": 243,
+        "provider_calls_per_tp": 6.230769230769231,
+        "reviewer_input_tokens": 24300,
+        "reviewer_output_tokens": 12150
+      },
+      "hallucination": {
+        "accepted_findings": 43,
+        "proposals_before_validation": 36,
+        "unsupported_after_validation": 0,
+        "unsupported_before_validation": 0,
+        "unsupported_rate_after_validation": 0.0,
+        "unsupported_rate_before_validation": 0.0
+      },
+      "overall": {
+        "cases": 59,
+        "confusion": {
+          "duplicates": 3,
+          "false_positives": 0,
+          "missed": 0,
+          "out_of_scope": 1,
+          "true_positives": 39,
+          "unsupported": 0
+        },
+        "duplicate_rate": 0.06976744186046512,
+        "error_cases": 0,
+        "false_positives_per_100_candidates": 0.0,
+        "false_positives_per_case": 0.0,
+        "scores": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "unsupported_rate": 0.0
+      },
+      "runtime_ms": 276454.8809120024
+    },
+    "target-only": {
+      "efficiency": {
+        "candidates_generated": 243,
+        "candidates_reviewed": 243,
+        "candidates_skipped": 0,
+        "input_tokens_per_tp": 623.0769230769231,
+        "output_tokens_per_tp": 311.53846153846155,
+        "provider_calls": 243,
+        "provider_calls_per_tp": 6.230769230769231,
+        "reviewer_input_tokens": 24300,
+        "reviewer_output_tokens": 12150
+      },
+      "hallucination": {
+        "accepted_findings": 43,
+        "proposals_before_validation": 36,
+        "unsupported_after_validation": 0,
+        "unsupported_before_validation": 0,
+        "unsupported_rate_after_validation": 0.0,
+        "unsupported_rate_before_validation": 0.0
+      },
+      "overall": {
+        "cases": 59,
+        "confusion": {
+          "duplicates": 3,
+          "false_positives": 0,
+          "missed": 0,
+          "out_of_scope": 1,
+          "true_positives": 39,
+          "unsupported": 0
+        },
+        "duplicate_rate": 0.06976744186046512,
+        "error_cases": 0,
+        "false_positives_per_100_candidates": 0.0,
+        "false_positives_per_case": 0.0,
+        "scores": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "unsupported_rate": 0.0
+      },
+      "runtime_ms": 256746.353998009
+    }
+  },
+  "critic_comparison": {
+    "critic_off": {
+      "by_category": [
+        {
+          "category": "api_misuse",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 2,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 2
+        },
+        {
+          "category": "concurrency",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 3,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 3
+        },
+        {
+          "category": "correctness",
+          "confusion": {
+            "duplicates": 2,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 17,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 17
+        },
+        {
+          "category": "memory_safety",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 1,
+            "true_positives": 8,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 8
+        },
+        {
+          "category": "performance",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 2,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 2
+        },
+        {
+          "category": "resource_management",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 1,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 1
+        },
+        {
+          "category": "security",
+          "confusion": {
+            "duplicates": 1,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 5,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 5
+        },
+        {
+          "category": "undefined_behavior",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 1,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 1
+        }
+      ],
+      "by_difficulty": [
+        {
+          "difficulty": "easy",
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 20
+        },
+        {
+          "difficulty": "medium",
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 13
+        },
+        {
+          "difficulty": "hard",
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 6
+        }
+      ],
+      "clean": {
+        "average_findings_on_clean_cases": 0.0,
+        "clean_cases": 20,
+        "clean_cases_passed": 20,
+        "pass_rate": 1.0,
+        "worst_case_finding_count": 0,
+        "worst_case_id": null
+      },
+      "efficiency": {
+        "candidates_generated": 243,
+        "candidates_reviewed": 243,
+        "candidates_skipped": 0,
+        "input_tokens_per_tp": 623.0769230769231,
+        "output_tokens_per_tp": 311.53846153846155,
+        "provider_calls": 243,
+        "provider_calls_per_tp": 6.230769230769231,
+        "reviewer_input_tokens": 24300,
+        "reviewer_output_tokens": 12150
+      },
+      "hallucination": {
+        "accepted_findings": 43,
+        "proposals_before_validation": 36,
+        "unsupported_after_validation": 0,
+        "unsupported_before_validation": 0,
+        "unsupported_rate_after_validation": 0.0,
+        "unsupported_rate_before_validation": 0.0
+      },
+      "missed_expected": [],
+      "overall": {
+        "cases": 59,
+        "confusion": {
+          "duplicates": 3,
+          "false_positives": 0,
+          "missed": 0,
+          "out_of_scope": 1,
+          "true_positives": 39,
+          "unsupported": 0
+        },
+        "duplicate_rate": 0.06976744186046512,
+        "error_cases": 0,
+        "false_positives_per_100_candidates": 0.0,
+        "false_positives_per_case": 0.0,
+        "scores": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "unsupported_rate": 0.0
+      },
+      "severity": {
+        "exact_match_rate": 0.9743589743589743,
+        "matched_pairs": 39,
+        "overstatement_rate": 0.0,
+        "understatement_rate": 0.02564102564102564,
+        "within_one_level_rate": 1.0
+      },
+      "static_ai_overlap": {
+        "ai_only": 33,
+        "both": 3,
+        "missed_by_both": 0,
+        "static_only": 3
+      },
+      "static_analyzer_coverage": [
+        {
+          "analyzer": "clang_tidy",
+          "attempted": 22,
+          "failed": 0,
+          "skipped": 0,
+          "succeeded": 0,
+          "timed_out": 0,
+          "total_raw_findings": 0,
+          "unsupported": 22
+        },
+        {
+          "analyzer": "cppcheck",
+          "attempted": 22,
+          "failed": 0,
+          "skipped": 0,
+          "succeeded": 0,
+          "timed_out": 0,
+          "total_raw_findings": 0,
+          "unsupported": 22
+        },
+        {
+          "analyzer": "ruff",
+          "attempted": 37,
+          "failed": 0,
+          "skipped": 0,
+          "succeeded": 37,
+          "timed_out": 0,
+          "total_raw_findings": 4,
+          "unsupported": 0
+        },
+        {
+          "analyzer": "semgrep",
+          "attempted": 59,
+          "failed": 0,
+          "skipped": 0,
+          "succeeded": 59,
+          "timed_out": 0,
+          "total_raw_findings": 5,
+          "unsupported": 0
+        }
+      ],
+      "worst_false_positive_cases": []
+    },
+    "critic_on": {
+      "by_category": [
+        {
+          "category": "api_misuse",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 2,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 2
+        },
+        {
+          "category": "concurrency",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 3,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 3
+        },
+        {
+          "category": "correctness",
+          "confusion": {
+            "duplicates": 2,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 17,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 17
+        },
+        {
+          "category": "memory_safety",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 1,
+            "true_positives": 8,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 8
+        },
+        {
+          "category": "performance",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 2,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 2
+        },
+        {
+          "category": "resource_management",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 1,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 1
+        },
+        {
+          "category": "security",
+          "confusion": {
+            "duplicates": 1,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 5,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 5
+        },
+        {
+          "category": "undefined_behavior",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 1,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 1
+        }
+      ],
+      "by_difficulty": [
+        {
+          "difficulty": "easy",
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 20
+        },
+        {
+          "difficulty": "medium",
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 13
+        },
+        {
+          "difficulty": "hard",
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 6
+        }
+      ],
+      "clean": {
+        "average_findings_on_clean_cases": 0.0,
+        "clean_cases": 20,
+        "clean_cases_passed": 20,
+        "pass_rate": 1.0,
+        "worst_case_finding_count": 0,
+        "worst_case_id": null
+      },
+      "efficiency": {
+        "candidates_generated": 243,
+        "candidates_reviewed": 243,
+        "candidates_skipped": 0,
+        "input_tokens_per_tp": 623.0769230769231,
+        "output_tokens_per_tp": 311.53846153846155,
+        "provider_calls": 243,
+        "provider_calls_per_tp": 6.230769230769231,
+        "reviewer_input_tokens": 24300,
+        "reviewer_output_tokens": 12150
+      },
+      "hallucination": {
+        "accepted_findings": 43,
+        "proposals_before_validation": 36,
+        "unsupported_after_validation": 0,
+        "unsupported_before_validation": 0,
+        "unsupported_rate_after_validation": 0.0,
+        "unsupported_rate_before_validation": 0.0
+      },
+      "missed_expected": [],
+      "overall": {
+        "cases": 59,
+        "confusion": {
+          "duplicates": 3,
+          "false_positives": 0,
+          "missed": 0,
+          "out_of_scope": 1,
+          "true_positives": 39,
+          "unsupported": 0
+        },
+        "duplicate_rate": 0.06976744186046512,
+        "error_cases": 0,
+        "false_positives_per_100_candidates": 0.0,
+        "false_positives_per_case": 0.0,
+        "scores": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "unsupported_rate": 0.0
+      },
+      "severity": {
+        "exact_match_rate": 0.9743589743589743,
+        "matched_pairs": 39,
+        "overstatement_rate": 0.0,
+        "understatement_rate": 0.02564102564102564,
+        "within_one_level_rate": 1.0
+      },
+      "static_ai_overlap": {
+        "ai_only": 33,
+        "both": 3,
+        "missed_by_both": 0,
+        "static_only": 3
+      },
+      "static_analyzer_coverage": [
+        {
+          "analyzer": "clang_tidy",
+          "attempted": 22,
+          "failed": 0,
+          "skipped": 0,
+          "succeeded": 0,
+          "timed_out": 0,
+          "total_raw_findings": 0,
+          "unsupported": 22
+        },
+        {
+          "analyzer": "cppcheck",
+          "attempted": 22,
+          "failed": 0,
+          "skipped": 0,
+          "succeeded": 0,
+          "timed_out": 0,
+          "total_raw_findings": 0,
+          "unsupported": 22
+        },
+        {
+          "analyzer": "ruff",
+          "attempted": 37,
+          "failed": 0,
+          "skipped": 0,
+          "succeeded": 37,
+          "timed_out": 0,
+          "total_raw_findings": 4,
+          "unsupported": 0
+        },
+        {
+          "analyzer": "semgrep",
+          "attempted": 59,
+          "failed": 0,
+          "skipped": 0,
+          "succeeded": 59,
+          "timed_out": 0,
+          "total_raw_findings": 5,
+          "unsupported": 0
+        }
+      ],
+      "worst_false_positive_cases": []
+    },
+    "false_positive_delta": 0,
+    "label": "pipeline/guardrail behavior (oracle-scripted FakeLLMProvider) -- NOT evidence of real critic model quality; only a --provider live run measures that",
+    "precision_delta": 0.0,
+    "recall_delta": 0.0,
+    "unsupported_delta": 0
+  },
+  "duration_ms": 1593971.1863520062,
+  "generated_at": "2026-08-21T17:11:35.168999+00:00",
   "identity": {
     "case_fixture_hashes": {
+      "both-py-bare-except-hides-bug": "a26eb4593657eb3f3185cc2d8eae393c76120746901e302efc21d5cf4873a1f7",
+      "both-py-eval-usage": "325ff2fe614d565b0b5f5181ff99c54008ad6b41ebf08c5c01ef710b713b40cf",
+      "both-py-undefined-name-in-branch": "e928d07dbc501d28e4afdaabd4f51b9644fa3fcd810f39d727316a1a90ed7597",
       "c-buffer-overflow-off-by-one": "a7eb1a6c32e6fa9c2f3ff6fe75c2c71c90df6a55ada0454e7b77d977f39fc88d",
       "c-double-free": "347f6d5fdffc0129ca3505690ba1e1baba2a7a8db2e262c1a711049b86461c34",
       "c-file-handle-leak": "de42cda864e2a7eb1fa3e2420bc6835ff75a2bbcd3969579a0643b1c061b1b73",
@@ -2760,7 +4709,10 @@
       "py-unsafe-trust-boundary": "64256940ce09c394dc4cc99f8a20f392bc795ff8d0b8dc6df8035b4cbf4bf9e5",
       "py-wrong-argument-semantics": "0a338d119aa7289c84adc5c0869610badce9f9170620239cc4a365a4556e9e88",
       "py-wrong-boolean-branch": "00f9b2d0505844edbc2bfa2e9aee00abeec00c500a75243592be92e5133916ad",
-      "py-wrong-default-fallback": "e0a213bafea6f638991049144b76e0b9a3aded9d5109016ba2515ff8b37e29f6"
+      "py-wrong-default-fallback": "e0a213bafea6f638991049144b76e0b9a3aded9d5109016ba2515ff8b37e29f6",
+      "static-c-unsafe-strcpy": "591f8325d2eb5f50b93a29eb47036d936a5a39ab61ea588aecbbfc74edcb03f2",
+      "static-py-bare-except-swallows-errors": "0cf0bc8a5fd2323a0b5101017f87984b4172c8d21f1a8ffbe96b9e991dc78f68",
+      "static-py-undefined-name": "6d832a8266e5e75096789dd05f16080f513841cab1adeebd55c76e3bd4dd1414"
     },
     "critic_enabled": true,
     "evaluation_benchmark_version": 1,
@@ -2912,11 +4864,11 @@
       {
         "category": "correctness",
         "confusion": {
-          "duplicates": 0,
+          "duplicates": 2,
           "false_positives": 0,
           "missed": 0,
           "out_of_scope": 0,
-          "true_positives": 13,
+          "true_positives": 17,
           "unsupported": 0
         },
         "scores": {
@@ -2924,7 +4876,7 @@
           "precision": 1.0,
           "recall": 1.0
         },
-        "support": 13
+        "support": 17
       },
       {
         "category": "memory_safety",
@@ -2933,7 +4885,7 @@
           "false_positives": 0,
           "missed": 0,
           "out_of_scope": 1,
-          "true_positives": 7,
+          "true_positives": 8,
           "unsupported": 0
         },
         "scores": {
@@ -2941,7 +4893,7 @@
           "precision": 1.0,
           "recall": 1.0
         },
-        "support": 7
+        "support": 8
       },
       {
         "category": "performance",
@@ -2980,11 +4932,11 @@
       {
         "category": "security",
         "confusion": {
-          "duplicates": 0,
+          "duplicates": 1,
           "false_positives": 0,
           "missed": 0,
           "out_of_scope": 0,
-          "true_positives": 4,
+          "true_positives": 5,
           "unsupported": 0
         },
         "scores": {
@@ -2992,7 +4944,7 @@
           "precision": 1.0,
           "recall": 1.0
         },
-        "support": 4
+        "support": 5
       },
       {
         "category": "undefined_behavior",
@@ -3020,7 +4972,7 @@
           "precision": 1.0,
           "recall": 1.0
         },
-        "support": 15
+        "support": 20
       },
       {
         "difficulty": "medium",
@@ -3029,7 +4981,7 @@
           "precision": 1.0,
           "recall": 1.0
         },
-        "support": 12
+        "support": 13
       },
       {
         "difficulty": "hard",
@@ -3050,19 +5002,19 @@
       "worst_case_id": null
     },
     "efficiency": {
-      "candidates_generated": 225,
-      "candidates_reviewed": 225,
+      "candidates_generated": 243,
+      "candidates_reviewed": 243,
       "candidates_skipped": 0,
-      "input_tokens_per_tp": 681.8181818181819,
-      "output_tokens_per_tp": 340.90909090909093,
-      "provider_calls": 225,
-      "provider_calls_per_tp": 6.818181818181818,
-      "reviewer_input_tokens": 22500,
-      "reviewer_output_tokens": 11250
+      "input_tokens_per_tp": 623.0769230769231,
+      "output_tokens_per_tp": 311.53846153846155,
+      "provider_calls": 243,
+      "provider_calls_per_tp": 6.230769230769231,
+      "reviewer_input_tokens": 24300,
+      "reviewer_output_tokens": 12150
     },
     "hallucination": {
-      "accepted_findings": 34,
-      "proposals_before_validation": 33,
+      "accepted_findings": 43,
+      "proposals_before_validation": 36,
       "unsupported_after_validation": 0,
       "unsupported_before_validation": 0,
       "unsupported_rate_after_validation": 0.0,
@@ -3070,16 +5022,16 @@
     },
     "missed_expected": [],
     "overall": {
-      "cases": 53,
+      "cases": 59,
       "confusion": {
-        "duplicates": 0,
+        "duplicates": 3,
         "false_positives": 0,
         "missed": 0,
         "out_of_scope": 1,
-        "true_positives": 33,
+        "true_positives": 39,
         "unsupported": 0
       },
-      "duplicate_rate": 0.0,
+      "duplicate_rate": 0.06976744186046512,
       "error_cases": 0,
       "false_positives_per_100_candidates": 0.0,
       "false_positives_per_case": 0.0,
@@ -3091,18 +5043,2418 @@
       "unsupported_rate": 0.0
     },
     "severity": {
-      "exact_match_rate": 1.0,
-      "matched_pairs": 33,
+      "exact_match_rate": 0.9743589743589743,
+      "matched_pairs": 39,
       "overstatement_rate": 0.0,
-      "understatement_rate": 0.0,
+      "understatement_rate": 0.02564102564102564,
       "within_one_level_rate": 1.0
     },
     "static_ai_overlap": {
       "ai_only": 33,
-      "both": 0,
+      "both": 3,
       "missed_by_both": 0,
-      "static_only": 0
+      "static_only": 3
     },
+    "static_analyzer_coverage": [
+      {
+        "analyzer": "clang_tidy",
+        "attempted": 22,
+        "failed": 0,
+        "skipped": 0,
+        "succeeded": 0,
+        "timed_out": 0,
+        "total_raw_findings": 0,
+        "unsupported": 22
+      },
+      {
+        "analyzer": "cppcheck",
+        "attempted": 22,
+        "failed": 0,
+        "skipped": 0,
+        "succeeded": 0,
+        "timed_out": 0,
+        "total_raw_findings": 0,
+        "unsupported": 22
+      },
+      {
+        "analyzer": "ruff",
+        "attempted": 37,
+        "failed": 0,
+        "skipped": 0,
+        "succeeded": 37,
+        "timed_out": 0,
+        "total_raw_findings": 4,
+        "unsupported": 0
+      },
+      {
+        "analyzer": "semgrep",
+        "attempted": 59,
+        "failed": 0,
+        "skipped": 0,
+        "succeeded": 59,
+        "timed_out": 0,
+        "total_raw_findings": 5,
+        "unsupported": 0
+      }
+    ],
     "worst_false_positive_cases": []
+  },
+  "static_only": {
+    "case_results": [
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 1,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 1,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "both-py-bare-except-hides-bug",
+        "critic_enabled": true,
+        "duration_ms": 4250.4325170011725,
+        "error": null,
+        "expected_outcomes": [
+          {
+            "detail": "matched by prediction #0",
+            "expected": {
+              "category": "correctness",
+              "evidence_contains": null,
+              "file": "src/parser.py",
+              "ground_truth_source": "either",
+              "id": "ef1",
+              "issue_family": "bare_except",
+              "line": 4,
+              "line_end": null,
+              "line_tolerance": 3,
+              "notes": "bare except: silently converts a malformed amount to 0.0 instead of propagating the error.",
+              "severity": "high",
+              "severity_max": null,
+              "severity_min": null,
+              "symbol": "parse_amount"
+            },
+            "matched_prediction_index": 0,
+            "outcome": "found"
+          }
+        ],
+        "mode": "static_only",
+        "predictions": [
+          {
+            "detail": "matches expected finding 'ef1'",
+            "forbidden_reason": null,
+            "matched_expected_id": "ef1",
+            "outcome": "true_positive",
+            "prediction": {
+              "category": "correctness",
+              "end_line": 4,
+              "evidence_text": "Do not use bare `except`",
+              "file_path": "src/parser.py",
+              "message": "Do not use bare `except`",
+              "severity": "medium",
+              "source": "static",
+              "start_line": 4,
+              "symbol_qualified_name": "parse_amount",
+              "title": "bare-except"
+            }
+          }
+        ],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "completed_with_findings"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 1,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "both-py-eval-usage",
+        "critic_enabled": true,
+        "duration_ms": 4832.498011994176,
+        "error": null,
+        "expected_outcomes": [
+          {
+            "detail": "matched by prediction #0",
+            "expected": {
+              "category": "security",
+              "evidence_contains": null,
+              "file": "src/calculator.py",
+              "ground_truth_source": "either",
+              "id": "ef1",
+              "issue_family": "eval_usage",
+              "line": 8,
+              "line_end": null,
+              "line_tolerance": 3,
+              "notes": "eval() on the raw expr argument executes arbitrary code if the caller ever passes untrusted input.",
+              "severity": "high",
+              "severity_max": null,
+              "severity_min": null,
+              "symbol": "evaluate_expression"
+            },
+            "matched_prediction_index": 0,
+            "outcome": "found"
+          }
+        ],
+        "mode": "static_only",
+        "predictions": [
+          {
+            "detail": "matches expected finding 'ef1'",
+            "forbidden_reason": null,
+            "matched_expected_id": "ef1",
+            "outcome": "true_positive",
+            "prediction": {
+              "category": "security",
+              "end_line": 8,
+              "evidence_text": "eval() on data that may be attacker-influenced can execute arbitrary code.",
+              "file_path": "src/calculator.py",
+              "message": "eval() on data that may be attacker-influenced can execute arbitrary code.",
+              "severity": "high",
+              "source": "static",
+              "start_line": 8,
+              "symbol_qualified_name": "evaluate_expression",
+              "title": "patchfrog-python-eval-usage"
+            }
+          }
+        ],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "completed_with_findings"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 1,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "both-py-undefined-name-in-branch",
+        "critic_enabled": true,
+        "duration_ms": 4812.846864995663,
+        "error": null,
+        "expected_outcomes": [
+          {
+            "detail": "matched by prediction #0",
+            "expected": {
+              "category": "correctness",
+              "evidence_contains": null,
+              "file": "src/notifier.py",
+              "ground_truth_source": "either",
+              "id": "ef1",
+              "issue_family": "undefined_name",
+              "line": 7,
+              "line_end": null,
+              "line_tolerance": 3,
+              "notes": "mesage is undefined (typo for message); only reachable in the critical branch.",
+              "severity": "high",
+              "severity_max": null,
+              "severity_min": null,
+              "symbol": "format_alert"
+            },
+            "matched_prediction_index": 0,
+            "outcome": "found"
+          }
+        ],
+        "mode": "static_only",
+        "predictions": [
+          {
+            "detail": "matches expected finding 'ef1'",
+            "forbidden_reason": null,
+            "matched_expected_id": "ef1",
+            "outcome": "true_positive",
+            "prediction": {
+              "category": "correctness",
+              "end_line": 7,
+              "evidence_text": "Undefined name `mesage`",
+              "file_path": "src/notifier.py",
+              "message": "Undefined name `mesage`",
+              "severity": "high",
+              "source": "static",
+              "start_line": 7,
+              "symbol_qualified_name": "format_alert",
+              "title": "undefined-name"
+            }
+          }
+        ],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "completed_with_findings"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "c-buffer-overflow-off-by-one",
+        "critic_enabled": true,
+        "duration_ms": 4609.421403991291,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "c-double-free",
+        "critic_enabled": true,
+        "duration_ms": 4840.231212991057,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "c-file-handle-leak",
+        "critic_enabled": true,
+        "duration_ms": 5399.7931640042225,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "c-integer-overflow-wraparound",
+        "critic_enabled": true,
+        "duration_ms": 4554.138050996698,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "c-memory-leak",
+        "critic_enabled": true,
+        "duration_ms": 4192.2328649961855,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "c-use-after-free",
+        "critic_enabled": true,
+        "duration_ms": 4127.464940000209,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-c-correct-bounds-loop",
+        "critic_enabled": true,
+        "duration_ms": 4554.851774999406,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-c-correct-realloc-pattern",
+        "critic_enabled": true,
+        "duration_ms": 4425.656469989917,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-c-defensive-null-check",
+        "critic_enabled": true,
+        "duration_ms": 4546.58724500041,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-c-manual-memory-valid",
+        "critic_enabled": true,
+        "duration_ms": 4564.892801005044,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-c-safe-lock-sequence",
+        "critic_enabled": true,
+        "duration_ms": 4019.8342590010725,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-c-unusual-cast-correct",
+        "critic_enabled": true,
+        "duration_ms": 4121.812452998711,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-cpp-empty-catch-rethrow-documented",
+        "critic_enabled": true,
+        "duration_ms": 3906.4058369986014,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-cpp-move-semantics-correct",
+        "critic_enabled": true,
+        "duration_ms": 3952.438703010557,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-cpp-raii-correct",
+        "critic_enabled": true,
+        "duration_ms": 4052.7902920002816,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-cpp-unused-looking-branch-required",
+        "critic_enabled": true,
+        "duration_ms": 4635.733902003267,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-py-checked-error-documented-ignore",
+        "critic_enabled": true,
+        "duration_ms": 4439.287973989849,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-py-correct-generator-exhaustion",
+        "critic_enabled": true,
+        "duration_ms": 4274.255042997538,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-py-correct-recursion-base-case",
+        "critic_enabled": true,
+        "duration_ms": 4377.000672000577,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-py-dead-code-required-by-api",
+        "critic_enabled": true,
+        "duration_ms": 4884.874976007268,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-py-defensive-check",
+        "critic_enabled": true,
+        "duration_ms": 4148.906401998829,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-py-intentional-empty-except",
+        "critic_enabled": true,
+        "duration_ms": 4273.090546004823,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-py-performance-tradeoff-intentional",
+        "critic_enabled": true,
+        "duration_ms": 4573.753480988671,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-py-prompt-injection-comment-no-bug",
+        "critic_enabled": true,
+        "duration_ms": 4363.893180998275,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-py-suspicious-var-names",
+        "critic_enabled": true,
+        "duration_ms": 4398.163193996879,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "clean-py-unusual-but-correct-boundary",
+        "critic_enabled": true,
+        "duration_ms": 4340.57559199573,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "cpp-dangling-reference",
+        "critic_enabled": true,
+        "duration_ms": 5058.877722010948,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "cpp-missing-lock-race",
+        "critic_enabled": true,
+        "duration_ms": 4901.430343001266,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "cpp-ownership-mistake-raw-pointer",
+        "critic_enabled": true,
+        "duration_ms": 5712.421023999923,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 1,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "hard-c-cross-file-null-check-removed",
+        "critic_enabled": true,
+        "duration_ms": 5100.27557000285,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [
+          {
+            "detail": "matches a forbidden rule for this case",
+            "forbidden_reason": "parse_line itself is correct and must not be flagged",
+            "matched_expected_id": null,
+            "outcome": "out_of_scope",
+            "prediction": {
+              "category": "memory_safety",
+              "end_line": 25,
+              "evidence_text": "strcpy() performs no bounds checking and can overflow the destination buffer.",
+              "file_path": "parse.c",
+              "message": "strcpy() performs no bounds checking and can overflow the destination buffer.",
+              "severity": "high",
+              "source": "static",
+              "start_line": 25,
+              "symbol_qualified_name": "parse_line",
+              "title": "patchfrog-c-unsafe-strcpy"
+            }
+          }
+        ],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "completed_with_findings"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "hard-cpp-cross-file-ownership-leak",
+        "critic_enabled": true,
+        "duration_ms": 4946.744616012438,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "hard-py-caller-callee-argument-swap",
+        "critic_enabled": true,
+        "duration_ms": 4579.470259006484,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "hard-py-cross-file-contract-violation",
+        "critic_enabled": true,
+        "duration_ms": 4156.481352998526,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "hard-py-cross-file-error-propagation",
+        "critic_enabled": true,
+        "duration_ms": 5554.19626100047,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "hard-py-stale-cache-invalidation",
+        "critic_enabled": true,
+        "duration_ms": 5124.901508010225,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-auth-bypass",
+        "critic_enabled": true,
+        "duration_ms": 4427.85952599661,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-boundary-condition-fencepost",
+        "critic_enabled": true,
+        "duration_ms": 5296.774806993199,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-ignored-error-return",
+        "critic_enabled": true,
+        "duration_ms": 5326.043299006415,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-incorrect-return-propagation",
+        "critic_enabled": true,
+        "duration_ms": 4829.507803005981,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-inverted-boundary",
+        "critic_enabled": true,
+        "duration_ms": 5306.365181008005,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-missing-lock-shared-state",
+        "critic_enabled": true,
+        "duration_ms": 4767.459523995058,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-missing-validation",
+        "critic_enabled": true,
+        "duration_ms": 5404.146275992389,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-n-plus-one-query",
+        "critic_enabled": true,
+        "duration_ms": 4822.211178994621,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-off-by-one-loop",
+        "critic_enabled": true,
+        "duration_ms": 4266.660925000906,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-path-traversal",
+        "critic_enabled": true,
+        "duration_ms": 4925.57042100816,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-pathological-repeated-work",
+        "critic_enabled": true,
+        "duration_ms": 4789.541899997857,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-prompt-injection-hidden-bug",
+        "critic_enabled": true,
+        "duration_ms": 4460.153523992631,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-race-condition-counter",
+        "critic_enabled": true,
+        "duration_ms": 4328.542999995989,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-stale-state-update",
+        "critic_enabled": true,
+        "duration_ms": 4738.6625969957095,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-unsafe-trust-boundary",
+        "critic_enabled": true,
+        "duration_ms": 5093.91086200776,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-wrong-argument-semantics",
+        "critic_enabled": true,
+        "duration_ms": 4634.43776400527,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-wrong-boolean-branch",
+        "critic_enabled": true,
+        "duration_ms": 4835.405574995093,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "py-wrong-default-fallback",
+        "critic_enabled": true,
+        "duration_ms": 4796.86864100222,
+        "error": null,
+        "expected_outcomes": [],
+        "mode": "static_only",
+        "predictions": [],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "passed"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "cppcheck",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "clang_tidy",
+            "raw_findings_count": 0,
+            "status": "unsupported"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 1,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "static-c-unsafe-strcpy",
+        "critic_enabled": true,
+        "duration_ms": 5082.773105998058,
+        "error": null,
+        "expected_outcomes": [
+          {
+            "detail": "matched by prediction #0",
+            "expected": {
+              "category": "memory_safety",
+              "evidence_contains": null,
+              "file": "names.c",
+              "ground_truth_source": "static_expected",
+              "id": "ef1",
+              "issue_family": "unsafe_strcpy",
+              "line": 8,
+              "line_end": null,
+              "line_tolerance": 3,
+              "notes": "strcpy performs no bounds checking; semgrep's bundled rule catches this without any AI call.",
+              "severity": "high",
+              "severity_max": null,
+              "severity_min": null,
+              "symbol": "copy_display_name"
+            },
+            "matched_prediction_index": 0,
+            "outcome": "found"
+          }
+        ],
+        "mode": "static_only",
+        "predictions": [
+          {
+            "detail": "matches expected finding 'ef1'",
+            "forbidden_reason": null,
+            "matched_expected_id": "ef1",
+            "outcome": "true_positive",
+            "prediction": {
+              "category": "memory_safety",
+              "end_line": 8,
+              "evidence_text": "strcpy() performs no bounds checking and can overflow the destination buffer.",
+              "file_path": "names.c",
+              "message": "strcpy() performs no bounds checking and can overflow the destination buffer.",
+              "severity": "high",
+              "source": "static",
+              "start_line": 8,
+              "symbol_qualified_name": "copy_display_name",
+              "title": "patchfrog-c-unsafe-strcpy"
+            }
+          }
+        ],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "completed_with_findings"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 1,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 1,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "static-py-bare-except-swallows-errors",
+        "critic_enabled": true,
+        "duration_ms": 4664.943049006979,
+        "error": null,
+        "expected_outcomes": [
+          {
+            "detail": "matched by prediction #0",
+            "expected": {
+              "category": "correctness",
+              "evidence_contains": null,
+              "file": "src/importer.py",
+              "ground_truth_source": "static_expected",
+              "id": "ef1",
+              "issue_family": "bare_except",
+              "line": 8,
+              "line_end": null,
+              "line_tolerance": 3,
+              "notes": "bare except: swallows all exceptions; ruff's E722 rule catches this without any AI call.",
+              "severity": "medium",
+              "severity_max": null,
+              "severity_min": null,
+              "symbol": "load_config"
+            },
+            "matched_prediction_index": 0,
+            "outcome": "found"
+          }
+        ],
+        "mode": "static_only",
+        "predictions": [
+          {
+            "detail": "matches expected finding 'ef1'",
+            "forbidden_reason": null,
+            "matched_expected_id": "ef1",
+            "outcome": "true_positive",
+            "prediction": {
+              "category": "correctness",
+              "end_line": 8,
+              "evidence_text": "Do not use bare `except`",
+              "file_path": "src/importer.py",
+              "message": "Do not use bare `except`",
+              "severity": "medium",
+              "source": "static",
+              "start_line": 8,
+              "symbol_qualified_name": "load_config",
+              "title": "bare-except"
+            }
+          }
+        ],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "completed_with_findings"
+      },
+      {
+        "analyzer_executions": [
+          {
+            "analyzer": "ruff",
+            "raw_findings_count": 1,
+            "status": "succeeded"
+          },
+          {
+            "analyzer": "semgrep",
+            "raw_findings_count": 0,
+            "status": "succeeded"
+          }
+        ],
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "case_id": "static-py-undefined-name",
+        "critic_enabled": true,
+        "duration_ms": 4517.331669005216,
+        "error": null,
+        "expected_outcomes": [
+          {
+            "detail": "matched by prediction #0",
+            "expected": {
+              "category": "correctness",
+              "evidence_contains": null,
+              "file": "src/summary.py",
+              "ground_truth_source": "static_expected",
+              "id": "ef1",
+              "issue_family": "undefined_name",
+              "line": 5,
+              "line_end": null,
+              "line_tolerance": 3,
+              "notes": "total_items is undefined; ruff's F821 rule catches this without any AI call.",
+              "severity": "high",
+              "severity_max": null,
+              "severity_min": null,
+              "symbol": "build_summary"
+            },
+            "matched_prediction_index": 0,
+            "outcome": "found"
+          }
+        ],
+        "mode": "static_only",
+        "predictions": [
+          {
+            "detail": "matches expected finding 'ef1'",
+            "forbidden_reason": null,
+            "matched_expected_id": "ef1",
+            "outcome": "true_positive",
+            "prediction": {
+              "category": "correctness",
+              "end_line": 5,
+              "evidence_text": "Undefined name `total_items`",
+              "file_path": "src/summary.py",
+              "message": "Undefined name `total_items`",
+              "severity": "high",
+              "source": "static",
+              "start_line": 5,
+              "symbol_qualified_name": "build_summary",
+              "title": "undefined-name"
+            }
+          }
+        ],
+        "proposals_before_validation": [],
+        "provider_calls": 0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0,
+        "status": "completed_with_findings"
+      }
+    ],
+    "duration_ms": 275006.48840398935,
+    "generated_at": "2026-08-21T17:11:32.862916+00:00",
+    "identity": {
+      "case_fixture_hashes": {
+        "both-py-bare-except-hides-bug": "a26eb4593657eb3f3185cc2d8eae393c76120746901e302efc21d5cf4873a1f7",
+        "both-py-eval-usage": "325ff2fe614d565b0b5f5181ff99c54008ad6b41ebf08c5c01ef710b713b40cf",
+        "both-py-undefined-name-in-branch": "e928d07dbc501d28e4afdaabd4f51b9644fa3fcd810f39d727316a1a90ed7597",
+        "c-buffer-overflow-off-by-one": "a7eb1a6c32e6fa9c2f3ff6fe75c2c71c90df6a55ada0454e7b77d977f39fc88d",
+        "c-double-free": "347f6d5fdffc0129ca3505690ba1e1baba2a7a8db2e262c1a711049b86461c34",
+        "c-file-handle-leak": "de42cda864e2a7eb1fa3e2420bc6835ff75a2bbcd3969579a0643b1c061b1b73",
+        "c-integer-overflow-wraparound": "8a12d2743eb49035fe8146e0dffc237d2a8d4934007ab88a06b601ee26e499ec",
+        "c-memory-leak": "53f725d16ef5db9cc9b06d80d01baa0b8bda1a6a51263a5bf74954e14494a6b6",
+        "c-use-after-free": "2cebe815f3ff220c8036158bae62c4a5c8f3f4fc705131e83d655e08dce157f8",
+        "clean-c-correct-bounds-loop": "67c4d0eb6c1706a85a851a83777385459eaab5236ebfe673bd50d55fe93708b3",
+        "clean-c-correct-realloc-pattern": "1d676cbf744eadf97e675376cee0084b53493d92b1f93e9898acbfde379559a7",
+        "clean-c-defensive-null-check": "2063a800c55f07a1b252e586eb7236811e080f774f958b2ba0a4d1cf033e40d1",
+        "clean-c-manual-memory-valid": "ded422b942d8ab8cb62fda754114957423629b6b72567a9aab99f5e01f2e1719",
+        "clean-c-safe-lock-sequence": "43ed9e907572538397c8873015302721b0a82d4812508b92129e196d2827dade",
+        "clean-c-unusual-cast-correct": "4e618c1ddee43d641f8b461c0dec89055cdbe8f884edffc22a70981bdf5e8617",
+        "clean-cpp-empty-catch-rethrow-documented": "e985c9d16b8f9dfc5c7871f482ddb023513d746ed2b8a3705eea8bd4fa00dd7f",
+        "clean-cpp-move-semantics-correct": "24df87deb56bc637ff43da8e37a986ff9b5a6776fd282bdec14ea4569fcc4812",
+        "clean-cpp-raii-correct": "83a56ea31010e8c455eab279032751ef50b31914fcf522f38ad946501ed258cd",
+        "clean-cpp-unused-looking-branch-required": "e456c79eaddb312f8d1c8e91e68a2ee95acc5c538702d3d0415b85bf306c110e",
+        "clean-py-checked-error-documented-ignore": "50631d0a8875488153688519b32502a98e28a972dbdc11ea4ed1630ccb87dab2",
+        "clean-py-correct-generator-exhaustion": "4668dd8280f5a0ebedfb37f3b1a9bfcde380812c89dd942f568a5ab6997e4a57",
+        "clean-py-correct-recursion-base-case": "d267868e90d321d6a224e5fa3d2aa6c6263d948ed7f4a8dbe0aa17bb5bf854e0",
+        "clean-py-dead-code-required-by-api": "5802eae72abdad6cd254cc90cfde82bd112d193e0a37de1082756bea75cda17e",
+        "clean-py-defensive-check": "379d8700faed17173bcfc6e688333532056dbb70d7caf698a97e84bd8a499619",
+        "clean-py-intentional-empty-except": "013f24ece2944d75d5b1e2d5d1c35b5c73a7346f692a1e32465f84b83be2afd4",
+        "clean-py-performance-tradeoff-intentional": "c73fd7ac9dad30e2c3c6bf7957b2a555d2741ab6fad940a245eacca1a9770f8a",
+        "clean-py-prompt-injection-comment-no-bug": "1f70b23624ea7555831227e415ca7dc2a735d96de4e02c2537d957c816c4a35a",
+        "clean-py-suspicious-var-names": "510481aaa447945c056d66eeb7039307eb16507e0febbb24270203277ed45886",
+        "clean-py-unusual-but-correct-boundary": "f672b6f5591a805da287389f24ca12ccf2c0b23b0db7033c8b28cb6c66aad99a",
+        "cpp-dangling-reference": "818ad719e076f7f33a233aa10d3dc5ff18686a0879de06f45a27a01786257ad3",
+        "cpp-missing-lock-race": "9b010e93e9b3029eb92b9b827d53eeb57ea365f6978acf9f409f1a8e28845034",
+        "cpp-ownership-mistake-raw-pointer": "dba999c946e0c225fdcf2e53cf0ed9dd4cfe6e81e91a0b7d7b20bc039b7507fd",
+        "hard-c-cross-file-null-check-removed": "b1d46b35e3b9e786226cdc717dfbd343da0e30f08c0f8fdbd89e114dcde3d95e",
+        "hard-cpp-cross-file-ownership-leak": "2d8ddc8e792b26566186c8b8605e12ee594dee91961256ac20de921a538b0a19",
+        "hard-py-caller-callee-argument-swap": "04cd70868c95a3e1d40c348667c5284f2099712bf48bdc92840c99e0676f2ba9",
+        "hard-py-cross-file-contract-violation": "87c353168654883bfd67759dc6ec1e9117a0f2aaf9cf397d4c3501d7bfeec226",
+        "hard-py-cross-file-error-propagation": "07e9eec90db840933a5bf1ac0314d30bc87dd728db5cb38c1f38cb7db8892afe",
+        "hard-py-stale-cache-invalidation": "745e126e689b0a58e44475686413ca232797a6733923f43e9cf4262d9d8b0e0f",
+        "py-auth-bypass": "60dae83bcf33c7aff783a4d2a5a55009a599aa95c78c51c51090959da8261cb0",
+        "py-boundary-condition-fencepost": "cb5d9e6bc148307a7e8fc0cd0beb56e0295088ce75e240202fb214260c77010d",
+        "py-ignored-error-return": "3566ccb2136e521b4a9b7c11e228d5c3903d46dd356368c15a966c15b8782a54",
+        "py-incorrect-return-propagation": "f091243d553bf33bd00f8661cb1a4dad4c083fe89b919eed8bb238efddba3a30",
+        "py-inverted-boundary": "095de93f75cd846c5fee2dee8cb60f3be8bb102080ab0017fd5c03ddfa4af6c4",
+        "py-missing-lock-shared-state": "8e51e1d44ebd55b085b2c3364b5fee78875e1bcf1ac0ce76acaabe9882ce8743",
+        "py-missing-validation": "9ceb0e6e931cab5713221799d99e3e45eef6b9c5dad3eb0116575021dd769ecf",
+        "py-n-plus-one-query": "8b1567cd90d0407b03bef0e624b94a8d324bac9d82b256d13039f03fa7ae491e",
+        "py-off-by-one-loop": "5e3a9ef9ec28d7fa2255e667e509998a64c37969080ea59edfc25b3d73023fa9",
+        "py-path-traversal": "c7abb3f404e851202b0e604dd96d0d5cbdae60dc61ae5737137df3162a472842",
+        "py-pathological-repeated-work": "05fac4fcad7e483a951e53b9f22cacc0e68d822f987f2788e1864b07c37e3574",
+        "py-prompt-injection-hidden-bug": "70fa04b06537f0cd6a0e4a7da1f38659321b716b0945ea1c710265f5a2015f7f",
+        "py-race-condition-counter": "2309bc5f0e827f95f492bceacfe760bc7d708569d0b2f05b28c1a6c8be24b865",
+        "py-stale-state-update": "80bb43fca2b62c3c13eb969c9acd97fffc752d5f6d9720820c76e8892efe89a7",
+        "py-unsafe-trust-boundary": "64256940ce09c394dc4cc99f8a20f392bc795ff8d0b8dc6df8035b4cbf4bf9e5",
+        "py-wrong-argument-semantics": "0a338d119aa7289c84adc5c0869610badce9f9170620239cc4a365a4556e9e88",
+        "py-wrong-boolean-branch": "00f9b2d0505844edbc2bfa2e9aee00abeec00c500a75243592be92e5133916ad",
+        "py-wrong-default-fallback": "e0a213bafea6f638991049144b76e0b9a3aded9d5109016ba2515ff8b37e29f6",
+        "static-c-unsafe-strcpy": "591f8325d2eb5f50b93a29eb47036d936a5a39ab61ea588aecbbfc74edcb03f2",
+        "static-py-bare-except-swallows-errors": "0cf0bc8a5fd2323a0b5101017f87984b4172c8d21f1a8ffbe96b9e991dc78f68",
+        "static-py-undefined-name": "6d832a8266e5e75096789dd05f16080f513841cab1adeebd55c76e3bd4dd1414"
+      },
+      "critic_enabled": false,
+      "evaluation_benchmark_version": 1,
+      "evaluation_engine_version": 1,
+      "incremental_review_engine_version": 1,
+      "mode": "static_only",
+      "review_engine_version": 1,
+      "review_memory_version": 1,
+      "review_policy_version": 1,
+      "review_prompt_version": 1,
+      "reviewer_model": "oracle-v1",
+      "reviewer_provider": "fake-oracle",
+      "static_toolchain_available": true
+    },
+    "incremental": null,
+    "label": "STATIC_ONLY: the real Phase 3 static-analysis engine (ruff/semgrep/cppcheck/clang-tidy, whichever are actually installed), no LLM involved at all",
+    "metrics": {
+      "by_category": [
+        {
+          "category": "correctness",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 4,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 4
+        },
+        {
+          "category": "memory_safety",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 1,
+            "true_positives": 1,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 1
+        },
+        {
+          "category": "security",
+          "confusion": {
+            "duplicates": 0,
+            "false_positives": 0,
+            "missed": 0,
+            "out_of_scope": 0,
+            "true_positives": 1,
+            "unsupported": 0
+          },
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 1
+        }
+      ],
+      "by_difficulty": [
+        {
+          "difficulty": "easy",
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 5
+        },
+        {
+          "difficulty": "medium",
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 1
+        },
+        {
+          "difficulty": "hard",
+          "scores": {
+            "f1": 1.0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "support": 0
+        }
+      ],
+      "clean": {
+        "average_findings_on_clean_cases": 0.0,
+        "clean_cases": 20,
+        "clean_cases_passed": 20,
+        "pass_rate": 1.0,
+        "worst_case_finding_count": 0,
+        "worst_case_id": null
+      },
+      "efficiency": {
+        "candidates_generated": 0,
+        "candidates_reviewed": 0,
+        "candidates_skipped": 0,
+        "input_tokens_per_tp": 0.0,
+        "output_tokens_per_tp": 0.0,
+        "provider_calls": 0,
+        "provider_calls_per_tp": 0.0,
+        "reviewer_input_tokens": 0,
+        "reviewer_output_tokens": 0
+      },
+      "hallucination": {
+        "accepted_findings": 7,
+        "proposals_before_validation": 0,
+        "unsupported_after_validation": 0,
+        "unsupported_before_validation": 0,
+        "unsupported_rate_after_validation": 0.0,
+        "unsupported_rate_before_validation": 0.0
+      },
+      "missed_expected": [],
+      "overall": {
+        "cases": 59,
+        "confusion": {
+          "duplicates": 0,
+          "false_positives": 0,
+          "missed": 0,
+          "out_of_scope": 1,
+          "true_positives": 6,
+          "unsupported": 0
+        },
+        "duplicate_rate": 0.0,
+        "error_cases": 0,
+        "false_positives_per_100_candidates": 0.0,
+        "false_positives_per_case": 0.0,
+        "scores": {
+          "f1": 1.0,
+          "precision": 1.0,
+          "recall": 1.0
+        },
+        "unsupported_rate": 0.0
+      },
+      "severity": {
+        "exact_match_rate": 0.8333333333333334,
+        "matched_pairs": 6,
+        "overstatement_rate": 0.0,
+        "understatement_rate": 0.16666666666666666,
+        "within_one_level_rate": 1.0
+      },
+      "static_ai_overlap": {
+        "ai_only": 0,
+        "both": 0,
+        "missed_by_both": 0,
+        "static_only": 6
+      },
+      "static_analyzer_coverage": [
+        {
+          "analyzer": "clang_tidy",
+          "attempted": 22,
+          "failed": 0,
+          "skipped": 0,
+          "succeeded": 0,
+          "timed_out": 0,
+          "total_raw_findings": 0,
+          "unsupported": 22
+        },
+        {
+          "analyzer": "cppcheck",
+          "attempted": 22,
+          "failed": 0,
+          "skipped": 0,
+          "succeeded": 0,
+          "timed_out": 0,
+          "total_raw_findings": 0,
+          "unsupported": 22
+        },
+        {
+          "analyzer": "ruff",
+          "attempted": 37,
+          "failed": 0,
+          "skipped": 0,
+          "succeeded": 37,
+          "timed_out": 0,
+          "total_raw_findings": 4,
+          "unsupported": 0
+        },
+        {
+          "analyzer": "semgrep",
+          "attempted": 59,
+          "failed": 0,
+          "skipped": 0,
+          "succeeded": 59,
+          "timed_out": 0,
+          "total_raw_findings": 5,
+          "unsupported": 0
+        }
+      ],
+      "worst_false_positive_cases": []
+    }
   }
 }

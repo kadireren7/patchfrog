@@ -42,6 +42,7 @@ from patchfrog.diff.parser import build_diff_file
 from patchfrog.evaluation.domain import (
     EVALUATION_BENCHMARK_VERSION,
     EVALUATION_ENGINE_VERSION,
+    AnalyzerExecutionSummary,
     CaseResult,
     CaseStatus,
     EvaluationCase,
@@ -317,6 +318,7 @@ class EvaluationRunner:
             fixture_info = fixture_info_for_case(case, cases_root=cases_root)
 
             static_predictions: list[PredictedFinding] = []
+            analyzer_executions: list[AnalyzerExecutionSummary] = []
             if mode in (EvaluationMode.STATIC_ONLY, EvaluationMode.FULL_PIPELINE):
                 await self._static.analyze_local_repository(
                     repository_id=repository_id, root_path=repo_root, repository_full_name=full_name
@@ -330,6 +332,15 @@ class EvaluationRunner:
                             session, analysis_run_id=analysis_run.id
                         )
                         static_predictions = [_static_to_predicted(f) for f in findings]
+                        executions = await self._analysis_queries.get_analyzer_executions(
+                            session, analysis_run_id=analysis_run.id
+                        )
+                        analyzer_executions = [
+                            AnalyzerExecutionSummary(
+                                analyzer=e.analyzer, status=e.status.value, raw_findings_count=e.raw_findings_count,
+                            )
+                            for e in executions
+                        ]
 
             ai_predictions: list[PredictedFinding] = []
             proposals_predicted: list[PredictedFinding] = []
@@ -389,6 +400,7 @@ class EvaluationRunner:
                 candidates_generated=candidates_generated, candidates_reviewed=candidates_reviewed,
                 candidates_skipped=candidates_skipped, provider_calls=provider_calls,
                 reviewer_input_tokens=reviewer_input_tokens, reviewer_output_tokens=reviewer_output_tokens,
+                analyzer_executions=tuple(analyzer_executions),
             )
         finally:
             shutil.rmtree(repo_root, ignore_errors=True)

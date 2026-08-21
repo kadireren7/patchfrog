@@ -1,0 +1,28 @@
+case:
+  id: static-py-bare-except-swallows-errors
+  title: Bare except swallows all errors, caught by ruff's E722 rule
+  description: >
+    load_config's bare `except:` swallows every exception, including
+    KeyboardInterrupt and SystemExit, and hides real parsing/IO errors
+    as if the config file were simply absent. Ruff's default E722 rule
+    catches this without any AI call. Marked static_expected (not
+    either) so the static/AI overlap matrix shows a genuine
+    static-only true positive.
+  language: python
+  difficulty: easy
+  tags: [error-propagation]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/importer.py
+    symbol: load_config
+    issue_family: bare_except
+    severity: medium
+    line: 8
+    ground_truth_source: static_expected
+    notes: "bare except: swallows all exceptions; ruff's E722 rule catches this without any AI call."
+
+forbidden:
+  - reason: load_defaults is correct and must not be flagged
+    category: maintainability

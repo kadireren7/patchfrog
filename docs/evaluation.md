@@ -55,7 +55,7 @@ large false-positive increase. `regression.py` encodes this directly:
 the default precision-drop threshold is a strict 3 points, while the
 recall-drop threshold is a much looser 10 points.
 
-**Clean cases are mandatory, not optional.** ~38% of the corpus (20/53
+**Clean cases are mandatory, not optional.** ~34% of the corpus (20/59
 at the time of writing) is intentionally bug-free code that is designed
 to *look* suspicious — a "false-positive trap." A benchmark with only
 bugs cannot measure false positives at all.
@@ -107,14 +107,26 @@ python -m patchfrog.cli eval run --case py-inverted-boundary --case c-memory-lea
 # Static analyzers only, no LLM at all:
 python -m patchfrog.cli eval run --mode static_only
 
+# STATIC_ONLY reported as its own section (TP/FP/missed, per-analyzer
+# coverage, clean-case static false positives) alongside a FULL_PIPELINE
+# run -- together with FULL_PIPELINE's own static_ai_overlap metric,
+# this is the real static-vs-AI overlap matrix (real static output +
+# oracle AI output, not two independently-run numbers):
+python -m patchfrog.cli eval run --static-only-comparison
+
 # Critic value measurement (runs the corpus twice: critic off, critic on):
 python -m patchfrog.cli eval run --critic both
 
-# Context Engine ablation (normal ranked context vs. target-only):
+# Context Engine ablation (normal ranked context vs. target-only vs.
+# no-extra-context -- target symbol alone, nothing else):
 python -m patchfrog.cli eval run --context-ablation
 
 # Phase 7 incremental-review-memory scenarios:
 python -m patchfrog.cli eval run --incremental-scenarios
+
+# Everything at once (what the committed baseline is generated with):
+python -m patchfrog.cli eval run --critic both --context-ablation \
+    --static-only-comparison --incremental-scenarios
 
 # Real live-provider run (requires ANTHROPIC_API_KEY):
 python -m patchfrog.cli eval run --provider live
@@ -179,22 +191,40 @@ python -m patchfrog.cli eval report --input evaluation_baselines/phase8_baseline
 - **Category / difficulty breakdown**: every category and difficulty
   level is reported even at low support — never hidden.
 - **Static / AI overlap**: findings caught by static analysis only, AI
-  only, both, or missed by both — measures whether the AI reviewer adds
-  real value beyond what a linter already catches.
+  only, both, or missed by both — a genuine matrix computed from one
+  `FULL_PIPELINE` run's real per-prediction sources (real ruff/semgrep/
+  cppcheck/clang-tidy output alongside the oracle's AI output), never
+  two independently-run numbers stitched together after the fact.
+- **`static_only`** (with `--static-only-comparison`): the real Phase 3
+  engine run standalone, no LLM involved — static TP/FP/missed, a
+  **per-analyzer coverage table** (attempted/succeeded/failed/skipped/
+  unsupported/raw-findings per analyzer — an analyzer that's missing
+  from the machine shows as `unsupported`, never silently as "zero
+  findings"), and clean-case static false positives.
 - **Efficiency**: candidates generated/reviewed/skipped, provider
   calls, input/output tokens — all normalized per true positive so
   models/prompts are comparable.
 - **Incremental review memory**: scenarios passed, total provider calls
   avoided, and — most importantly — `unsafe_carry_forward_count`, which
   must always read `0`.
-- **`critic_comparison`** (with `--critic both`): precision/recall/FP
-  deltas between critic-off and critic-on. The critic is not assumed to
-  always help — measure it every time.
-- **`context_ablation`** (with `--context-ablation`): overall metrics
-  under normal ranked context vs. target-only context. Note this is
-  only informative under `--provider live` — the fake oracle doesn't
-  actually consult context to decide what to report, so a fake-provider
-  ablation run will show no difference by construction.
+- **`critic_comparison`** (with `--critic both`): full metrics (TP/FP/
+  missed/precision/recall, unsupported proposals/final findings,
+  severity overstatement) for critic-off and critic-on separately, plus
+  `precision_delta`/`recall_delta`/`false_positive_delta`/
+  `unsupported_delta`. Always labeled `pipeline/guardrail behavior`
+  under the fake oracle — the critic is not assumed to always help, and
+  this never claims real model-quality evidence; only a `--provider
+  live` run does that.
+- **`context_ablation`** (with `--context-ablation`): full metrics
+  (candidates reviewed, provider calls, TP/FP/missed, input tokens,
+  evidence-validation/hallucination outcomes, wall-clock runtime) under
+  three variants — normal ranked context, target-only, and
+  no-extra-context (just the target symbol, nothing else). Always
+  labeled `pipeline/guardrail behavior` under the fake oracle for the
+  same reason as above: the oracle doesn't actually consult context to
+  decide what to report, so a fake-provider ablation run measures
+  plumbing correctness across context configs, not real semantic
+  quality — only `--provider live` measures that.
 
 ## The benchmark corpus
 
@@ -245,13 +275,26 @@ appear in the file, duplicate expected-finding ids, an accidental
 duplicate `(file, symbol, category, line)` pair, or a forbidden rule
 missing its reason/category.
 
-**Static toolchain note**: this development environment has `ruff`
-available but not `semgrep`/`cppcheck`/`clang-tidy`. Static analysis
-findings for C/C++ fixtures are therefore near-empty here — correctly
+**Static toolchain note**: this development environment has `ruff` and
+`semgrep` available (both pip-installed into the venv) but not the
+system binaries `cppcheck`/`clang-tidy` (the worker Docker image *does*
+bundle both — confirmed by a real `docker build`). A handful of cases
+are deliberately built to be caught by the
+real, installed analyzers without any AI call — `ground_truth_source:
+static_expected` (undefined names via ruff's F821, bare `except:` via
+ruff's E722, an unsafe `strcpy` via PatchFrog's bundled semgrep rule
+`patchfrog-c-unsafe-strcpy`) and `ground_truth_source: either` (a
+second bare-except and an `eval()` case, both caught by *both* ruff/
+semgrep and the AI oracle — a genuine, non-degenerate static/AI overlap
+"both" bucket, not just AI-only). Every other bug case remains
+`ai_expected` — semantic bugs (inverted comparisons, wrong argument
+order, stale cache invalidation, ...) that no static rule is expected
+to catch, and that's the correct, honest state: Phase 8 does not force
+every case to be static-detectable. A missing analyzer is always
 reported as a missing capability (Phase 3's own
-`AnalyzerExecutionStatus.UNSUPPORTED`), never silently treated as "zero
-findings means the code is clean." Every bug case in this corpus is
-labeled `ground_truth_source: ai_expected` for exactly this reason.
+`AnalyzerExecutionStatus.UNSUPPORTED`, surfaced per-analyzer in every
+report's "Static analyzer coverage" table), never silently treated as
+"zero findings means the code is clean."
 
 ## Adding a new case
 

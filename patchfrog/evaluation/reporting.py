@@ -151,6 +151,19 @@ def render_markdown(report: dict[str, Any]) -> str:
         )
         lines.append("")
 
+    coverage = m.get("static_analyzer_coverage") or []
+    if coverage:
+        lines.append("## Static analyzer coverage")
+        lines.append("")
+        lines.append("| analyzer | attempted | succeeded | failed | skipped | unsupported | timed out | raw findings |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|")
+        for a in coverage:
+            lines.append(
+                f"| {a['analyzer']} | {a['attempted']} | {a['succeeded']} | {a['failed']} | {a['skipped']} | "
+                f"{a['unsupported']} | {a['timed_out']} | {a['total_raw_findings']} |"
+            )
+        lines.append("")
+
     lines.append("## Efficiency")
     lines.append("")
     lines.append(
@@ -166,6 +179,83 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"output {efficiency['output_tokens_per_tp']:.1f}"
     )
     lines.append("")
+
+    static_only = report.get("static_only")
+    if static_only is not None:
+        so = static_only["metrics"]["overall"]
+        so_clean = static_only["metrics"]["clean"]
+        lines.append("## STATIC_ONLY (real Phase 3 engine, no LLM)")
+        lines.append("")
+        if static_only.get("label"):
+            lines.append(f"*{static_only['label']}*")
+            lines.append("")
+        lines.append(
+            f"- Static TP: {so['confusion']['true_positives']}  FP: {so['confusion']['false_positives']}  "
+            f"Missed: {so['confusion']['missed']}  Precision: {so['scores']['precision']:.3f}  "
+            f"Recall: {so['scores']['recall']:.3f}"
+        )
+        lines.append(
+            f"- Clean-case static false positives: {so_clean['clean_cases'] - so_clean['clean_cases_passed']} "
+            f"of {so_clean['clean_cases']} clean cases (pass rate {so_clean['pass_rate']:.3f})"
+        )
+        coverage = static_only["metrics"].get("static_analyzer_coverage") or []
+        if coverage:
+            lines.append("")
+            lines.append("| analyzer | attempted | succeeded | failed | skipped | unsupported | raw findings |")
+            lines.append("|---|---:|---:|---:|---:|---:|---:|")
+            for a in coverage:
+                lines.append(
+                    f"| {a['analyzer']} | {a['attempted']} | {a['succeeded']} | {a['failed']} | {a['skipped']} | "
+                    f"{a['unsupported']} | {a['total_raw_findings']} |"
+                )
+        lines.append("")
+
+    critic_comparison = report.get("critic_comparison")
+    if critic_comparison is not None:
+        off = critic_comparison["critic_off"]["overall"]
+        on = critic_comparison["critic_on"]["overall"]
+        off_hallu = critic_comparison["critic_off"]["hallucination"]
+        on_hallu = critic_comparison["critic_on"]["hallucination"]
+        off_sev = critic_comparison["critic_off"]["severity"]
+        on_sev = critic_comparison["critic_on"]["severity"]
+        lines.append("## Critic ON vs. OFF")
+        lines.append("")
+        if critic_comparison.get("label"):
+            lines.append(f"*{critic_comparison['label']}*")
+            lines.append("")
+        lines.append("| | critic OFF | critic ON | delta |")
+        lines.append("|---|---:|---:|---:|")
+        lines.append(f"| TP | {off['confusion']['true_positives']} | {on['confusion']['true_positives']} | {on['confusion']['true_positives'] - off['confusion']['true_positives']} |")
+        lines.append(f"| FP | {off['confusion']['false_positives']} | {on['confusion']['false_positives']} | {critic_comparison['false_positive_delta']} |")
+        lines.append(f"| Missed | {off['confusion']['missed']} | {on['confusion']['missed']} | {on['confusion']['missed'] - off['confusion']['missed']} |")
+        lines.append(f"| Precision | {off['scores']['precision']:.3f} | {on['scores']['precision']:.3f} | {critic_comparison['precision_delta']:+.3f} |")
+        lines.append(f"| Recall | {off['scores']['recall']:.3f} | {on['scores']['recall']:.3f} | {critic_comparison['recall_delta']:+.3f} |")
+        lines.append(f"| Unsupported (final) | {off_hallu['unsupported_after_validation']} | {on_hallu['unsupported_after_validation']} | {critic_comparison['unsupported_delta']} |")
+        lines.append(f"| Severity overstatement rate | {off_sev['overstatement_rate']:.3f} | {on_sev['overstatement_rate']:.3f} | {on_sev['overstatement_rate'] - off_sev['overstatement_rate']:+.3f} |")
+        lines.append("")
+
+    context_ablation = report.get("context_ablation")
+    if context_ablation is not None:
+        lines.append("## Context ablation")
+        lines.append("")
+        if context_ablation.get("label"):
+            lines.append(f"*{context_ablation['label']}*")
+            lines.append("")
+        lines.append("| variant | candidates reviewed | provider calls | TP | FP | missed | input tokens | unsupported (final) | runtime ms |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for label, v in context_ablation.items():
+            if label == "label":
+                continue
+            o = v["overall"]
+            eff = v["efficiency"]
+            hallu = v["hallucination"]
+            lines.append(
+                f"| {label} | {eff['candidates_reviewed']} | {eff['provider_calls']} | "
+                f"{o['confusion']['true_positives']} | {o['confusion']['false_positives']} | "
+                f"{o['confusion']['missed']} | {eff['reviewer_input_tokens']} | "
+                f"{hallu['unsupported_after_validation']} | {v['runtime_ms']:.0f} |"
+            )
+        lines.append("")
 
     incremental = report.get("incremental")
     if incremental is not None:

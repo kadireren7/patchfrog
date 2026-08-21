@@ -1,0 +1,28 @@
+case:
+  id: static-py-undefined-name
+  title: Undefined name (typo) caught by ruff's F821 rule
+  description: >
+    build_summary references `total_items`, which is never defined
+    anywhere in the function -- a real NameError at runtime. This is
+    exactly the class of bug ruff's default pyflakes F821 rule exists
+    to catch statically, with no LLM call needed. Marked
+    static_expected (not either) so the static/AI overlap matrix shows
+    a genuine static-only true positive.
+  language: python
+  difficulty: easy
+  tags: [boundary, error-propagation]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/summary.py
+    symbol: build_summary
+    issue_family: undefined_name
+    severity: high
+    line: 5
+    ground_truth_source: static_expected
+    notes: total_items is undefined; ruff's F821 rule catches this without any AI call.
+
+forbidden:
+  - reason: build_empty_summary is correct and must not be flagged
+    category: maintainability

@@ -1,0 +1,29 @@
+case:
+  id: static-c-unsafe-strcpy
+  title: strcpy with no bounds checking, caught by semgrep's bundled rule
+  description: >
+    copy_display_name calls strcpy(dst, src) with no bounds check --
+    if src is longer than dst's buffer, this overflows it. PatchFrog's
+    bundled semgrep ruleset (patchfrog-c-unsafe-strcpy) catches this
+    without any AI call. Marked static_expected (not either) so the
+    static/AI overlap matrix shows a genuine static-only true
+    positive; cppcheck/clang-tidy are unavailable in this dev
+    environment, so semgrep is the analyzer actually exercised here.
+  language: c
+  difficulty: easy
+  tags: [resource, boundary]
+
+expected:
+  - id: ef1
+    category: memory_safety
+    file: names.c
+    symbol: copy_display_name
+    issue_family: unsafe_strcpy
+    severity: high
+    line: 8
+    ground_truth_source: static_expected
+    notes: strcpy performs no bounds checking; semgrep's bundled rule catches this without any AI call.
+
+forbidden:
+  - reason: compute_length is correct and must not be flagged
+    category: maintainability

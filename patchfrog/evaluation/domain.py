@@ -266,6 +266,22 @@ class ExpectedFindingOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class AnalyzerExecutionSummary:
+    """One analyzer's execution outcome for one case's static-analysis
+    pass -- mirrors :class:`~patchfrog.persistence.models.analysis.AnalyzerExecutionModel`
+    but decoupled from the ORM, so :mod:`patchfrog.evaluation.metrics` can
+    aggregate per-analyzer coverage (attempted/succeeded/failed/skipped/
+    unsupported, raw findings produced) across every case in a run
+    without depending on persistence internals. See Phase 8 spec section
+    45: a missing analyzer (UNSUPPORTED) must be reported as a missing
+    capability, never silently treated as "zero findings"."""
+
+    analyzer: str
+    status: str
+    raw_findings_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class CaseResult:
     """The complete outcome of running one :class:`EvaluationCase` once,
     under one :class:`EvaluationMode` (and one critic on/off setting)."""
@@ -288,6 +304,10 @@ class CaseResult:
     provider_calls: int = 0
     reviewer_input_tokens: int = 0
     reviewer_output_tokens: int = 0
+    #: Populated whenever static analysis actually ran for this case
+    #: (STATIC_ONLY/FULL_PIPELINE) -- see :mod:`patchfrog.evaluation.metrics`'s
+    #: per-analyzer coverage computation.
+    analyzer_executions: tuple[AnalyzerExecutionSummary, ...] = field(default_factory=tuple)
 
     @property
     def is_error(self) -> bool:

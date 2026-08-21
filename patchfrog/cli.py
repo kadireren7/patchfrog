@@ -47,6 +47,7 @@ from patchfrog.evaluation.domain import (
     EvaluationCase,
     EvaluationMode,
     EvaluationRunResult,
+    FixtureInfo,
     IncrementalScenarioResult,
 )
 from patchfrog.evaluation.fixtures import (
@@ -798,6 +799,7 @@ def _run_publish(args: argparse.Namespace) -> int:
 _ABLATION_KIND_SETS: dict[str, tuple[ContextItemKind, ...] | None] = {
     "normal": None,  # None -> production default (all relationship kinds)
     "target-only": (ContextItemKind.TARGET_SYMBOL, ContextItemKind.TARGET_FILE_REGION),
+    "no-extra-context": (ContextItemKind.TARGET_SYMBOL,),
 }
 
 
@@ -850,29 +852,62 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
         runner = EvaluationRunner(session_factory=session_factory)
         context_override = None  # normal, production-equivalent context by default
 
+        cases_by_id = {c.id: c for c in cases}
+        fixture_info = {c.id: fixture_info_for_case(c, cases_root=DEFAULT_CASES_ROOT) for c in cases}
+
         start = time.monotonic()
         critic_comparison_report: dict[str, Any] | None = None
         if args.critic == "both":
+            off_start = time.monotonic()
             results_off = await runner.run_suite(
                 cases, cases_root=DEFAULT_CASES_ROOT, mode=mode, reviewer_provider_factory=provider_factory,
                 critic_provider_factory=provider_factory, critic_enabled=False,
                 context_config_override=context_override, timeout_seconds=args.timeout,
             )
+            off_duration_ms = (time.monotonic() - off_start) * 1000
+            on_start = time.monotonic()
             results_on = await runner.run_suite(
                 cases, cases_root=DEFAULT_CASES_ROOT, mode=mode, reviewer_provider_factory=provider_factory,
                 critic_provider_factory=provider_factory, critic_enabled=True,
                 context_config_override=context_override, timeout_seconds=args.timeout,
             )
+            on_duration_ms = (time.monotonic() - on_start) * 1000
             case_results = results_on
             critic_enabled_flag = True
             comparison = compute_critic_comparison(results_off, results_on)
             critic_comparison_report = {
-                "critic_off": _asdict_metrics(comparison.critic_off),
-                "critic_on": _asdict_metrics(comparison.critic_on),
+                # Full metrics (TP/FP/missed/precision/recall, unsupported
+                # proposals/final findings, severity overstatement, ...)
+                # for each side, not just the top-level OverallMetrics --
+                # see Phase 8 spec follow-up item 1.
+                "critic_off": build_report(
+                    EvaluationRunResult(
+                        identity=build_evaluation_identity(
+                            mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=False,
+                            cases=cases, cases_root=DEFAULT_CASES_ROOT,
+                        ),
+                        generated_at=datetime.now(UTC).isoformat(), duration_ms=off_duration_ms,
+                        case_results=tuple(results_off),
+                    ),
+                    cases_by_id=cases_by_id, fixture_info=fixture_info,
+                )["metrics"],
+                "critic_on": build_report(
+                    EvaluationRunResult(
+                        identity=build_evaluation_identity(
+                            mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=True,
+                            cases=cases, cases_root=DEFAULT_CASES_ROOT,
+                        ),
+                        generated_at=datetime.now(UTC).isoformat(), duration_ms=on_duration_ms,
+                        case_results=tuple(results_on),
+                    ),
+                    cases_by_id=cases_by_id, fixture_info=fixture_info,
+                )["metrics"],
                 "precision_delta": comparison.precision_delta,
                 "recall_delta": comparison.recall_delta,
                 "false_positive_delta": comparison.false_positive_delta,
                 "unsupported_delta": comparison.unsupported_delta,
+                "label": "pipeline/guardrail behavior (oracle-scripted FakeLLMProvider) -- "
+                "NOT evidence of real critic model quality; only a --provider live run measures that",
             }
         else:
             critic_enabled_flag = args.critic != "off"
@@ -886,6 +921,31 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
         if args.context_ablation:
             context_ablation_report = await _run_context_ablation(
                 runner, cases, mode=mode, provider_factory=provider_factory, timeout=args.timeout,
+                cases_by_id=cases_by_id, fixture_info=fixture_info,
+            )
+
+        static_only_report: dict[str, Any] | None = None
+        if args.static_only_comparison:
+            static_start = time.monotonic()
+            static_only_results = await runner.run_suite(
+                cases, cases_root=DEFAULT_CASES_ROOT, mode=EvaluationMode.STATIC_ONLY,
+                timeout_seconds=args.timeout,
+            )
+            static_duration_ms = (time.monotonic() - static_start) * 1000
+            static_identity = build_evaluation_identity(
+                mode=EvaluationMode.STATIC_ONLY, reviewer_provider=provider_factory(cases[0]),
+                critic_enabled=False, cases=cases, cases_root=DEFAULT_CASES_ROOT,
+            )
+            static_only_report = build_report(
+                EvaluationRunResult(
+                    identity=static_identity, generated_at=datetime.now(UTC).isoformat(),
+                    duration_ms=static_duration_ms, case_results=tuple(static_only_results),
+                ),
+                cases_by_id=cases_by_id, fixture_info=fixture_info,
+            )
+            static_only_report["label"] = (
+                "STATIC_ONLY: the real Phase 3 static-analysis engine (ruff/semgrep/cppcheck/clang-tidy, "
+                "whichever are actually installed), no LLM involved at all"
             )
 
         incremental_scenarios: tuple[IncrementalScenarioResult, ...] = ()
@@ -903,8 +963,6 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
             mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=critic_enabled_flag,
             cases=cases, cases_root=DEFAULT_CASES_ROOT,
         )
-        cases_by_id = {c.id: c for c in cases}
-        fixture_info = {c.id: fixture_info_for_case(c, cases_root=DEFAULT_CASES_ROOT) for c in cases}
 
         result = EvaluationRunResult(
             identity=identity, generated_at=datetime.now(UTC).isoformat(), duration_ms=duration_ms,
@@ -917,6 +975,8 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
             report["critic_comparison"] = critic_comparison_report
         if context_ablation_report is not None:
             report["context_ablation"] = context_ablation_report
+        if static_only_report is not None:
+            report["static_only"] = static_only_report
         return report
     finally:
         await engine.dispose()
@@ -935,18 +995,47 @@ async def _run_context_ablation(
     mode: EvaluationMode,
     provider_factory: Callable[[EvaluationCase], LLMProvider],
     timeout: float,
+    cases_by_id: dict[str, EvaluationCase],
+    fixture_info: dict[str, FixtureInfo],
 ) -> dict[str, Any]:
-    from patchfrog.evaluation.metrics import compute_overall_metrics
-
     variants: dict[str, Any] = {}
     for label, kinds in _ABLATION_KIND_SETS.items():
         override = ContextConfig(enabled_kinds=kinds) if kinds is not None else None
+        variant_start = time.monotonic()
         results = await runner.run_suite(
             cases, cases_root=DEFAULT_CASES_ROOT, mode=mode, reviewer_provider_factory=provider_factory,
             critic_provider_factory=provider_factory, critic_enabled=True, context_config_override=override,
             timeout_seconds=timeout,
         )
-        variants[label] = _asdict_metrics(compute_overall_metrics(results))
+        variant_duration_ms = (time.monotonic() - variant_start) * 1000
+        variant_identity = build_evaluation_identity(
+            mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=True,
+            cases=cases, cases_root=DEFAULT_CASES_ROOT,
+        )
+        variant_report = build_report(
+            EvaluationRunResult(
+                identity=variant_identity, generated_at=datetime.now(UTC).isoformat(),
+                duration_ms=variant_duration_ms, case_results=tuple(results),
+            ),
+            cases_by_id=cases_by_id, fixture_info=fixture_info,
+        )
+        # Full metrics per variant: candidate/provider-call/token
+        # efficiency, TP/FP/missed, evidence-validation (hallucination)
+        # outcomes, and wall-clock runtime -- see Phase 8 spec follow-up
+        # item 2. Trimmed to the sections that vary meaningfully with
+        # context (per-case predictions are already in the top-level
+        # report if mode == the primary run's mode).
+        variants[label] = {
+            "runtime_ms": variant_duration_ms,
+            "overall": variant_report["metrics"]["overall"],
+            "efficiency": variant_report["metrics"]["efficiency"],
+            "hallucination": variant_report["metrics"]["hallucination"],
+        }
+    variants["label"] = (
+        "pipeline/guardrail behavior (oracle-scripted FakeLLMProvider) -- with a fake provider that "
+        "doesn't consult context to decide findings, this measures plumbing correctness across "
+        "context configs, not real semantic quality; only a --provider live run measures that"
+    )
     return variants
 
 
@@ -964,6 +1053,17 @@ def _print_eval_summary(report: dict[str, Any]) -> None:
         f"  clean-case pass rate: {clean['pass_rate']:.3f} "
         f"({clean['clean_cases_passed']}/{clean['clean_cases']})"
     )
+    if report.get("static_only") is not None:
+        so = report["static_only"]["metrics"]["overall"]
+        print(
+            f"  static_only: TP={so['confusion']['true_positives']} FP={so['confusion']['false_positives']} "
+            f"missed={so['confusion']['missed']} precision={so['scores']['precision']:.3f}"
+        )
+    if report.get("critic_comparison") is not None:
+        cc = report["critic_comparison"]
+        print(f"  critic_comparison: precision_delta={cc['precision_delta']:+.3f} recall_delta={cc['recall_delta']:+.3f}")
+    if report.get("context_ablation") is not None:
+        print(f"  context_ablation: variants={[k for k in report['context_ablation'] if k != 'label']}")
 
 
 def _run_eval_run(args: argparse.Namespace) -> int:
@@ -1190,7 +1290,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     eval_run_parser.add_argument(
         "--context-ablation", action="store_true",
-        help="Additionally run normal vs. target-only context and report the quality delta",
+        help="Additionally run normal vs. target-only vs. no-extra-context and report the quality delta",
+    )
+    eval_run_parser.add_argument(
+        "--static-only-comparison", action="store_true",
+        help="Additionally run STATIC_ONLY (the real Phase 3 engine, no LLM) over the same case set "
+        "and report it as its own section, including per-analyzer coverage",
     )
     eval_run_parser.add_argument(
         "--incremental-scenarios", action="store_true", help="Additionally run the Phase 7 incremental benchmark scenarios"

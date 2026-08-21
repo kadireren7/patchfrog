@@ -1,15 +1,15 @@
 # PatchFrog Quality Evaluation Report
 
-Generated: 2026-08-21T05:57:34.355858+00:00  
+Generated: 2026-08-21T17:11:35.168999+00:00  
 Mode: `full_pipeline`  
 Provider/model: `fake-oracle` / `oracle-v1`  
 Critic enabled: `True`  
-Duration: 218667 ms
+Duration: 1593971 ms
 
 ## Overall
 
-- Cases: 53 (errors: 0)
-- True positives: 33
+- Cases: 59 (errors: 0)
+- True positives: 39
 - False positives: 0
 - Missed (false negatives): 0
 - Precision: 1.000  Recall: 1.000  F1: 1.000
@@ -20,9 +20,9 @@ Duration: 218667 ms
 
 - Clean-case pass rate: 1.000 (20/20)
 - Average findings on clean cases: 0.000
-- Duplicate rate: 0.000
-- Unsupported (hallucination) rate: before validation 0.000 (0/33), after validation 0.000 (0/34)
-- Severity: exact match 1.000, within one level 1.000, overstated 0.000, understated 0.000 (n=33)
+- Duplicate rate: 0.070
+- Unsupported (hallucination) rate: before validation 0.000 (0/36), after validation 0.000 (0/43)
+- Severity: exact match 0.974, within one level 1.000, overstated 0.000, understated 0.026 (n=39)
 
 ## Category breakdown
 
@@ -30,30 +30,77 @@ Duration: 218667 ms
 |---|---:|---:|---:|---:|---:|---:|---:|
 | api_misuse | 2 | 2 | 0 | 0 | 1.000 | 1.000 | 1.000 |
 | concurrency | 3 | 3 | 0 | 0 | 1.000 | 1.000 | 1.000 |
-| correctness | 13 | 13 | 0 | 0 | 1.000 | 1.000 | 1.000 |
-| memory_safety | 7 | 7 | 0 | 0 | 1.000 | 1.000 | 1.000 |
+| correctness | 17 | 17 | 0 | 0 | 1.000 | 1.000 | 1.000 |
+| memory_safety | 8 | 8 | 0 | 0 | 1.000 | 1.000 | 1.000 |
 | performance | 2 | 2 | 0 | 0 | 1.000 | 1.000 | 1.000 |
 | resource_management | 1 | 1 | 0 | 0 | 1.000 | 1.000 | 1.000 |
-| security | 4 | 4 | 0 | 0 | 1.000 | 1.000 | 1.000 |
+| security | 5 | 5 | 0 | 0 | 1.000 | 1.000 | 1.000 |
 | undefined_behavior | 1 | 1 | 0 | 0 | 1.000 | 1.000 | 1.000 |
 
 ## Difficulty breakdown
 
 | difficulty | support | precision | recall | F1 |
 |---|---:|---:|---:|---:|
-| easy | 15 | 1.000 | 1.000 | 1.000 |
-| medium | 12 | 1.000 | 1.000 | 1.000 |
+| easy | 20 | 1.000 | 1.000 | 1.000 |
+| medium | 13 | 1.000 | 1.000 | 1.000 |
 | hard | 6 | 1.000 | 1.000 | 1.000 |
 
 ## Static / AI overlap
 
-- Static-only: 0  AI-only: 33  Both: 0  Missed by both: 0
+- Static-only: 3  AI-only: 33  Both: 3  Missed by both: 0
+
+## Static analyzer coverage
+
+| analyzer | attempted | succeeded | failed | skipped | unsupported | timed out | raw findings |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| clang_tidy | 22 | 0 | 0 | 0 | 22 | 0 | 0 |
+| cppcheck | 22 | 0 | 0 | 0 | 22 | 0 | 0 |
+| ruff | 37 | 37 | 0 | 0 | 0 | 0 | 4 |
+| semgrep | 59 | 59 | 0 | 0 | 0 | 0 | 5 |
 
 ## Efficiency
 
-- Candidates: generated 225, reviewed 225, skipped 0
-- Provider calls: 225  (6.82 / true positive)
-- Tokens per true positive: input 681.8, output 340.9
+- Candidates: generated 243, reviewed 243, skipped 0
+- Provider calls: 243  (6.23 / true positive)
+- Tokens per true positive: input 623.1, output 311.5
+
+## STATIC_ONLY (real Phase 3 engine, no LLM)
+
+*STATIC_ONLY: the real Phase 3 static-analysis engine (ruff/semgrep/cppcheck/clang-tidy, whichever are actually installed), no LLM involved at all*
+
+- Static TP: 6  FP: 0  Missed: 0  Precision: 1.000  Recall: 1.000
+- Clean-case static false positives: 0 of 20 clean cases (pass rate 1.000)
+
+| analyzer | attempted | succeeded | failed | skipped | unsupported | raw findings |
+|---|---:|---:|---:|---:|---:|---:|
+| clang_tidy | 22 | 0 | 0 | 0 | 22 | 0 |
+| cppcheck | 22 | 0 | 0 | 0 | 22 | 0 |
+| ruff | 37 | 37 | 0 | 0 | 0 | 4 |
+| semgrep | 59 | 59 | 0 | 0 | 0 | 5 |
+
+## Critic ON vs. OFF
+
+*pipeline/guardrail behavior (oracle-scripted FakeLLMProvider) -- NOT evidence of real critic model quality; only a --provider live run measures that*
+
+| | critic OFF | critic ON | delta |
+|---|---:|---:|---:|
+| TP | 39 | 39 | 0 |
+| FP | 0 | 0 | 0 |
+| Missed | 0 | 0 | 0 |
+| Precision | 1.000 | 1.000 | +0.000 |
+| Recall | 1.000 | 1.000 | +0.000 |
+| Unsupported (final) | 0 | 0 | 0 |
+| Severity overstatement rate | 0.000 | 0.000 | +0.000 |
+
+## Context ablation
+
+*pipeline/guardrail behavior (oracle-scripted FakeLLMProvider) -- with a fake provider that doesn't consult context to decide findings, this measures plumbing correctness across context configs, not real semantic quality; only a --provider live run measures that*
+
+| variant | candidates reviewed | provider calls | TP | FP | missed | input tokens | unsupported (final) | runtime ms |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| normal | 243 | 243 | 39 | 0 | 0 | 24300 | 0 | 276455 |
+| target-only | 243 | 243 | 39 | 0 | 0 | 24300 | 0 | 256746 |
+| no-extra-context | 243 | 243 | 39 | 0 | 0 | 24300 | 0 | 263014 |
 
 ## Incremental review memory
 

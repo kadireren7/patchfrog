@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from patchfrog.analysis.domain import FindingCategory, Severity
 from patchfrog.evaluation.domain import (
+    AnalyzerExecutionSummary,
     CaseResult,
     CaseStatus,
     Difficulty,
@@ -30,6 +31,7 @@ from patchfrog.evaluation.metrics import (
     compute_overall_metrics,
     compute_severity_metrics,
     compute_static_ai_overlap,
+    compute_static_analyzer_coverage,
 )
 
 
@@ -54,12 +56,12 @@ def _case(case_id: str, *, expected: tuple[ExpectedFinding, ...] = (), difficult
 def _result(
     case_id: str, *, predictions: tuple[PredictionOutcome, ...] = (), expected_outcomes: tuple[ExpectedFindingOutcome, ...] = (),
     status: CaseStatus = CaseStatus.COMPLETED_WITH_FINDINGS, proposals: tuple[PredictedFinding, ...] = (),
-    candidates_reviewed: int = 1,
+    candidates_reviewed: int = 1, analyzer_executions: tuple[AnalyzerExecutionSummary, ...] = (),
 ) -> CaseResult:
     return CaseResult(
         case_id=case_id, mode=EvaluationMode.FULL_PIPELINE, status=status, duration_ms=1.0,
         predictions=predictions, expected_outcomes=expected_outcomes, proposals_before_validation=proposals,
-        candidates_reviewed=candidates_reviewed,
+        candidates_reviewed=candidates_reviewed, analyzer_executions=analyzer_executions,
     )
 
 
@@ -201,3 +203,44 @@ def test_critic_comparison_deltas() -> None:
     comparison = compute_critic_comparison(off, on)
     assert comparison.false_positive_delta == -1
     assert comparison.precision_delta > 0
+
+
+def test_static_analyzer_coverage_aggregates_across_cases() -> None:
+    r1 = _result(
+        "c1",
+        analyzer_executions=(
+            AnalyzerExecutionSummary(analyzer="ruff", status="succeeded", raw_findings_count=1),
+            AnalyzerExecutionSummary(analyzer="cppcheck", status="unsupported", raw_findings_count=0),
+        ),
+    )
+    r2 = _result(
+        "c2",
+        analyzer_executions=(
+            AnalyzerExecutionSummary(analyzer="ruff", status="succeeded", raw_findings_count=0),
+            AnalyzerExecutionSummary(analyzer="cppcheck", status="unsupported", raw_findings_count=0),
+        ),
+    )
+    coverage = compute_static_analyzer_coverage([r1, r2])
+    by_name = {c.analyzer: c for c in coverage}
+    assert by_name["ruff"].attempted == 2
+    assert by_name["ruff"].succeeded == 2
+    assert by_name["ruff"].total_raw_findings == 1
+    assert by_name["cppcheck"].attempted == 2
+    assert by_name["cppcheck"].succeeded == 0
+    assert by_name["cppcheck"].unsupported == 2
+
+
+def test_static_analyzer_coverage_excludes_error_cases() -> None:
+    good = _result("c1", analyzer_executions=(AnalyzerExecutionSummary(analyzer="ruff", status="succeeded", raw_findings_count=1),))
+    errored = CaseResult(
+        case_id="c2", mode=EvaluationMode.STATIC_ONLY, status=CaseStatus.INFRASTRUCTURE_ERROR, duration_ms=1.0,
+        analyzer_executions=(AnalyzerExecutionSummary(analyzer="ruff", status="succeeded", raw_findings_count=99),),
+    )
+    coverage = compute_static_analyzer_coverage([good, errored])
+    assert len(coverage) == 1
+    assert coverage[0].attempted == 1
+    assert coverage[0].total_raw_findings == 1
+
+
+def test_static_analyzer_coverage_empty_when_no_executions() -> None:
+    assert compute_static_analyzer_coverage([_result("c1")]) == ()
