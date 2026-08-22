@@ -8,6 +8,10 @@ from patchfrog.persistence.repositories.call_reference import CallReferenceRepos
 from patchfrog.persistence.repositories.context_bundle import ContextBundleRepository
 from patchfrog.persistence.repositories.context_item import ContextItemRepository
 from patchfrog.persistence.repositories.critic_verdict import CriticVerdictRepository
+from patchfrog.persistence.repositories.feedback import (
+    FeedbackAssessmentRepository,
+    FeedbackEventRepository,
+)
 from patchfrog.persistence.repositories.finding import FindingRepository
 from patchfrog.persistence.repositories.finding_source import FindingSourceRepository
 from patchfrog.persistence.repositories.import_reference import ImportReferenceRepository
@@ -42,6 +46,8 @@ __all__ = [
     "ContextBundleRepository",
     "ContextItemRepository",
     "CriticVerdictRepository",
+    "FeedbackAssessmentRepository",
+    "FeedbackEventRepository",
     "FindingRepository",
     "FindingSourceRepository",
     "ImportReferenceRepository",

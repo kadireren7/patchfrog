@@ -22,6 +22,7 @@ from patchfrog.persistence.models.context import (
     ContextBundleStatus,
     ContextItemModel,
 )
+from patchfrog.persistence.models.feedback import FeedbackAssessmentModel, FeedbackEventModel
 from patchfrog.persistence.models.parsed_file_cache import ParsedFileCacheModel
 from patchfrog.persistence.models.publishing import (
     ReviewPublicationCommentModel,
@@ -60,6 +61,8 @@ __all__ = [
     "ContextBundleStatus",
     "ContextItemModel",
     "CriticVerdictModel",
+    "FeedbackAssessmentModel",
+    "FeedbackEventModel",
     "FileIndexStatus",
     "FindingModel",
     "FindingSourceModel",

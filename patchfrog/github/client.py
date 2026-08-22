@@ -8,10 +8,19 @@ always translated into :mod:`patchfrog.github.errors` types.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import httpx
 
+from patchfrog.domain.github_feedback import (
+    GitHubActor,
+    GitHubActorType,
+    GitHubReaction,
+    GitHubReactionContent,
+    GitHubReviewComment,
+    GitHubReviewThreadStatus,
+)
 from patchfrog.domain.github_review import (
     GitHubReviewCommentInput,
     GitHubReviewEvent,
@@ -40,6 +49,10 @@ _FILES_PER_PAGE = 100
 _MAX_FILES_PAGES = 50  # 5,000 files — far beyond any realistic PR; guards against runaway pagination.
 _REVIEWS_PER_PAGE = 100
 _MAX_REVIEWS_PAGES = 20  # 2,000 reviews — far beyond any realistic PR.
+_COMMENTS_PER_PAGE = 100
+_MAX_COMMENTS_PAGES = 50  # 5,000 review comments — far beyond any realistic PR.
+_REACTIONS_PER_PAGE = 100
+_MAX_REACTIONS_PAGES = 10  # 1,000 reactions on one comment — far beyond realistic use.
 
 
 class GitHubClient:
@@ -142,6 +155,137 @@ class GitHubClient:
         }
         data = await self._post_json(installation_id=installation_id, path=path, json_body=payload)
         return _parse_submitted_review(data)
+
+    async def list_pull_request_review_comments(
+        self, *, installation_id: int, ref: PullRequestRef
+    ) -> list[GitHubReviewComment]:
+        """Fetch every review (inline) comment on a pull request, following
+        pagination -- covers PatchFrog's own published comments and any
+        developer reply to them (``in_reply_to_id`` set). Used by
+        :mod:`patchfrog.feedback.sync` for both reply ingestion and
+        ``github_comment_id`` enrichment (Phase 9); read-only, requires
+        no permission beyond the existing ``pull_requests`` grant."""
+
+        path = f"/repos/{ref.owner}/{ref.repository}/pulls/{ref.number}/comments"
+        comments: list[GitHubReviewComment] = []
+
+        for page in range(1, _MAX_COMMENTS_PAGES + 1):
+            data = await self._get_json(
+                installation_id=installation_id,
+                path=path,
+                params={"per_page": _COMMENTS_PER_PAGE, "page": page},
+            )
+            if not isinstance(data, list):
+                raise GitHubResponseError(f"Expected a list of review comments, got {type(data).__name__}")
+            comments.extend(_parse_review_comment(item) for item in data)
+            if len(data) < _COMMENTS_PER_PAGE:
+                break
+
+        return comments
+
+    async def list_review_comment_reactions(
+        self, *, installation_id: int, ref: PullRequestRef, comment_id: int
+    ) -> list[GitHubReaction]:
+        """Fetch every reaction on one review comment, following
+        pagination. GitHub has no webhook event for reaction add/remove --
+        this is always a polled/synced signal (see
+        :mod:`patchfrog.feedback.sync`'s module docstring)."""
+
+        path = f"/repos/{ref.owner}/{ref.repository}/pulls/comments/{comment_id}/reactions"
+        reactions: list[GitHubReaction] = []
+
+        for page in range(1, _MAX_REACTIONS_PAGES + 1):
+            data = await self._get_json(
+                installation_id=installation_id,
+                path=path,
+                params={"per_page": _REACTIONS_PER_PAGE, "page": page},
+            )
+            if not isinstance(data, list):
+                raise GitHubResponseError(f"Expected a list of reactions, got {type(data).__name__}")
+            reactions.extend(_parse_reaction(item) for item in data if _is_known_reaction(item))
+            if len(data) < _REACTIONS_PER_PAGE:
+                break
+
+        return reactions
+
+    async def list_review_thread_statuses(
+        self, *, installation_id: int, ref: PullRequestRef
+    ) -> list[GitHubReviewThreadStatus]:
+        """Fetch every review thread's resolution state via GraphQL --
+        REST has no field for this at all. Uses the same installation
+        token / permission scope as every REST call (GraphQL access is
+        governed by the same App permissions, never a separate grant).
+        Read-only; never mutates thread state."""
+
+        query = """
+        query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              reviewThreads(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  isResolved
+                  comments(first: 1) { nodes { databaseId } }
+                }
+              }
+            }
+          }
+        }
+        """
+        statuses: list[GitHubReviewThreadStatus] = []
+        after: str | None = None
+        for _ in range(_MAX_REVIEWS_PAGES):
+            variables = {"owner": ref.owner, "repo": ref.repository, "number": ref.number, "after": after}
+            data = await self._post_graphql(installation_id=installation_id, query=query, variables=variables)
+            try:
+                connection = data["data"]["repository"]["pullRequest"]["reviewThreads"]
+                for node in connection["nodes"]:
+                    comment_nodes = node["comments"]["nodes"]
+                    first_comment_id = comment_nodes[0]["databaseId"] if comment_nodes else None
+                    statuses.append(
+                        GitHubReviewThreadStatus(first_comment_id=first_comment_id, is_resolved=bool(node["isResolved"]))
+                    )
+                page_info = connection["pageInfo"]
+            except (KeyError, TypeError, IndexError) as exc:
+                raise GitHubResponseError("Malformed reviewThreads GraphQL response") from exc
+            if not page_info.get("hasNextPage"):
+                break
+            after = page_info.get("endCursor")
+
+        return statuses
+
+    async def _post_graphql(
+        self, *, installation_id: int, query: str, variables: dict[str, Any]
+    ) -> dict[str, Any]:
+        token = await self._token_provider.get_token(installation_id)
+        url = f"{self._api_base_url}/graphql"
+
+        try:
+            response = await self._http_client.post(
+                url,
+                json={"query": query, "variables": variables},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                },
+                timeout=self._timeout,
+            )
+        except httpx.TimeoutException as exc:
+            raise GitHubTimeoutError("Timed out calling GitHub GraphQL API") from exc
+        except httpx.HTTPError as exc:
+            raise GitHubTimeoutError("Network error calling GitHub GraphQL API") from exc
+
+        _raise_for_status(response)
+
+        try:
+            data: dict[str, Any] = response.json()
+        except ValueError as exc:
+            raise GitHubResponseError("GitHub GraphQL API returned malformed JSON") from exc
+
+        if data.get("errors"):
+            raise GitHubResponseError(f"GitHub GraphQL API returned errors: {data['errors']}")
+
+        return data
 
     async def _get_json(
         self,
@@ -262,6 +406,7 @@ def _parse_pull_request(data: dict[str, Any]) -> PullRequestMetadata:
             head_sha=data["head"]["sha"],
             html_url=data["html_url"],
             state=data["state"],
+            merged=bool(data.get("merged", False)),
         )
     except (KeyError, TypeError) as exc:
         raise GitHubResponseError("Malformed pull request response from GitHub") from exc
@@ -292,6 +437,60 @@ def _parse_submitted_review(data: dict[str, Any]) -> GitHubSubmittedReview:
         )
     except (KeyError, TypeError) as exc:
         raise GitHubResponseError("Malformed review response from GitHub") from exc
+
+
+def _parse_actor(data: dict[str, Any] | None) -> GitHubActor:
+    if not data:
+        return GitHubActor(login="", actor_type=GitHubActorType.USER)
+    raw_type = data.get("type", "User")
+    try:
+        actor_type = GitHubActorType(raw_type)
+    except ValueError:
+        # An actor type GitHub added after this enum was written -- never
+        # fail parsing over it; treat as a non-bot User conservatively
+        # (see the module docstring: unknown never silently becomes Bot,
+        # which would wrongly discard real developer feedback).
+        actor_type = GitHubActorType.USER
+    return GitHubActor(login=str(data.get("login", "")), actor_type=actor_type)
+
+
+def _parse_github_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _parse_review_comment(data: dict[str, Any]) -> GitHubReviewComment:
+    try:
+        return GitHubReviewComment(
+            id=data["id"],
+            path=data["path"],
+            line=data.get("line"),
+            original_line=data.get("original_line"),
+            side=data.get("side"),
+            body=data.get("body", ""),
+            actor=_parse_actor(data.get("user")),
+            in_reply_to_id=data.get("in_reply_to_id"),
+            pull_request_review_id=data.get("pull_request_review_id"),
+            created_at=_parse_github_datetime(data["created_at"]),
+            updated_at=_parse_github_datetime(data["updated_at"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise GitHubResponseError("Malformed review comment response from GitHub") from exc
+
+
+def _is_known_reaction(data: dict[str, Any]) -> bool:
+    return data.get("content") in {c.value for c in GitHubReactionContent}
+
+
+def _parse_reaction(data: dict[str, Any]) -> GitHubReaction:
+    try:
+        return GitHubReaction(
+            id=data["id"],
+            content=GitHubReactionContent(data["content"]),
+            actor=_parse_actor(data.get("user")),
+            created_at=_parse_github_datetime(data["created_at"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise GitHubResponseError("Malformed reaction response from GitHub") from exc
 
 
 def _serialize_comment(comment: GitHubReviewCommentInput) -> dict[str, Any]:

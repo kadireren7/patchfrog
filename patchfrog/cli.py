@@ -33,6 +33,7 @@ from typing import Any
 
 import httpx
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patchfrog.analysis.domain import AnalysisRunSummary
@@ -70,6 +71,14 @@ from patchfrog.evaluation.runner import (
     build_evaluation_identity,
     oracle_reviewer_provider_factory,
 )
+from patchfrog.feedback.domain import FeedbackEvent, FeedbackEventType, FindingFeedbackSummary
+from patchfrog.feedback.export import build_export_records, write_jsonl
+from patchfrog.feedback.metrics import (
+    ProductionFeedbackMetrics,
+    compute_production_feedback_metrics,
+)
+from patchfrog.feedback.queries import get_feedback_for_pr, get_feedback_summary_for_finding
+from patchfrog.feedback.sync import FeedbackSyncResult, GitHubFeedbackSyncService
 from patchfrog.github.auth import InstallationTokenProvider
 from patchfrog.github.client import GitHubClient
 from patchfrog.indexing.models import IndexingSummary
@@ -81,6 +90,10 @@ from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.persistence.models.review_memory import ReviewGenerationModel
 from patchfrog.persistence.repositories import PullRequestRepository, RepositoryRepository
+from patchfrog.persistence.repositories.feedback import (
+    FeedbackEventRepository,
+    feedback_event_from_model,
+)
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
 from patchfrog.publishing.config_resolution import resolve_repository_publication_config
 from patchfrog.publishing.domain import ReviewPublicationMode, ReviewPublicationResult
@@ -793,6 +806,246 @@ def _run_publish(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Phase 9: feedback loop (patchfrog.feedback)
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_repository_id(session: AsyncSession, *, full_name: str) -> uuid.UUID:
+    """``full_name`` is not a unique key on ``repositories`` --
+    ``github_repository_id`` is (a repository can be re-ingested under a
+    synthetic/local identity by other tooling, e.g. the CLI's own
+    ``review``/``analyze`` commands against a directory-derived
+    ``full_name``, leaving more than one row with the same name). Prefer
+    a real App-installed row (``installation_id != 0``) over a synthetic
+    one, then the most recently updated, rather than failing outright on
+    an ambiguous name -- this command only ever needs a real installation
+    token anyway."""
+
+    repos = (
+        await session.execute(
+            select(RepositoryModel)
+            .where(RepositoryModel.full_name == full_name)
+            .order_by((RepositoryModel.installation_id != 0).desc(), RepositoryModel.updated_at.desc())
+        )
+    ).scalars().all()
+    if not repos:
+        raise ValueError(f"no repository ingested with full_name {full_name!r}")
+    return uuid.UUID(str(repos[0].id))
+
+
+async def _feedback_sync_async(args: argparse.Namespace) -> FeedbackSyncResult:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            repository_id = await _resolve_repository_id(session, full_name=args.repository)
+
+        async with httpx.AsyncClient(timeout=settings.github_api_timeout_seconds) as http_client:
+            token_provider = InstallationTokenProvider(
+                http_client=http_client,
+                app_id=settings.github_app_id,
+                private_key=settings.github_private_key,
+                api_base_url=settings.github_api_base_url,
+            )
+            github_client = GitHubClient(
+                http_client=http_client,
+                token_provider=token_provider,
+                api_base_url=settings.github_api_base_url,
+                timeout_seconds=settings.github_api_timeout_seconds,
+            )
+            service = GitHubFeedbackSyncService(session_factory=session_factory, github_client=github_client)
+            return await service.sync_pull_request(repository_id=repository_id, pull_request_number=args.pr)
+    finally:
+        await engine.dispose()
+
+
+def _run_feedback_sync(args: argparse.Namespace) -> int:
+    try:
+        result = asyncio.run(_feedback_sync_async(args))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(
+        f"feedback sync for {args.repository} #{args.pr}: observed={result.events_observed} "
+        f"ingested={result.events_ingested} duplicates_ignored={result.duplicate_events_ignored} "
+        f"unattributed={result.unattributed_events} github_comment_ids_enriched={result.github_comment_ids_enriched}"
+    )
+    return 0
+
+
+async def _feedback_list_async(args: argparse.Namespace) -> list[FeedbackEvent]:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            if not args.repository:
+                raise ValueError("feedback list requires --repository")
+            repository_id = await _resolve_repository_id(session, full_name=args.repository)
+
+            if args.pr is not None:
+                pr_row = (
+                    await session.execute(
+                        select(PullRequestModel).where(
+                            PullRequestModel.repository_id == repository_id,
+                            PullRequestModel.github_pr_number == args.pr,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if pr_row is None:
+                    raise ValueError(f"no pull request #{args.pr} ingested for {args.repository}")
+                events = await get_feedback_for_pr(session, pull_request_id=pr_row.id)
+            else:
+                since = datetime.fromisoformat(args.since) if args.since else None
+                models = await FeedbackEventRepository().list_all(session, repository_id=repository_id, since=since)
+                events = [feedback_event_from_model(m) for m in models]
+    finally:
+        await engine.dispose()
+
+    if args.positive:
+        events = [e for e in events if e.normalized_signal in ("positive_hint", "useful", "fixed")]
+    if args.negative:
+        events = [e for e in events if e.normalized_signal in ("negative_hint", "false-positive")]
+    if args.explicit:
+        events = [e for e in events if e.event_type is FeedbackEventType.EXPLICIT_COMMAND]
+    return events
+
+
+def _run_feedback_list(args: argparse.Namespace) -> int:
+    try:
+        events = asyncio.run(_feedback_list_async(args))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    for event in events:
+        print(
+            f"[{event.occurred_at.isoformat()}] {event.event_type.value} ({event.source.value}) "
+            f"finding={event.finding_id} actor={event.actor.login or '(unknown)'} "
+            f"signal={event.normalized_signal} strength={event.signal_strength.value}"
+        )
+    print(f"total: {len(events)}")
+    return 0
+
+
+async def _feedback_show_async(finding_id: uuid.UUID) -> FindingFeedbackSummary:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            return await get_feedback_summary_for_finding(session, finding_id=finding_id)
+    finally:
+        await engine.dispose()
+
+
+def _run_feedback_show(args: argparse.Namespace) -> int:
+    try:
+        finding_id = uuid.UUID(args.finding)
+    except ValueError:
+        print(f"error: not a valid finding id: {args.finding!r}", file=sys.stderr)
+        return 1
+    summary = asyncio.run(_feedback_show_async(finding_id))
+    a = summary.assessment
+    print(f"finding: {summary.finding_id}")
+    print(f"  positive_reactions={summary.positive_reactions} negative_reactions={summary.negative_reactions}")
+    print(
+        f"  developer_replies={summary.developer_replies} explicit_useful={summary.explicit_useful} "
+        f"explicit_false_positive={summary.explicit_false_positive} explicit_fixed={summary.explicit_fixed} "
+        f"explicit_ignore={summary.explicit_ignore}"
+    )
+    print(
+        f"  thread_resolved={summary.thread_resolved} finding_changed={summary.finding_changed} "
+        f"finding_disappeared={summary.finding_disappeared}"
+    )
+    print(
+        f"  usefulness={a.usefulness_signal.value} correctness={a.correctness_signal.value} "
+        f"resolution={a.resolution_signal.value} engagement={a.engagement_signal} "
+        f"confidence={a.confidence.value if a.confidence else 'none'}"
+    )
+    for reason in a.reasons:
+        print(f"  reason: {reason}")
+    return 0
+
+
+async def _feedback_summary_async(args: argparse.Namespace) -> ProductionFeedbackMetrics:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            repository_id = None
+            if args.repository:
+                repository_id = await _resolve_repository_id(session, full_name=args.repository)
+            return await compute_production_feedback_metrics(session, repository_id=repository_id)
+    finally:
+        await engine.dispose()
+
+
+def _run_feedback_summary(args: argparse.Namespace) -> int:
+    try:
+        m = asyncio.run(_feedback_summary_async(args))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(
+        f"findings_with_feedback={m.unique_findings_with_feedback} events_ingested={m.feedback_events_ingested} "
+        f"positive_hint_rate={m.positive_hint_rate:.3f} negative_hint_rate={m.negative_hint_rate:.3f}"
+    )
+    print(
+        f"explicit_useful={m.explicit_useful_count} explicit_false_positive={m.explicit_false_positive_count} "
+        f"explicit_fixed={m.explicit_fixed_count} engagement_rate={m.developer_engagement_rate:.3f} "
+        f"unattributed_events={m.unattributed_event_count}"
+    )
+    print(f"confidence_distribution={m.assessment_confidence_distribution}")
+    for label, slices in (("category", m.by_category), ("severity", m.by_severity), ("confidence_band", m.by_confidence_band)):
+        for s in slices:
+            print(
+                f"  by_{label}={s.key}: n={s.findings_with_feedback} positive_rate={s.positive_hint_rate:.3f} "
+                f"negative_rate={s.negative_hint_rate:.3f} explicit_fp={s.explicit_false_positive_count}"
+            )
+    return 0
+
+
+async def _feedback_export_async(args: argparse.Namespace) -> list[dict[str, Any]]:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            repository_id = None
+            if args.repository:
+                repository_id = await _resolve_repository_id(session, full_name=args.repository)
+            return await build_export_records(
+                session, repository_id=repository_id, include_reply_bodies=args.include_reply_bodies
+            )
+    finally:
+        await engine.dispose()
+
+
+def _run_feedback_export(args: argparse.Namespace) -> int:
+    records = asyncio.run(_feedback_export_async(args))
+    write_jsonl(records, Path(args.output))
+    print(f"wrote {len(records)} record(s) to {args.output}")
+    return 0
+
+
+def _run_feedback(args: argparse.Namespace) -> int:
+    if args.feedback_command == "sync":
+        return _run_feedback_sync(args)
+    if args.feedback_command == "list":
+        return _run_feedback_list(args)
+    if args.feedback_command == "show":
+        return _run_feedback_show(args)
+    if args.feedback_command == "summary":
+        return _run_feedback_summary(args)
+    if args.feedback_command == "export":
+        return _run_feedback_export(args)
+    raise ValueError(f"unknown feedback subcommand: {args.feedback_command}")
+
+
+# ---------------------------------------------------------------------------
 # Phase 8: quality evaluation harness (patchfrog.evaluation)
 # ---------------------------------------------------------------------------
 
@@ -1265,6 +1518,46 @@ def main(argv: list[str] | None = None) -> int:
         help="Actually write the review to GitHub. Without this flag, only plans and reports (no write).",
     )
 
+    feedback_parser = subparsers.add_parser(
+        "feedback", help="Phase 9 feedback loop (patchfrog.feedback) -- inspection, sync, export"
+    )
+    feedback_subparsers = feedback_parser.add_subparsers(dest="feedback_command", required=True)
+
+    feedback_sync_parser = feedback_subparsers.add_parser(
+        "sync", help="Poll GitHub for reactions/replies/thread resolution/PR lifecycle on one PR (no webhook path exists)"
+    )
+    feedback_sync_parser.add_argument("--repository", required=True, help="e.g. 'owner/repo'")
+    feedback_sync_parser.add_argument("--pr", required=True, type=int, help="Pull request number")
+
+    feedback_list_parser = feedback_subparsers.add_parser(
+        "list", help="List raw feedback events (append-only, read-only)"
+    )
+    feedback_list_parser.add_argument("--repository", required=True, help="e.g. 'owner/repo'")
+    feedback_list_parser.add_argument("--pr", type=int, default=None, help="Restrict to one pull request")
+    feedback_list_parser.add_argument("--since", default=None, help="ISO 8601 timestamp lower bound")
+    feedback_list_parser.add_argument("--positive", action="store_true", help="Only positive-hint events")
+    feedback_list_parser.add_argument("--negative", action="store_true", help="Only negative-hint events")
+    feedback_list_parser.add_argument("--explicit", action="store_true", help="Only explicit /patchfrog commands")
+
+    feedback_show_parser = feedback_subparsers.add_parser(
+        "show", help="Show one finding's derived FindingFeedbackSummary"
+    )
+    feedback_show_parser.add_argument("--finding", required=True, help="ai_findings.id")
+
+    feedback_summary_parser = feedback_subparsers.add_parser(
+        "summary", help="Aggregate production feedback metrics (never mixed into Phase 8 benchmark metrics)"
+    )
+    feedback_summary_parser.add_argument("--repository", default=None, help="e.g. 'owner/repo' (default: all)")
+
+    feedback_export_parser = feedback_subparsers.add_parser(
+        "export", help="Privacy-conscious JSONL export of feedback signals per finding"
+    )
+    feedback_export_parser.add_argument("--output", required=True, help="Output .jsonl path")
+    feedback_export_parser.add_argument("--repository", default=None, help="e.g. 'owner/repo' (default: all)")
+    feedback_export_parser.add_argument(
+        "--include-reply-bodies", action="store_true", help="Include reply text (never the default)"
+    )
+
     eval_parser = subparsers.add_parser("eval", help="Phase 8 quality evaluation harness (patchfrog.evaluation)")
     eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
 
@@ -1338,6 +1631,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_review_history(args)
     if args.command == "publish":
         return _run_publish(args)
+    if args.command == "feedback":
+        return _run_feedback(args)
     if args.command == "eval":
         if args.eval_command == "run":
             return _run_eval_run(args)
