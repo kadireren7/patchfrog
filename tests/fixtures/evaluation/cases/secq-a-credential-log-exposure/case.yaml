@@ -1,0 +1,36 @@
+case:
+  id: secq-a-credential-log-exposure
+  title: Plaintext password written to the log on a failed login
+  description: >
+    authenticate() logs the raw password value on every failed login
+    attempt. Anyone with log access can read plaintext credentials.
+  language: python
+  difficulty: easy
+  tags: [security]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/auth.py
+    symbol: authenticate
+    issue_family: credential_exposure_in_logs
+    severity: high
+    max_justified_severity: high
+    line: 8
+    ground_truth_source: ai_expected
+    notes: password is interpolated verbatim into the log message.
+    expected_root_cause_concept: >
+      the raw password value reaches the logging call unredacted
+    expected_impact_concept: >
+      plaintext password disclosed to anyone with read access to the
+      application logs
+    acceptable_remediation_direction: >
+      remove password from the log message; log only non-sensitive
+      identifiers such as username
+    forbidden_exaggerated_claims:
+      - remote code execution
+      - critical remote
+
+forbidden:
+  - reason: _check_credentials itself is correct and must not be flagged
+    category: maintainability

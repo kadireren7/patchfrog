@@ -179,6 +179,11 @@ class AIFindingProposalModel(Base):
     evidence: Mapped[str] = mapped_column(Text)
     reasoning_summary: Mapped[str] = mapped_column(Text)
     suggested_fix: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: Realistic, code-grounded consequence -- nullable: rows persisted
+    #: before this column existed, and findings where impact genuinely
+    #: cannot be established, both read back as ``None`` rather than a
+    #: fabricated value (see migration 0011).
+    impact: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[ProposalStatus] = mapped_column(enum_column(ProposalStatus, length=32))
     validation_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -245,6 +250,8 @@ class AIFindingModel(Base):
     evidence: Mapped[str] = mapped_column(Text)
     reasoning_summary: Mapped[str] = mapped_column(Text)
     suggested_fix: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: See :attr:`AIFindingProposalModel.impact`.
+    impact: Mapped[str | None] = mapped_column(Text, nullable=True)
     corroborated_by_static: Mapped[bool] = mapped_column(Boolean, default=False)
     static_finding_ids: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

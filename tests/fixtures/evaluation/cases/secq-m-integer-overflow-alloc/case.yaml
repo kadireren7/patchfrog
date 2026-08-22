@@ -1,0 +1,39 @@
+case:
+  id: secq-m-integer-overflow-alloc
+  title: Integer overflow in allocation size computed from network-supplied count
+  description: >
+    allocate_ids multiplies a network-supplied count by sizeof(int)
+    with no overflow check; a large enough count wraps the
+    multiplication, producing an undersized allocation that callers
+    then overflow.
+  language: c
+  difficulty: hard
+  tags: [security, resource, boundary]
+
+expected:
+  - id: ef1
+    category: memory_safety
+    file: ids.c
+    symbol: allocate_ids
+    issue_family: integer_overflow_undersized_allocation
+    severity: high
+    max_justified_severity: critical
+    line: 8
+    ground_truth_source: ai_expected
+    notes: count is documented as network-supplied; count * sizeof(int) has no overflow check.
+    expected_root_cause_concept: >
+      the allocation-size multiplication (count * sizeof(int)) can
+      integer-overflow for a large enough attacker-controlled count,
+      wrapping around to a small allocation size
+    expected_impact_concept: >
+      callers write `count` elements into an allocation sized for the
+      wrapped (much smaller) value, a heap buffer overflow
+    acceptable_remediation_direction: >
+      check for overflow before allocating (e.g. reject count above a
+      sane maximum, or use an overflow-checked multiplication) before
+      calling malloc
+    forbidden_exaggerated_claims: []
+
+forbidden:
+  - reason: allocate_fixed_ids uses a hardcoded, small constant count and must not be flagged
+    category: memory_safety

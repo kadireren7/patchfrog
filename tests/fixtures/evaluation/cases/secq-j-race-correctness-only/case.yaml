@@ -1,0 +1,48 @@
+case:
+  id: secq-j-race-correctness-only
+  title: Non-atomic telemetry counter race is a correctness bug, not a security-critical one
+  description: >
+    RequestCounter.increment races the same way secq-i's lockout
+    counter does, but this counter only feeds a dashboard graph -- no
+    security boundary depends on it. Ground truth requires this be
+    reported (if at all) as a correctness/concurrency issue at low or
+    medium severity, never inflated to "critical security" just
+    because it's a race condition.
+  language: python
+  difficulty: medium
+  tags: [concurrency, false-positive-trap]
+
+expected:
+  - id: ef1
+    category: concurrency
+    file: src/metrics.py
+    symbol: increment
+    issue_family: race_condition_correctness_only
+    severity: low
+    max_justified_severity: medium
+    line: 10
+    line_end: 12
+    ground_truth_source: ai_expected
+    notes: >
+      lost updates under concurrency, but purely a telemetry-accuracy
+      issue -- no security consequence, so category must be concurrency
+      (not security) and severity must stay low/medium.
+    expected_root_cause_concept: >
+      a non-atomic read-modify-write on a shared counter happens
+      concurrently
+    expected_impact_concept: >
+      the dashboard's request count can undercount under concurrent
+      load; no access-control or security decision is affected
+    acceptable_remediation_direction: >
+      make the increment atomic if exact counts matter, or accept the
+      approximation if they don't
+    forbidden_exaggerated_claims:
+      - critical
+      - security vulnerability
+      - remote code execution
+
+forbidden:
+  - reason: snapshot is correct and must not be flagged
+    category: maintainability
+  - reason: this race must never be classified as category security or severity critical/high -- it has no security consequence
+    category: security

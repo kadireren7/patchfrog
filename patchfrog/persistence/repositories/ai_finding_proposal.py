@@ -48,6 +48,7 @@ class AIFindingProposalRepository:
             ),
             reasoning_summary=finding.reasoning_summary,
             suggested_fix=finding.suggested_fix,
+            impact=finding.impact,
             status=status,
             validation_detail=validation_detail,
         )

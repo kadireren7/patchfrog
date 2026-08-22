@@ -1,0 +1,38 @@
+case:
+  id: secq-k-strcpy-network-input
+  title: Unbounded strcpy from directly attacker-controlled network input
+  description: >
+    handle_username_field copies an unbounded, network-supplied string
+    into dest with strcpy, no length check -- a real, remotely
+    triggerable buffer overflow.
+  language: c
+  difficulty: medium
+  tags: [security, resource, boundary]
+
+expected:
+  - id: ef1
+    category: memory_safety
+    file: session.c
+    symbol: handle_username_field
+    issue_family: unsafe_strcpy
+    severity: critical
+    max_justified_severity: critical
+    line: 6
+    ground_truth_source: ai_expected
+    notes: network_input is documented as coming directly from an incoming network packet with no length limit.
+    expected_root_cause_concept: >
+      strcpy copies until the source's null terminator with no check
+      against dest's actual size, and the source is directly
+      attacker-controlled network data
+    expected_impact_concept: >
+      a sufficiently long network-supplied value overflows dest,
+      corrupting adjacent memory and potentially enabling remote code
+      execution
+    acceptable_remediation_direction: >
+      use a bounded copy sized to dest's actual buffer size (e.g.
+      snprintf or strncpy with an explicit length)
+    forbidden_exaggerated_claims: []
+
+forbidden:
+  - reason: handle_fixed_banner copies a fixed, short, hardcoded string and must not be flagged
+    category: memory_safety

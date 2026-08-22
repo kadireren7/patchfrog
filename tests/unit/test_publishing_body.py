@@ -3,6 +3,7 @@ formatting, GitHub comment-size truncation, and marker survival."""
 
 from __future__ import annotations
 
+import re
 import uuid
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
@@ -28,6 +29,7 @@ def _finding(**overrides: object) -> PublishableFinding:
         "end_line": 14,
         "reasoning_summary": "the operands look swapped",
         "suggested_fix": None,
+        "impact": None,
     }
     defaults.update(overrides)
     return PublishableFinding(**defaults)  # type: ignore[arg-type]
@@ -47,8 +49,62 @@ def test_inline_body_is_deterministic_no_llm_call() -> None:
 def test_inline_body_includes_suggested_fix_when_present() -> None:
     finding = _finding(suggested_fix="use <= instead of >=")
     body, _truncated = format_inline_comment_body(finding)
-    assert "Suggested direction" in body
     assert "use <= instead of >=" in body
+
+
+def test_inline_body_folds_message_reasoning_impact_fix_into_one_flowing_paragraph() -> None:
+    # Phase 8 spec section 13: no mechanical Identification:/Reason:/
+    # Impact:/Solution: heading list -- everything lands in one paragraph.
+    finding = _finding(
+        message="`password` is interpolated into the returned error string.",
+        reasoning_summary="the raw credential value reaches the response text without redaction.",
+        impact="an attacker who triggers this error path receives the plaintext password.",
+        suggested_fix="remove `password` from the returned message and log only non-sensitive metadata.",
+    )
+    body, _truncated = format_inline_comment_body(finding)
+    for fragment in ("password", "redaction", "plaintext password", "non-sensitive metadata"):
+        assert fragment in body
+    assert "Identification:" not in body
+    assert "Reason:" not in body
+    assert "Impact:" not in body
+    assert "Solution:" not in body
+    assert "<details>" not in body
+
+
+def test_inline_body_skips_impact_when_none() -> None:
+    finding = _finding(impact=None)
+    body, _truncated = format_inline_comment_body(finding)
+    assert "None" not in body
+
+
+def test_inline_body_omits_reasoning_when_identical_to_message() -> None:
+    finding = _finding(message="same text", reasoning_summary="same text")
+    body, _truncated = format_inline_comment_body(finding)
+    assert body.count("same text") == 1
+
+
+def test_inline_body_high_confidence_has_no_qualifier() -> None:
+    finding = _finding(confidence=Confidence.HIGH)
+    body, _truncated = format_inline_comment_body(finding)
+    assert "confidence" not in body.lower()
+
+
+def test_inline_body_medium_confidence_gets_verify_qualifier() -> None:
+    finding = _finding(confidence=Confidence.MEDIUM)
+    body, _truncated = format_inline_comment_body(finding)
+    assert "verify" in body.lower()
+
+
+def test_inline_body_low_confidence_gets_needs_verification_qualifier() -> None:
+    finding = _finding(confidence=Confidence.LOW)
+    body, _truncated = format_inline_comment_body(finding)
+    assert "needs verification" in body.lower()
+
+
+def test_inline_body_never_shows_numeric_confidence() -> None:
+    finding = _finding(confidence=Confidence.LOW)
+    body, _truncated = format_inline_comment_body(finding)
+    assert not re.search(r"0\.\d+", body)
 
 
 def test_inline_body_truncates_oversized_message() -> None:

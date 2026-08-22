@@ -47,7 +47,14 @@ _FINDING_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "title": {"type": "string", "description": "A short, specific title (not a category label)."},
-        "message": {"type": "string", "description": "A precise description of the concrete bug or issue."},
+        "message": {
+            "type": "string",
+            "description": (
+                "Identification: the exact problematic expression/behavior and its location in your own "
+                "words -- e.g. \"`password` is interpolated into the returned error string\", never a vague "
+                "restatement of the category like \"this may leak credentials\"."
+            ),
+        },
         "category": {"type": "string", "enum": _CATEGORY_VALUES},
         "severity": {"type": "string", "enum": _SEVERITY_VALUES},
         "confidence": {
@@ -65,9 +72,30 @@ _FINDING_SCHEMA: dict[str, Any] = {
         },
         "reasoning_summary": {
             "type": "string",
-            "description": "A concise (1-3 sentence) explanation of why this is a bug. Not your full internal reasoning.",
+            "description": (
+                "Reason: the technical mechanism/root cause -- e.g. \"the value reaches the response text "
+                "without redaction\". A concise (1-3 sentence) final answer, not your internal reasoning."
+            ),
         },
-        "suggested_fix": _NULLABLE_STRING,
+        "impact": {
+            **_NULLABLE_STRING,
+            "description": (
+                "Realistic, code-grounded consequence (1-2 sentences) -- e.g. \"an attacker who can trigger "
+                "this error path receives the plaintext password\". Consider attacker control, reachability, "
+                "privilege boundary, and data sensitivity; never map a keyword (e.g. eval()) to a severe "
+                "impact automatically. Use null only when impact genuinely cannot be established from the "
+                "given context -- never a filler sentence."
+            ),
+        },
+        "suggested_fix": {
+            **_NULLABLE_STRING,
+            "description": (
+                "Solution: an actionable, root-cause remediation direction (not \"sanitize input\" or "
+                "\"use synchronization\" -- name the actual mechanism, e.g. \"resolve the path against the "
+                "configured root and reject it if the resolved path escapes that root\"). Null only when no "
+                "practical fix can be stated from the given context."
+            ),
+        },
     },
     "required": [
         "title",
@@ -80,6 +108,7 @@ _FINDING_SCHEMA: dict[str, Any] = {
         "end_line",
         "evidence",
         "reasoning_summary",
+        "impact",
         "suggested_fix",
     ],
     "additionalProperties": False,

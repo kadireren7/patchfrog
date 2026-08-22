@@ -130,6 +130,7 @@ class PublishableFinding:
     end_line: int
     reasoning_summary: str
     suggested_fix: str | None = None
+    impact: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

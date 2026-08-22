@@ -43,7 +43,7 @@ PUBLICATION_CONFIG_SCHEMA_VERSION = 1
 #: formatting (structure, headings, truncation behavior) changes
 #: materially enough that a prior publication's rendered content can no
 #: longer be considered equivalent to what publishing now would produce.
-COMMENT_FORMAT_VERSION = 1
+COMMENT_FORMAT_VERSION = 2
 
 #: Bumped whenever patchfrog.publishing.planner's selection/ordering/
 #: funnel logic (severity threshold application, cap selection,

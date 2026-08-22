@@ -103,6 +103,45 @@ def test_oracle_ignores_static_expected_only_findings(tmp_path: Path) -> None:
     assert json.loads(response.raw_json) == {"findings": []}
 
 
+def test_oracle_echoes_security_quality_ground_truth_when_present(tmp_path: Path) -> None:
+    cases_root = _write_repo(tmp_path, "c1", "a.py", "def foo():\n    return a - b\n")
+    expected = ExpectedFinding(
+        id="ef1", category=FindingCategory.SECURITY, file="a.py", issue_family="cred-exposure", symbol="foo",
+        severity=Severity.HIGH, line=2, ground_truth_source=GroundTruthSource.AI_EXPECTED,
+        expected_root_cause_concept="the secret reaches the response text without redaction",
+        expected_impact_concept="an attacker who triggers this path receives the plaintext secret",
+        acceptable_remediation_direction="remove the secret from the returned/logged text",
+    )
+    case = EvaluationCase(
+        id="c1", title="t", description="", language=Language.PYTHON, fixture="c1", difficulty=Difficulty.EASY,
+        expected=(expected,),
+    )
+    factory = build_oracle_response_factory(case, cases_root=cases_root)
+    response = factory(_request(user_prompt="Review target: `foo` in `a.py`, lines 1-2."))
+    finding = json.loads(response.raw_json)["findings"][0]
+    assert finding["reasoning_summary"] == "the secret reaches the response text without redaction"
+    assert finding["impact"] == "an attacker who triggers this path receives the plaintext secret"
+    assert finding["suggested_fix"] == "remove the secret from the returned/logged text"
+
+
+def test_oracle_falls_back_to_generic_reasoning_without_quality_ground_truth(tmp_path: Path) -> None:
+    cases_root = _write_repo(tmp_path, "c1", "a.py", "def foo():\n    return a - b\n")
+    expected = ExpectedFinding(
+        id="ef1", category=FindingCategory.CORRECTNESS, file="a.py", issue_family="inverted", symbol="foo",
+        severity=Severity.HIGH, line=2, ground_truth_source=GroundTruthSource.AI_EXPECTED,
+    )
+    case = EvaluationCase(
+        id="c1", title="t", description="", language=Language.PYTHON, fixture="c1", difficulty=Difficulty.EASY,
+        expected=(expected,),
+    )
+    factory = build_oracle_response_factory(case, cases_root=cases_root)
+    response = factory(_request(user_prompt="Review target: `foo` in `a.py`, lines 1-2."))
+    finding = json.loads(response.raw_json)["findings"][0]
+    assert finding["reasoning_summary"] == "oracle-generated verbatim from committed ground truth"
+    assert finding["impact"] is None
+    assert finding["suggested_fix"] is None
+
+
 def test_oracle_never_routes_by_bare_prompt_substring_without_target_line(tmp_path: Path) -> None:
     cases_root = _write_repo(tmp_path, "c1", "a.py", "def foo():\n    return 1\n")
     expected = ExpectedFinding(

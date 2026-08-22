@@ -36,6 +36,7 @@ from patchfrog.evaluation.domain import (
     ForbiddenFinding,
     GroundTruthSource,
     Language,
+    severity_level,
 )
 from patchfrog.repository.git import run_git
 
@@ -99,6 +100,21 @@ def _parse_expected(raw: dict[str, Any]) -> ExpectedFinding:
         evidence_contains=str(raw["evidence_contains"]) if raw.get("evidence_contains") is not None else None,
         ground_truth_source=GroundTruthSource(raw.get("ground_truth_source", "either")),
         notes=str(raw.get("notes", "")),
+        expected_root_cause_concept=(
+            str(raw["expected_root_cause_concept"]) if raw.get("expected_root_cause_concept") is not None else None
+        ),
+        expected_impact_concept=(
+            str(raw["expected_impact_concept"]) if raw.get("expected_impact_concept") is not None else None
+        ),
+        acceptable_remediation_direction=(
+            str(raw["acceptable_remediation_direction"])
+            if raw.get("acceptable_remediation_direction") is not None
+            else None
+        ),
+        max_justified_severity=(
+            Severity(raw["max_justified_severity"]) if raw.get("max_justified_severity") is not None else None
+        ),
+        forbidden_exaggerated_claims=tuple(str(c) for c in raw.get("forbidden_exaggerated_claims", [])),
     )
 
 
@@ -169,6 +185,17 @@ def validate_case(case: EvaluationCase, *, cases_root: Path = DEFAULT_CASES_ROOT
             errors.append(f"expected finding {e.id!r}: line_tolerance must be >= 0")
         if e.symbol is not None and e.symbol not in content:
             errors.append(f"expected finding {e.id!r}: symbol {e.symbol!r} not found (as text) in {e.file}")
+        if (
+            e.max_justified_severity is not None
+            and e.severity is not None
+            and severity_level(e.severity) > severity_level(e.max_justified_severity)
+        ):
+            errors.append(
+                f"expected finding {e.id!r}: severity {e.severity.value!r} exceeds its own "
+                f"max_justified_severity {e.max_justified_severity.value!r}"
+            )
+        if any(not claim.strip() for claim in e.forbidden_exaggerated_claims):
+            errors.append(f"expected finding {e.id!r}: forbidden_exaggerated_claims must not contain empty strings")
 
     for f in case.forbidden:
         if f.category is None and f.issue_family is None:

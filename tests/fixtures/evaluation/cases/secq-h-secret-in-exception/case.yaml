@@ -1,0 +1,37 @@
+case:
+  id: secq-h-secret-in-exception
+  title: API key embedded verbatim in a raised exception message
+  description: >
+    load_api_config includes the raw api_key value in the ConfigError
+    message it raises. If this exception's text ever reaches a log,
+    error response, or crash report, the secret leaks with it.
+  language: python
+  difficulty: medium
+  tags: [security]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/config_loader.py
+    symbol: load_api_config
+    issue_family: secret_in_exception_message
+    severity: high
+    max_justified_severity: high
+    line: 9
+    ground_truth_source: ai_expected
+    notes: the raw api_key is interpolated directly into the exception message.
+    expected_root_cause_concept: >
+      the secret value reaches exception/error text that is likely to
+      be logged or returned rather than being redacted first
+    expected_impact_concept: >
+      the api_key leaks into logs, error responses, or crash reports
+      wherever this exception's message is captured
+    acceptable_remediation_direction: >
+      raise the error without including api_key's value -- state only
+      that the format is invalid
+    forbidden_exaggerated_claims:
+      - remote code execution
+
+forbidden:
+  - reason: load_timeout_config takes no secret value and must not be flagged
+    category: maintainability

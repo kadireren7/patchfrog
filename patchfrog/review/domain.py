@@ -103,7 +103,29 @@ class ReviewEvidence:
 @dataclass(frozen=True, slots=True)
 class AIReviewFinding:
     """One structured finding as proposed by the reviewer model --
-    pre-validation, pre-critic. Never shown to a user in this form."""
+    pre-validation, pre-critic. Never shown to a user in this form.
+
+    Five conceptually distinct pieces of analysis, kept as separate
+    fields rather than folded into one prose blob so each can be
+    independently validated, dedup'd, persisted, and rendered:
+
+    - ``message``: identification -- the exact problematic condition
+      (e.g. "`password` is interpolated into the returned error
+      string"), not a vague restatement of the category.
+    - ``reasoning_summary``: the technical mechanism/root cause (e.g.
+      "the value reaches the response text without redaction").
+    - ``impact``: realistic, code-grounded consequence. Nullable --
+      when impact genuinely cannot be established from the given
+      context, this stays ``None`` rather than a fabricated guess.
+    - ``suggested_fix``: an actionable remediation direction, nullable.
+    - ``severity``/``confidence``: unchanged from the pre-existing
+      taxonomy (see the module docstring).
+
+    Never a chain-of-thought transcript: ``reasoning_summary`` and
+    ``impact`` are both scoped (see :mod:`patchfrog.review.prompt`) to a
+    couple of final-answer sentences, never the model's internal
+    deliberation.
+    """
 
     title: str
     message: str
@@ -116,6 +138,7 @@ class AIReviewFinding:
     evidence: tuple[ReviewEvidence, ...]
     reasoning_summary: str
     suggested_fix: str | None = None
+    impact: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +178,10 @@ class ValidationOutcome(StrEnum):
     HALLUCINATED_EVIDENCE = "hallucinated_evidence"
     INVALID_TAXONOMY = "invalid_taxonomy"
     OUT_OF_SCOPE = "out_of_scope"
+    #: ``message``/``reasoning_summary`` was empty -- a finding with no
+    #: identification or no stated mechanism is never useful enough to
+    #: reach the critic, regardless of how well-formed its other fields are.
+    INCOMPLETE_ANALYSIS = "incomplete_analysis"
 
 
 @dataclass(frozen=True, slots=True)

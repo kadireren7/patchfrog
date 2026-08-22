@@ -1,0 +1,41 @@
+case:
+  id: secq-i-race-security-sensitive
+  title: Non-atomic lockout counter race lets an attacker bypass login-attempt limiting
+  description: >
+    record_failure's read-modify-write on the per-user failed-attempt
+    counter is not atomic. Concurrent login attempts for the same
+    username can race, letting an attacker send parallel guesses that
+    never trip the >= 5 lockout threshold.
+  language: python
+  difficulty: hard
+  tags: [security, concurrency]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/lockout.py
+    symbol: record_failure
+    issue_family: race_condition_security_sensitive
+    severity: high
+    max_justified_severity: high
+    line: 13
+    line_end: 15
+    ground_truth_source: ai_expected
+    notes: >
+      the read-await-increment-write sequence is not atomic, and this
+      counter directly gates a security control (login lockout).
+    expected_root_cause_concept: >
+      a non-atomic read-modify-write on a shared counter happens
+      concurrently across requests for the same username
+    expected_impact_concept: >
+      an attacker sending concurrent guesses can exceed the intended
+      5-attempt lockout threshold, weakening brute-force protection
+    acceptable_remediation_direction: >
+      make the read-increment-write sequence atomic (e.g. a single
+      locked critical section, or an atomic counter) per username
+    forbidden_exaggerated_claims:
+      - remote code execution
+
+forbidden:
+  - reason: reset is correct and must not be flagged
+    category: maintainability

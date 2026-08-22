@@ -1,0 +1,36 @@
+case:
+  id: secq-l-use-after-free
+  title: Session token read immediately after being freed
+  description: >
+    log_session_token calls invalidate_session (which frees s->token),
+    then immediately reads s->token -- a use-after-free.
+  language: c
+  difficulty: medium
+  tags: [security, resource]
+
+expected:
+  - id: ef1
+    category: memory_safety
+    file: session.c
+    symbol: log_session_token
+    issue_family: use_after_free
+    severity: high
+    max_justified_severity: critical
+    line: 13
+    ground_truth_source: ai_expected
+    notes: s->token is freed inside invalidate_session, then read via printf on the next line.
+    expected_root_cause_concept: >
+      s->token is dereferenced after the memory it points to was
+      already freed by invalidate_session
+    expected_impact_concept: >
+      reads freed memory (information disclosure of reallocated heap
+      content, or a crash); if the allocator reuses the freed block
+      before this read, arbitrary heap content can be printed
+    acceptable_remediation_direction: >
+      read s->token (or copy it) before calling invalidate_session, or
+      have invalidate_session null out the pointer and check for that
+    forbidden_exaggerated_claims: []
+
+forbidden:
+  - reason: invalidate_session itself correctly frees the token it owns and must not be flagged in isolation
+    category: memory_safety
