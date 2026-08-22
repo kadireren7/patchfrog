@@ -92,6 +92,7 @@ def _parse_one_finding(entry: object) -> AIReviewFinding | None:
             evidence=evidence,
             reasoning_summary=str(entry.get("reasoning_summary", "")),
             suggested_fix=(str(entry["suggested_fix"]) if entry.get("suggested_fix") else None),
+            impact=(str(entry["impact"]) if entry.get("impact") else None),
         )
     except (KeyError, ValueError, TypeError):
         return None
@@ -129,6 +130,17 @@ def validate_finding(finding: AIReviewFinding, *, context: ValidationContext) ->
             finding=finding,
             outcome=ValidationOutcome.OUT_OF_SCOPE,
             detail=f"file_path {finding.file_path!r} was never shown to the model",
+        )
+
+    if not finding.message.strip():
+        return ValidatedFinding(
+            finding=finding, outcome=ValidationOutcome.INCOMPLETE_ANALYSIS, detail="message (identification) was empty"
+        )
+
+    if not finding.reasoning_summary.strip():
+        return ValidatedFinding(
+            finding=finding, outcome=ValidationOutcome.INCOMPLETE_ANALYSIS,
+            detail="reasoning_summary (root cause) was empty",
         )
 
     if not finding.evidence:

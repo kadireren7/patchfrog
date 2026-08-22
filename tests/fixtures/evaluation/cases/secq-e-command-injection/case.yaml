@@ -1,0 +1,37 @@
+case:
+  id: secq-e-command-injection
+  title: Shell command injection via unsanitized filename in shell=True call
+  description: >
+    convert_upload builds a shell command string by directly
+    interpolating a request-controlled filename and runs it with
+    shell=True, letting shell metacharacters in the filename inject
+    additional commands.
+  language: python
+  difficulty: medium
+  tags: [security]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/converter.py
+    symbol: convert_upload
+    issue_family: command_injection
+    severity: critical
+    max_justified_severity: critical
+    line: 6
+    ground_truth_source: ai_expected
+    notes: user_filename is interpolated into a shell=True command with no escaping.
+    expected_root_cause_concept: >
+      untrusted input reaches a shell interpreter (subprocess.run with
+      shell=True) via unescaped string interpolation
+    expected_impact_concept: >
+      a filename containing shell metacharacters (e.g. "; rm -rf /")
+      lets an attacker run arbitrary shell commands
+    acceptable_remediation_direction: >
+      pass the command and arguments as a list without shell=True, so
+      the filename is never interpreted by a shell
+    forbidden_exaggerated_claims: []
+
+forbidden:
+  - reason: convert_fixed_asset uses a hardcoded argument list with no shell and must not be flagged
+    category: security

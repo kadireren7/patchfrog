@@ -17,6 +17,7 @@ from typing import Any, cast
 
 from patchfrog.evaluation.domain import EvaluationCase, EvaluationRunResult, FixtureInfo
 from patchfrog.evaluation.metrics import compute_metrics
+from patchfrog.evaluation.security_quality import compute_security_quality_metrics
 
 
 def build_report(
@@ -26,11 +27,19 @@ def build_report(
     fixture_info: Mapping[str, FixtureInfo],
 ) -> dict[str, Any]:
     computed_metrics = compute_metrics(result.case_results, cases_by_id=cases_by_id, fixture_info=fixture_info)
+    security_quality = compute_security_quality_metrics(result.case_results, cases_by_id=cases_by_id)
     report: dict[str, Any] = {
         "identity": asdict(result.identity),
         "generated_at": result.generated_at,
         "duration_ms": result.duration_ms,
         "metrics": asdict(computed_metrics),
+        # Security-review-quality metrics (Phase 8 spec follow-up:
+        # "Security Review Quality Refinement" sections 20/21) -- a
+        # second, separate scoring pass over the *content* of findings
+        # the core matcher already confirmed as true positives. See
+        # :mod:`patchfrog.evaluation.security_quality`'s module docstring
+        # for why this never affects TP/FP/precision/recall above.
+        "security_quality": asdict(security_quality),
         "incremental": _build_incremental_section(result),
         "case_results": [asdict(r) for r in result.case_results],
     }
@@ -179,6 +188,32 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"output {efficiency['output_tokens_per_tp']:.1f}"
     )
     lines.append("")
+
+    sq = report.get("security_quality")
+    if sq is not None:
+        lines.append("## Security review quality")
+        lines.append("")
+        lines.append(f"- Scored true positives: {sq['true_positives_scored']}")
+        lines.append(
+            f"- Identification present: {sq['identification_present_rate']:.3f}  "
+            f"Root cause present: {sq['root_cause_present_rate']:.3f}"
+        )
+        lines.append(
+            f"- Actionable fix present: {sq['actionable_fix_present_rate']:.3f} "
+            f"(n={sq['actionable_fix_expected_count']})  "
+            f"Impact grounded: {sq['impact_grounded_rate']:.3f} (n={sq['impact_expected_count']})"
+        )
+        lines.append(
+            f"- Severity overstatement rate: {sq['severity_overstatement_rate']:.3f} "
+            f"(n={sq['severity_checked_count']})  "
+            f"Unsupported-impact rate: {sq['unsupported_impact_rate']:.3f}"
+        )
+        lines.append(
+            f"- Generic-advice rate: {sq['generic_advice_rate']:.3f}  "
+            f"Low/medium-confidence overclaim rate: {sq['low_confidence_overclaim_rate']:.3f} "
+            f"(n={sq['low_or_medium_confidence_count']})"
+        )
+        lines.append("")
 
     static_only = report.get("static_only")
     if static_only is not None:

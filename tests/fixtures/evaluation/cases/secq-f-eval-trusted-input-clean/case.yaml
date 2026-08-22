@@ -1,0 +1,22 @@
+case:
+  id: secq-f-eval-trusted-input-clean
+  title: eval() on a hardcoded, allow-listed constant expression is not a security bug
+  description: >
+    compute() calls eval(), which can bait a reviewer into an automatic
+    "eval is dangerous" finding -- but the evaluated string is always
+    one of two hardcoded constants from _ALLOWED_EXPRESSIONS, never
+    attacker-controlled input. Must not be flagged as exploitable, or
+    flagged with a severity implying real risk.
+  language: python
+  difficulty: hard
+  tags: [security, false-positive-trap]
+
+expected: []
+
+forbidden:
+  - reason: >
+      eval() here only ever evaluates one of two hardcoded constant
+      expressions from _ALLOWED_EXPRESSIONS, never attacker-controlled
+      input -- must not be flagged as a real vulnerability, and
+      certainly not at critical/high severity
+    category: security

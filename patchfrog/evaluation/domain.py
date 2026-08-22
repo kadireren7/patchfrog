@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 
-from patchfrog.analysis.domain import FindingCategory, Severity
+from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 
 #: Bumped whenever the benchmark corpus (fixtures/ground truth) changes
 #: materially -- a case added, removed, or re-labeled.
@@ -167,6 +167,23 @@ class ExpectedFinding:
     evidence_contains: str | None = None
     ground_truth_source: GroundTruthSource = GroundTruthSource.EITHER
     notes: str = ""
+    #: Security-review-quality ground truth (all optional, backward
+    #: compatible with every pre-existing case) -- consumed only by
+    #: :mod:`patchfrog.evaluation.security_quality`, never by the core
+    #: TP/FP matcher (:mod:`patchfrog.evaluation.matcher` stays
+    #: prose-independent by design; these are a second, separate scoring
+    #: pass over the *content* of an already-matched true positive).
+    expected_root_cause_concept: str | None = None
+    expected_impact_concept: str | None = None
+    acceptable_remediation_direction: str | None = None
+    #: The actual finding's severity must never exceed this -- the
+    #: severity-overstatement trap (Phase 8 spec section 25).
+    max_justified_severity: Severity | None = None
+    #: Substrings (case-insensitive) that must never appear in the
+    #: accepted finding's message/reasoning/impact -- exaggerated claims
+    #: the ground truth explicitly forbids (e.g. "remote code execution"
+    #: for a case that is not actually RCE).
+    forbidden_exaggerated_claims: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def effective_line_range(self) -> tuple[int, int] | None:
@@ -246,6 +263,15 @@ class PredictedFinding:
     end_line: int
     symbol_qualified_name: str | None
     evidence_text: str
+    #: Security-review-quality fields (Phase 8 spec follow-up:
+    #: "Security Review Quality Refinement") -- consumed by
+    #: :mod:`patchfrog.evaluation.security_quality`, never by the core
+    #: matcher. All optional so every pre-existing construction site
+    #: (which predates these fields) keeps working unchanged.
+    confidence: Confidence | None = None
+    reasoning_summary: str = ""
+    impact: str | None = None
+    suggested_fix: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

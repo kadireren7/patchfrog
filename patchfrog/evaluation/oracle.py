@@ -111,8 +111,18 @@ def _oracle_finding(expected: ExpectedFinding, *, repo_root: Path) -> dict[str, 
         "evidence": [
             {"file_path": expected.file, "start_line": line, "end_line": line_end, "quoted_text": quoted}
         ],
-        "reasoning_summary": "oracle-generated verbatim from committed ground truth",
-        "suggested_fix": None,
+        # Echoed verbatim from the case's own committed
+        # security-quality ground truth when present, so a corpus run
+        # through this oracle proves the plumbing -- schema, validation,
+        # persistence, publication -- carries `reasoning_summary`/
+        # `impact`/`suggested_fix` end-to-end, not just `message`. A case
+        # with no such ground truth (every pre-existing, non-security
+        # case) falls back to the original generic string / ``None``,
+        # unchanged from before this refinement.
+        "reasoning_summary": expected.expected_root_cause_concept
+        or "oracle-generated verbatim from committed ground truth",
+        "impact": expected.expected_impact_concept,
+        "suggested_fix": expected.acceptable_remediation_direction,
     }
 
 

@@ -1,0 +1,20 @@
+case:
+  id: secq-n-safe-constant-time-compare
+  title: Constant-time signature comparison is correct security code, not a bug
+  description: >
+    verify_signature uses hmac.compare_digest, the correct
+    timing-attack-resistant comparison for secrets/signatures. A
+    reviewer unfamiliar with timing attacks might flag the "unusual"
+    comparison function as suspicious -- it must not be flagged.
+  language: python
+  difficulty: hard
+  tags: [security, false-positive-trap]
+
+expected: []
+
+forbidden:
+  - reason: >
+      hmac.compare_digest is the correct constant-time comparison for
+      secrets/signatures; using it instead of == is the secure choice,
+      not a bug
+    category: security

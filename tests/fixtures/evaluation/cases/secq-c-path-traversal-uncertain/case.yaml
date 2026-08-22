@@ -1,0 +1,45 @@
+case:
+  id: secq-c-path-traversal-uncertain
+  title: Path construction with no containment check and an undocumented caller contract
+  description: >
+    build_report_path joins relative_name onto report_root with no
+    containment check, but unlike secq-b, this module documents no
+    caller contract for where relative_name comes from -- exploitability
+    is real only if a caller ever passes untrusted input, which isn't
+    established here. Ground truth allows a lower-confidence, hedged
+    finding rather than a confirmed-traversal claim.
+  language: python
+  difficulty: hard
+  tags: [security, boundary, false-positive-trap]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/reports.py
+    symbol: build_report_path
+    issue_family: path_traversal
+    severity: medium
+    max_justified_severity: medium
+    line: 9
+    ground_truth_source: ai_expected
+    notes: >
+      no containment check, but the caller contract for relative_name
+      is genuinely undocumented -- a hedged, medium-confidence finding
+      is appropriate, not a confirmed-vulnerability claim.
+    expected_root_cause_concept: >
+      no containment check on the joined path, but whether relative_name
+      is ever attacker-controlled is not established by this module alone
+    expected_impact_concept: >
+      only realizable if some caller passes untrusted input into
+      relative_name; not confirmed from this code alone
+    acceptable_remediation_direction: >
+      resolve the joined path and reject it if the resolved path
+      escapes report_root, regardless of caller trust
+    forbidden_exaggerated_claims:
+      - confirmed vulnerability
+      - remote code execution
+      - critical
+
+forbidden:
+  - reason: default_report_root returns a hardcoded constant and must not be flagged
+    category: maintainability

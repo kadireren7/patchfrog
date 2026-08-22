@@ -44,6 +44,7 @@ class AIFindingRepository:
                 ),
                 reasoning_summary=f.finding.reasoning_summary,
                 suggested_fix=f.finding.suggested_fix,
+                impact=f.finding.impact,
                 corroborated_by_static=f.corroborated_by_static,
                 static_finding_ids=json.dumps([str(i) for i in f.static_finding_ids]),
             )

@@ -309,6 +309,104 @@ report's "Static analyzer coverage" table), never silently treated as
 5. Run the full corpus and `eval compare` before committing, to confirm
    the new case doesn't regress anything else.
 
+## Security review quality (post-Phase-8 refinement)
+
+A separate refinement on top of Phase 8 (branch `feat/security-review-quality`)
+extended the existing AI-finding representation with explicit security-quality
+concepts, rather than building a parallel security-only reviewer stack.
+
+**Analysis representation.** `AIReviewFinding` (`patchfrog/review/domain.py`)
+already distinguished `message` (identification) and severity/confidence/
+evidence; this refinement added two nullable fields carried the same way:
+
+- `reasoning_summary` — the technical mechanism/root cause (e.g. "the
+  value reaches the response text without redaction"), not a restatement
+  of the category.
+- `impact` — a realistic, code-grounded consequence, `None` when it
+  genuinely cannot be established from the given context (never a
+  fabricated filler sentence). `suggested_fix` already existed and is
+  unchanged.
+
+These are concise final-answer fields (1-3 sentences), never a
+chain-of-thought transcript — enforced by the reviewer/critic system
+prompts (`patchfrog/review/prompt.py`) and by deterministic validation
+(`patchfrog/review/validation.py`: `message`/`reasoning_summary` must be
+non-empty, or the finding is rejected as `INCOMPLETE_ANALYSIS` before it
+ever reaches the critic).
+
+**Confidence and severity.** No new confidence system — the existing
+three-level `Confidence` enum (`HIGH`/`MEDIUM`/`LOW`) is reused as-is.
+The reviewer prompt calibrates it explicitly (how sure the model is this
+is a real bug, not how important it is) and requires conditional wording
+("if callers can supply X, this allows Y — verify the caller contract")
+for anything below `HIGH`, never confirmed-vulnerability language.
+Severity is calibrated against exploitability/impact/reachability in
+context, never inferred from category alone (`eval()` is not
+automatically critical; a hardcoded path is not path traversal).
+
+**Critic.** The critic (`patchfrog/review/critic.py`, prompt in
+`prompt.py`) rejects vague identification, unsupported root cause,
+exaggerated impact claims, symptom-only fixes, and generic
+best-practice advice; it downgrades (rather than rejects) a real finding
+whose severity/confidence overreaches. It never rejects for brevity — a
+short, precise finding is the target, not a defect.
+
+**Static findings.** `patchfrog/analysis/security_rule_metadata.py` is a
+small, hand-curated, closed lookup table (keyed by `rule_id`) giving a
+handful of well-understood static rules (`eval()` usage, bare `except:`,
+unsafe `strcpy`/`gets`/`system()`) a `reason` and `remediation` — applied
+at presentation time only (`patchfrog.publishing.queries.publishable_finding_from_static_finding`),
+never at analysis time. `impact` is deliberately never set from a static
+rule alone: a rule firing proves the mechanism, never real-world
+reachability or attacker control.
+
+**Comment rendering.** `patchfrog/publishing/body.py` folds
+identification/reason/impact/solution into one flowing paragraph — never
+a mechanical `Identification:`/`Reason:`/`Impact:`/`Solution:` heading
+list — skipping any field that's empty or that would just repeat a
+sentence already included. A `MEDIUM`/`LOW`-confidence finding gets one
+short parenthetical qualifier next to its severity badge (e.g. "medium
+confidence, verify before treating as confirmed") — never a numeric
+confidence score shown to a GitHub user.
+
+**Compatibility.** `REVIEW_PROMPT_VERSION`/`REVIEW_POLICY_VERSION`
+(`patchfrog/review/config.py`) and `COMMENT_FORMAT_VERSION`
+(`patchfrog/publishing/config.py`) were each bumped by one, so this
+refinement's stricter prompt/critic/rendering behavior never silently
+reuses a canonical review run or publication produced under the old
+behavior. Finding identity for Phase 7 review memory and Phase 6
+publication idempotency is unaffected: identity is keyed on evidence/
+category/location, never on the prose of `reasoning_summary`/`impact`
+(a wording-only change to those fields does not make an existing finding
+look new). The new `impact` column on `ai_finding_proposals`/`ai_findings`
+(migration `0011_security_review_quality`) is nullable, so every
+pre-existing row remains readable as `impact=None`, never a fabricated
+backfill.
+
+**Evaluation.** `patchfrog/evaluation/security_quality.py` adds a second,
+deterministic scoring pass — never an LLM judge — over predictions the
+core matcher already confirmed as true positives: identification/
+root-cause presence, actionable-fix presence (only where one is
+expected), impact groundedness (checked against a curated list of
+forbidden exaggerated claims per case), severity overstatement (against
+`max_justified_severity`), and two explicitly-heuristic checks (generic-
+advice phrases, low/medium-confidence overclaiming). 15 new `secq-*`
+cases (`tests/fixtures/evaluation/cases/secq-*`) cover credential
+exposure, direct and uncertain-attacker-control path traversal, an
+inverted auth check, command/SQL injection, a secret in an exception
+message, security-sensitive vs. correctness-only races, unsafe `strcpy`,
+use-after-free, an integer-overflow allocation, a safe constant-time
+comparison, and a prompt-injection attempt embedded in a source comment
+— each carrying `expected_root_cause_concept`/`expected_impact_concept`/
+`acceptable_remediation_direction`/`max_justified_severity`/
+`forbidden_exaggerated_claims` ground truth alongside the existing
+match fields. The oracle (`patchfrog/evaluation/oracle.py`) echoes this
+ground truth verbatim when present, so a corpus run proves the
+plumbing — schema, validation, persistence, publication — carries these
+fields end-to-end; it is not evidence of real semantic quality (see "Two
+kinds of AI numbers" above — the same oracle-vs-live distinction applies
+here unchanged).
+
 ## What Phase 8 deliberately does not do
 
 - **No LLM-as-judge for the canonical score.** Ever.

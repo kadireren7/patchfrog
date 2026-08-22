@@ -1,0 +1,37 @@
+case:
+  id: secq-g-sql-injection-concat
+  title: SQL injection via string concatenation of a user-supplied name
+  description: >
+    find_user_by_name builds a SQL query by directly concatenating a
+    user-supplied string instead of using a parameterized query, unlike
+    find_user_by_id right below it, which does it correctly.
+  language: python
+  difficulty: medium
+  tags: [security]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/users.py
+    symbol: find_user_by_name
+    issue_family: sql_injection
+    severity: critical
+    max_justified_severity: critical
+    line: 3
+    ground_truth_source: ai_expected
+    notes: username is concatenated directly into the SQL string with no parameterization or escaping.
+    expected_root_cause_concept: >
+      untrusted input reaches a SQL query via direct string
+      concatenation instead of a parameterized query
+    expected_impact_concept: >
+      a username containing SQL syntax (e.g. a quote followed by
+      additional clauses) can alter the query's meaning, read or modify
+      unintended rows
+    acceptable_remediation_direction: >
+      use a parameterized query, passing username as a bound parameter,
+      the same way find_user_by_id does
+    forbidden_exaggerated_claims: []
+
+forbidden:
+  - reason: find_user_by_id correctly uses a parameterized query and must not be flagged
+    category: security

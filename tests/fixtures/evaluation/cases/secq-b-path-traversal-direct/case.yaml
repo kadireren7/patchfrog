@@ -1,0 +1,38 @@
+case:
+  id: secq-b-path-traversal-direct
+  title: Path traversal via directly attacker-controlled filename
+  description: >
+    read_uploaded_file joins a request-controlled filename onto
+    UPLOAD_ROOT with no containment check, so a filename containing
+    `..` segments can escape the upload directory.
+  language: python
+  difficulty: medium
+  tags: [security, boundary]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/downloads.py
+    symbol: read_uploaded_file
+    issue_family: path_traversal
+    severity: high
+    max_justified_severity: high
+    line: 9
+    ground_truth_source: ai_expected
+    notes: filename is documented as coming directly from the HTTP request, with no containment check.
+    expected_root_cause_concept: >
+      an untrusted, caller-supplied filename reaches the filesystem
+      path without validating that the resolved path stays within
+      UPLOAD_ROOT
+    expected_impact_concept: >
+      a request with a filename like ../../etc/passwd can read
+      arbitrary files outside the upload directory
+    acceptable_remediation_direction: >
+      resolve the joined path and reject it if the resolved path is
+      not still inside UPLOAD_ROOT
+    forbidden_exaggerated_claims:
+      - remote code execution
+
+forbidden:
+  - reason: list_upload_root takes no external input and must not be flagged
+    category: maintainability

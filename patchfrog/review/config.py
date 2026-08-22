@@ -37,12 +37,12 @@ CONFIG_SCHEMA_VERSION = 1
 #: Bumped whenever patchfrog.review.prompt's system/user prompt templates
 #: change materially enough that a prior run's proposals can no longer be
 #: considered equivalent to what re-running now would produce.
-REVIEW_PROMPT_VERSION = 1
+REVIEW_PROMPT_VERSION = 2
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final
 #: finding change materially.
-REVIEW_POLICY_VERSION = 1
+REVIEW_POLICY_VERSION = 2
 
 #: Bumped whenever candidate generation/selection (patchfrog.review.candidates)
 #: changes materially.

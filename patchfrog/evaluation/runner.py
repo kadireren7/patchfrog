@@ -35,6 +35,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patchfrog.analysis.queries import AnalysisQueryService
+from patchfrog.analysis.security_rule_metadata import lookup as lookup_security_rule_metadata
 from patchfrog.analysis.service import StaticAnalysisService
 from patchfrog.context.config import ContextConfig
 from patchfrog.diff.models import DiffFile
@@ -186,6 +187,7 @@ def build_whole_repo_diff(repo_root: Path, file_paths: Sequence[str]) -> list[Di
 
 
 def _static_to_predicted(finding: FindingModel) -> PredictedFinding:
+    metadata = lookup_security_rule_metadata(finding.rule_id)
     return PredictedFinding(
         source=PredictionSource.STATIC,
         category=finding.category,
@@ -197,6 +199,10 @@ def _static_to_predicted(finding: FindingModel) -> PredictedFinding:
         end_line=finding.end_line,
         symbol_qualified_name=finding.symbol_name,
         evidence_text=finding.message,
+        confidence=finding.confidence,
+        reasoning_summary=metadata.reason if metadata is not None else "",
+        suggested_fix=metadata.remediation if metadata is not None else None,
+        impact=None,  # never fabricated from a static rule alone
     )
 
 
@@ -216,6 +222,10 @@ def _ai_to_predicted(
         end_line=finding.end_line,
         symbol_qualified_name=candidate.qualified_name if candidate is not None else None,
         evidence_text=evidence_text,
+        confidence=finding.confidence,
+        reasoning_summary=finding.reasoning_summary,
+        suggested_fix=finding.suggested_fix,
+        impact=finding.impact,
     )
 
 

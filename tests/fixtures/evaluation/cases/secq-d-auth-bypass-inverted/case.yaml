@@ -1,0 +1,36 @@
+case:
+  id: secq-d-auth-bypass-inverted
+  title: Inverted authentication check grants delete access to unauthenticated users
+  description: >
+    can_delete_resource's `not user.is_authenticated` clause is
+    inverted -- any unauthenticated user satisfies the condition and is
+    granted delete access, a complete authorization bypass.
+  language: python
+  difficulty: easy
+  tags: [security, boundary]
+
+expected:
+  - id: ef1
+    category: security
+    file: src/permissions.py
+    symbol: can_delete_resource
+    issue_family: auth_bypass_inverted_check
+    severity: critical
+    max_justified_severity: critical
+    line: 8
+    ground_truth_source: ai_expected
+    notes: "`or not user.is_authenticated` means any unauthenticated caller passes the check."
+    expected_root_cause_concept: >
+      the authorization decision is inverted -- it grants access when
+      the user is NOT authenticated instead of requiring authentication
+    expected_impact_concept: >
+      any unauthenticated caller can delete any resource, a complete
+      authorization bypass
+    acceptable_remediation_direction: >
+      require user.is_authenticated (not its negation) and correctly
+      scope the admin-role check
+    forbidden_exaggerated_claims: []
+
+forbidden:
+  - reason: can_read_resource is correct and must not be flagged
+    category: maintainability
