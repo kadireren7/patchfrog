@@ -47,6 +47,11 @@ class PullRequestMetadata:
     head_sha: str
     html_url: str
     state: str
+    #: GitHub's own ``merged`` boolean -- distinct from ``state`` (a
+    #: merged PR always has ``state == "closed"``, but a closed PR is not
+    #: necessarily merged). See :mod:`patchfrog.feedback.sync` for
+    #: ``PR_MERGED`` vs. ``PR_CLOSED`` lifecycle event derivation.
+    merged: bool = False
 
 
 @dataclass(frozen=True, slots=True)
