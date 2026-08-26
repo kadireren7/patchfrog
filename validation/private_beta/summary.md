@@ -99,8 +99,10 @@ scope) -- recorded as a remaining limitation.
 Re-ran 3 controlled cases with critic enabled. No delta observed
 (expected: the oracle's critic response is scripted to always accept,
 so this only proves critic invocation/persistence plumbing survives
-end-to-end, not real FP-reduction value -- Phase 8's own benchmark
-baseline is the source of truth for real critic value).
+end-to-end, not real FP-reduction value). Phase 8 provides the
+canonical critic-ablation infrastructure and pipeline baseline, but no
+live-provider run has yet established the critic's real-model quality
+impact.
 
 ## Latency (cold, single-process, real repos -- see `latency.json`)
 
@@ -121,3 +123,23 @@ Reverified against real live dogfood data post-fix.
 
 **READY_WITH_LIMITATIONS** -- see the PR description / final report for
 full reasoning and the complete remaining-limitations list.
+
+## Before inviting external private-beta users
+
+These are limitations of this sprint's evidence, not reasons to redo
+or distrust it. Two highest-priority remaining validation items:
+
+1. **Run the corpus/real-PR validation with a live provider.** Every
+   number in this sprint (and in Phase 8's own baseline) comes from a
+   scripted oracle, not a real model. Precision/recall/F1=1.0 here
+   proves the pipeline carries a *known* finding through correctly --
+   it says nothing about whether a real model finds bugs, how often it
+   hallucinates, or the critic's real FP-reduction value.
+2. **Investigate/fix extern-declared cross-file contract retrieval in
+   the Context Engine** (see case11-cross-file above) -- a real,
+   reproduced gap where a header reached only via `extern` declaration
+   + separate translation unit (not `#include`) failed to make it into
+   the context bundle, even though it held the exact contract a planted
+   bug violated. Documented but deliberately not fixed in this PR
+   (Phase 2/4 architecture, out of "smallest fix" scope) -- not
+   redesigned here, per instruction.
