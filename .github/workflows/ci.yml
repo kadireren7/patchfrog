@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: patchfrog
+          POSTGRES_PASSWORD: patchfrog
+          POSTGRES_DB: patchfrog
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U patchfrog"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://patchfrog:patchfrog@localhost:5432/patchfrog
+      REDIS_URL: redis://localhost:6379/0
+      # A GitHub App identity is required for Settings to construct, not
+      # for any real GitHub call CI makes -- every job below runs against
+      # fixtures/oracle providers only, never live credentials.
+      # GITHUB_PRIVATE_KEY below is a disposable RSA keypair generated
+      # solely for this workflow (`openssl genrsa 2048`) -- never
+      # registered with any real GitHub App, never used outside CI.
+      GITHUB_APP_ID: "0"
+      GITHUB_PRIVATE_KEY: |
+        -----BEGIN PRIVATE KEY-----
+        MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDc1Br1N+2s8fLE
+        2r1+/42VyQRbJ/XColFATS4htUGInCp3vrp2lJD7rfhlQLCCj6+oL8KFOI9wRjFD
+        HQUfUbSyOAiPVjwwLw4wg/fegw/rPIqk0sbtgLX6tNsiDvF+jeZ2ILIiA6O5h/of
+        tAPwHZFbM0F28CNC/FczaAN49ICnGg/5cbkCmWu6ZFRHYLBdKeQK2326zOjLZAAf
+        3U08BjvSwjxGuytSAlETUTLnn9NmwSiAAIzhqfsufIOJ21aS30lmmfUdehmUuDOM
+        Gx3o+C5DTwX0zqHB4Te3aLk1PBzKxVMFzPsxTJDKBzuAWE8RyuvKN3HRGPgluIM9
+        o2WsR8EZAgMBAAECggEAMWTUHtOCuzNnLPcMedKplb5f1g/rHbz21Z4t2mZToT3l
+        FeG4jXuPrmvsaqF8mceP79u289uB4gghTrS4B5hcBZ0Y9Q7B6bkswFdUYxYHwoNJ
+        M7LdwhQPIGPBvC2BgOA2k2ee0JLl1UMABIVceCH0+GRPmU3/ZSVST/JNDIoMGNQG
+        EjuHnM8Hjs4WP2r7ous2CeEcUdDrnhqrVfcFOzIKMEiffoWIaw12oBhRR6D+stP1
+        wB95YJ57326Z/yQyQUZw+iOOpkG0url3zyzJUu5jvpF9mAOVHt1i61N0OxktYNd4
+        b5OuXfOTbYoaLl+jn3mzW/pLQpkfgQa28NBqDDcUMQKBgQD49XsudnZQ0NoeuU8+
+        LTxQ/e6R0pBKjqS/4yv0nxrt5aEY8CKp7nrVGhubX1btRIZNS3xc+UrtWrdivSzM
+        9Y3LAIw67XOa1oYID0hg0C6q5jftpMpqb9C9ZKEIz9bP4V4xpNDM67k48qAujvm2
+        XGZ6AgRT2RSFtr4H+CzongSlZQKBgQDjEvQvsgogK/XfMDJmKA34Y/8q5mGmp4PU
+        8lf7KTwsBg2rgABqU5ZDoDuguBzrch1eE5NxECN1mQyDG2eX201eL3zerCalXXYT
+        p+nDuHHwQBiua+cjAKPOHny+IV4Y2ijij6nXK10Trb4POOdjuMZQU8aBnlE3LTlR
+        AADs6sGbpQKBgAzlkpsGkfx/xTzgNqWu7Df535j4QndKSmiSWR2T/G4kfiLvlawd
+        6YkOkC2NU9B4w0hPx8J9O49uKp/X0vFPKyhAAAOxd1KnGExklkhFoJVD1dPevImk
+        /zhAdUMimSstrpZ9xj9HWtIDZ57h0zfKM5jQb+70COcgX1nEVnc6cF0tAoGAHOEZ
+        O0OqdAMDRzpq/oETncah+kPIoZhmdNvJgsDwzSyL6obiBqPQ1ZL4Ym1oCC3APGnC
+        87s4t0kaxUXj+/VBNrxVZkCAvcFQNhnB6kl3/DU6rlw8zj/TlXBdLxUxUXnVf1ME
+        J8B1Gv6a0HbNPuqOFkNBWNTYwWq4Amw8seT9cJ0CgYEA5ovXV2T4++ws2Qt3cPO5
+        im8J2aCh1fYKE/1ZNnuO0xnUUu3VeH8Rz2iw4mFzELKc64v9BSw2xON7tWSDtY6z
+        0VKkLmokNeUbcCpEs/lLy6/bdP0/pVTBLesXBDsm6qnAw1Stnc/MTnXPsiaTYwke
+        VgAFWZ9YEAZPVROqM6i76BU=
+        -----END PRIVATE KEY-----
+      GITHUB_WEBHOOK_SECRET: ci-placeholder-not-a-real-secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: ruff
+        run: ruff check .
+
+      - name: mypy --strict
+        run: mypy . --strict
+
+      - name: Run migrations
+        run: alembic upgrade head
+
+      - name: Verify migration head matches alembic_version
+        run: |
+          expected=$(alembic heads | awk '{print $1}')
+          actual=$(python -c "
+          import asyncio
+          from sqlalchemy import text
+          from sqlalchemy.ext.asyncio import create_async_engine
+          async def main():
+              engine = create_async_engine('$DATABASE_URL')
+              async with engine.connect() as conn:
+                  r = await conn.execute(text('SELECT version_num FROM alembic_version'))
+                  print(r.first()[0])
+              await engine.dispose()
+          asyncio.run(main())
+          ")
+          echo "expected=$expected actual=$actual"
+          test "$expected" = "$actual"
+
+      - name: pytest
+        run: pytest -q
+
+      - name: Benchmark sanity (oracle provider, small case subset -- never the full corpus on every commit)
+        run: |
+          python -m patchfrog.cli eval run \
+            --case py-auth-bypass --case py-path-traversal --case clean-py-defensive-check \
+            --case secq-a-credential-log-exposure --case secq-n-safe-constant-time-compare \
+            --output /tmp/ci_eval_sanity.json
+
+      - name: Build Docker images (build-only, no push)
+        run: |
+          docker build -f docker/Dockerfile --target api -t patchfrog-api:ci .
+          docker build -f docker/Dockerfile --target worker -t patchfrog-worker:ci .
+
+      - name: Verify Celery task registration
+        run: |
+          docker run --rm \
+            -e DATABASE_URL="$DATABASE_URL" -e REDIS_URL="$REDIS_URL" \
+            -e GITHUB_APP_ID="$GITHUB_APP_ID" -e GITHUB_PRIVATE_KEY="$GITHUB_PRIVATE_KEY" \
+            -e GITHUB_WEBHOOK_SECRET="$GITHUB_WEBHOOK_SECRET" \
+            --network host \
+            patchfrog-worker:ci python -c "
+          from apps.worker.celery_app import celery_app
+          import apps.worker.tasks
+          tasks = [t for t in celery_app.tasks if not t.startswith('celery.')]
+          assert len(tasks) == 9, f'expected 9 tasks, got {len(tasks)}: {sorted(tasks)}'
+          print('OK:', sorted(tasks))
+          "

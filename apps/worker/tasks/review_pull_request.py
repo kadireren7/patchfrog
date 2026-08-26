@@ -29,16 +29,23 @@ import httpx
 import structlog
 
 from apps.worker.celery_app import celery_app
+from apps.worker.tasks.publish_review import publish_review_task
 from patchfrog.config.settings import Settings, get_settings
 from patchfrog.diff.parser import build_diff_file
 from patchfrog.domain.pull_request import PullRequestRef
 from patchfrog.github.auth import InstallationTokenProvider
 from patchfrog.github.client import GitHubClient
+from patchfrog.ops import metrics
+from patchfrog.ops.errors import classify_exception
 from patchfrog.persistence.database import create_engine, create_session_factory
-from patchfrog.persistence.repositories import PullRequestRepository, RepositoryRepository
+from patchfrog.persistence.repositories import (
+    InstallationRepository,
+    PullRequestRepository,
+    RepositoryRepository,
+)
 from patchfrog.review.config import MalformedReviewConfigError
 from patchfrog.review.config_resolution import resolve_repository_review_config
-from patchfrog.review.domain import ReviewRunSummary
+from patchfrog.review.domain import ReviewRunStatus, ReviewRunSummary
 from patchfrog.review.provider_factory import build_critic_provider, build_reviewer_provider
 from patchfrog.review.service import (
     PullRequestReviewService,
@@ -61,7 +68,17 @@ async def _review_pull_request(
     pull_request_number: int,
     head_sha: str,
     settings: Settings,
-) -> ReviewRunSummary:
+) -> ReviewRunSummary | None:
+    """Returns ``None`` -- never a synthetic/placeholder
+    :class:`~patchfrog.review.domain.ReviewRunSummary` -- when this
+    commit was superseded by a newer one before the AI review stage
+    started (spec section 21: "verify review head is still relevant"
+    before spending any provider call on it). No review run row is
+    created for a superseded commit; the outcome is observable only via
+    the ``review_skipped_superseded`` structured log line and the
+    ``reviews_skipped_total`` metric, deliberately not a DB row -- Phase
+    5's own run-identity/locking machinery is untouched by this check."""
+
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
 
@@ -98,9 +115,23 @@ async def _review_pull_request(
                 api_base_url=settings.github_api_base_url,
                 timeout_seconds=settings.github_api_timeout_seconds,
             )
+
+            ref = PullRequestRef(owner=owner, repository=name, number=pull_request_number)
+            current_metadata = await github_client.get_pull_request(installation_id=installation_id, ref=ref)
+            if current_metadata.head_sha != head_sha:
+                logger.info(
+                    "review_skipped_superseded",
+                    repository=full_name,
+                    pull_request_number=pull_request_number,
+                    queued_head_sha=head_sha,
+                    current_head_sha=current_metadata.head_sha,
+                )
+                metrics.reviews_skipped_total.labels(reason="superseded").inc()
+                return None
+
+            metrics.reviews_started_total.inc()
             changed_files = await github_client.list_pull_request_files(
-                installation_id=installation_id,
-                ref=PullRequestRef(owner=owner, repository=name, number=pull_request_number),
+                installation_id=installation_id, ref=ref
             )
 
         diff_files = [build_diff_file(f.path, f.patch) for f in changed_files]
@@ -185,6 +216,18 @@ async def _review_pull_request(
                 prepared=prepared,
             )
 
+        provider_labels = {
+            "provider": reviewer_provider.identity.provider,
+            "model": reviewer_provider.identity.model,
+        }
+        metrics.reviews_completed_total.labels(status=summary.status.value).inc()
+        metrics.review_duration_seconds.observe(summary.duration_ms / 1000)
+        metrics.provider_calls_total.labels(**provider_labels, role="reviewer").inc(summary.candidates_reviewed)
+        metrics.provider_input_tokens_total.labels(**provider_labels).inc(summary.reviewer_usage.input_tokens)
+        metrics.provider_output_tokens_total.labels(**provider_labels).inc(summary.reviewer_usage.output_tokens)
+        metrics.findings_generated_total.inc(summary.proposals_count)
+        metrics.findings_suppressed_total.labels(reason="duplicate").inc(summary.suppressed_duplicate_count)
+
         return summary
     finally:
         await engine.dispose()
@@ -201,18 +244,27 @@ def review_pull_request_task(
     pull_request_number: int,
     head_sha: str,
 ) -> str:
-    summary = asyncio.run(
-        _review_pull_request(
-            github_repository_id=github_repository_id,
-            owner=owner,
-            name=name,
-            full_name=full_name,
-            installation_id=installation_id,
-            pull_request_number=pull_request_number,
-            head_sha=head_sha,
-            settings=get_settings(),
+    settings = get_settings()
+    try:
+        summary = asyncio.run(
+            _review_pull_request(
+                github_repository_id=github_repository_id,
+                owner=owner,
+                name=name,
+                full_name=full_name,
+                installation_id=installation_id,
+                pull_request_number=pull_request_number,
+                head_sha=head_sha,
+                settings=settings,
+            )
         )
-    )
+    except Exception as exc:
+        category, _retryable, _detail = classify_exception(exc)
+        metrics.reviews_failed_total.labels(error_category=category.value).inc()
+        raise
+    if summary is None:
+        return "skipped: superseded by a newer commit"
+
     logger.info(
         "review_task_completed",
         repository=full_name,
@@ -221,7 +273,42 @@ def review_pull_request_task(
         accepted_count=summary.accepted_count,
         reused_existing_run=summary.reused_existing_run,
     )
+
+    if summary.status is not ReviewRunStatus.FAILED:
+        if asyncio.run(_publication_allowed(installation_id=installation_id, settings=settings)):
+            publish_review_task.delay(review_run_id=str(summary.run_id), publish=True)
+            logger.info("publish_scheduled", review_run_id=str(summary.run_id), repository=full_name)
+        else:
+            logger.info(
+                "publish_not_scheduled_beta_gate_closed",
+                review_run_id=str(summary.run_id),
+                repository=full_name,
+            )
+
     return (
         f"status={summary.status.value} accepted={summary.accepted_count} "
         f"rejected={summary.rejected_count} reviewed={summary.candidates_reviewed}"
     )
+
+
+async def _publication_allowed(*, installation_id: int, settings: Settings) -> bool:
+    """The beta-specific publication gate (spec sections 11/35): *both*
+    the process-wide kill switch and this specific installation's own
+    opt-in must be true. A repository's own ``.patchfrog.yml``
+    ``publish.enabled`` is checked separately, inside
+    :mod:`apps.worker.tasks.publish_review` itself -- neither gate alone
+    is sufficient for a real GitHub write to happen."""
+
+    if not settings.global_publication_enabled:
+        return False
+
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            installation = await InstallationRepository().get_by_github_id(
+                session, github_installation_id=installation_id
+            )
+            return installation is not None and installation.publication_allowed
+    finally:
+        await engine.dispose()

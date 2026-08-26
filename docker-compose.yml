@@ -61,8 +61,17 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://patchfrog:patchfrog@postgres:5432/patchfrog
       REDIS_URL: redis://redis:6379/0
+      # Required for any of the worker's own review/pipeline/publication
+      # metrics to be visible anywhere -- the API's own /metrics can
+      # never see them (separate process, separate container; see
+      # patchfrog.ops.metrics's module docstring). Prometheus should
+      # scrape this container at :9100/metrics as a second target,
+      # alongside the API's :8000/metrics.
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus_multiproc
     # See the `api` service above for the GITHUB_PRIVATE_KEY_PATH bind-mount
     # pattern — this is the process that actually calls the GitHub API with it.
+    ports:
+      - "9100:9100"
     depends_on:
       postgres:
         condition: service_healthy

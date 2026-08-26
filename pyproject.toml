@@ -1,7 +1,7 @@
 [project]
 name = "patchfrog"
-version = "0.1.0"
-description = "GitHub-native AI code review platform (Phase 1: ingestion foundation)"
+version = "0.1.0-beta"
+description = "GitHub-native AI code review platform"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.12"
 dependencies = [
@@ -34,6 +34,10 @@ dependencies = [
     # AI Reviewer (Phase 5): official Anthropic SDK for the Claude API
     # provider adapter (patchfrog.review.providers.anthropic_provider).
     "anthropic>=0.68,<1.0",
+    # Public beta readiness: Prometheus-compatible /metrics exposition
+    # (patchfrog.ops.metrics) -- the standard client library, never a
+    # hand-rolled text-format exporter.
+    "prometheus-client>=0.21,<1.0",
 ]
 
 [project.optional-dependencies]

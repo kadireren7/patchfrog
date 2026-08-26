@@ -26,7 +26,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -36,6 +36,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from apps.worker.tasks.run_review_pipeline import run_review_pipeline_task
 from patchfrog.analysis.domain import AnalysisRunSummary
 from patchfrog.analysis.service import StaleIndexError, StaticAnalysisService
 from patchfrog.config.logging import configure_logging
@@ -83,18 +84,33 @@ from patchfrog.github.auth import InstallationTokenProvider
 from patchfrog.github.client import GitHubClient
 from patchfrog.indexing.models import IndexingSummary
 from patchfrog.indexing.service import RepositoryIndexingService
+from patchfrog.ops.health import check_readiness
+from patchfrog.ops.queries import (
+    FailedRun,
+    InstallationUsage,
+    StaleRun,
+    list_failed_runs,
+    list_installation_usage,
+    list_stale_runs,
+)
 from patchfrog.persistence.database import create_engine, create_session_factory
 from patchfrog.persistence.models.analysis import FindingModel
+from patchfrog.persistence.models.installation import BetaState, InstallationModel
 from patchfrog.persistence.models.pull_request import PullRequestModel
 from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.persistence.models.review_memory import ReviewGenerationModel
-from patchfrog.persistence.repositories import PullRequestRepository, RepositoryRepository
+from patchfrog.persistence.repositories import (
+    InstallationRepository,
+    PullRequestRepository,
+    RepositoryRepository,
+)
 from patchfrog.persistence.repositories.feedback import (
     FeedbackEventRepository,
     feedback_event_from_model,
 )
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
+from patchfrog.persistence.repositories.review_run import ReviewRunRepository
 from patchfrog.publishing.config_resolution import resolve_repository_publication_config
 from patchfrog.publishing.domain import ReviewPublicationMode, ReviewPublicationResult
 from patchfrog.publishing.github_publisher import GitHubClientReviewPublisher
@@ -1046,6 +1062,247 @@ def _run_feedback(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Public beta readiness: operations CLI (patchfrog.ops)
+# ---------------------------------------------------------------------------
+
+
+async def _ops_health_async() -> tuple[bool, list[dict[str, Any]]]:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    try:
+        report = await check_readiness(engine=engine, redis_url=settings.redis_url)
+        return report.healthy, [asdict(c) for c in report.checks]
+    finally:
+        await engine.dispose()
+
+
+def _run_ops_health(_args: argparse.Namespace) -> int:
+    healthy, checks = asyncio.run(_ops_health_async())
+    for check in checks:
+        print(f"{check['name']}: {'OK' if check['healthy'] else 'FAIL'} {check['detail']}")
+    return 0 if healthy else 1
+
+
+async def _ops_stale_async(*, recover: bool) -> list[StaleRun]:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            stale = await list_stale_runs(session, threshold_minutes=settings.stale_run_threshold_minutes)
+            if recover:
+                for run in stale:
+                    await ReviewRunRepository().mark_failed(
+                        session,
+                        run_id=run.run_id,
+                        error_message=(
+                            f"marked failed by `patchfrog ops stale --recover`: "
+                            f"RUNNING for {run.minutes_running:.1f} minutes "
+                            f"(threshold {settings.stale_run_threshold_minutes})"
+                        ),
+                    )
+                await session.commit()
+        return stale
+    finally:
+        await engine.dispose()
+
+
+def _run_ops_stale(args: argparse.Namespace) -> int:
+    stale = asyncio.run(_ops_stale_async(recover=args.recover))
+    if not stale:
+        print("no stale runs")
+        return 0
+    for run in stale:
+        action = "marked FAILED" if args.recover else "still RUNNING (use --recover to mark failed)"
+        print(f"{run.run_id} repository={run.repository_id} commit={run.commit_sha} "
+              f"running_for={run.minutes_running:.1f}min -- {action}")
+    return 0
+
+
+async def _ops_failed_async(*, since: datetime | None) -> list[FailedRun]:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            return await list_failed_runs(session, since=since)
+    finally:
+        await engine.dispose()
+
+
+def _run_ops_failed(args: argparse.Namespace) -> int:
+    since = datetime.fromisoformat(args.since) if args.since else None
+    for run in asyncio.run(_ops_failed_async(since=since)):
+        print(f"{run.run_id} repository={run.repository_id} commit={run.commit_sha} "
+              f"completed_at={run.completed_at} error={run.error_message}")
+    return 0
+
+
+async def _ops_retry_async(*, review_run_id: uuid.UUID) -> str:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            run = await session.get(ReviewRunModel, review_run_id)
+            if run is None:
+                raise ValueError(f"no review run with id {review_run_id}")
+            repository = await session.get(RepositoryModel, run.repository_id)
+            assert repository is not None
+            pull_request = (
+                await session.get(PullRequestModel, run.pull_request_id)
+                if run.pull_request_id is not None
+                else None
+            )
+            if pull_request is None:
+                raise ValueError(f"review run {review_run_id} has no associated pull request to retry against")
+    finally:
+        await engine.dispose()
+
+    run_review_pipeline_task.delay(
+        github_repository_id=repository.github_repository_id,
+        owner=repository.owner,
+        name=repository.name,
+        full_name=repository.full_name,
+        installation_id=repository.installation_id,
+        commit_sha=run.commit_sha,
+        pull_request_number=pull_request.github_pr_number,
+    )
+    return f"re-enqueued pipeline for {repository.full_name}#{pull_request.github_pr_number} @ {run.commit_sha}"
+
+
+def _run_ops_retry(args: argparse.Namespace) -> int:
+    try:
+        review_run_id = uuid.UUID(args.review_run_id)
+    except ValueError:
+        print(f"error: not a valid review run id: {args.review_run_id!r}", file=sys.stderr)
+        return 1
+    try:
+        print(asyncio.run(_ops_retry_async(review_run_id=review_run_id)))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+async def _ops_usage_async() -> list[InstallationUsage]:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            return await list_installation_usage(session, default_daily_limit=settings.default_daily_review_limit)
+    finally:
+        await engine.dispose()
+
+
+def _run_ops_usage(_args: argparse.Namespace) -> int:
+    for usage in asyncio.run(_ops_usage_async()):
+        print(
+            f"installation={usage.github_installation_id} account={usage.account_login} "
+            f"status={usage.status} beta_state={usage.beta_state} "
+            f"publication_allowed={usage.publication_allowed} "
+            f"reviews_24h={usage.reviews_last_24h}/{usage.daily_limit}"
+        )
+    return 0
+
+
+async def _ops_installations_async() -> list[InstallationModel]:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            return await InstallationRepository().list_all(session)
+    finally:
+        await engine.dispose()
+
+
+async def _ops_installation_mutate_async(
+    *,
+    github_installation_id: int,
+    beta_state: BetaState | None,
+    publication_allowed: bool | None,
+) -> InstallationModel:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            repo = InstallationRepository()
+            model: InstallationModel | None = None
+            if beta_state is not None:
+                model = await repo.set_beta_state(
+                    session, github_installation_id=github_installation_id, beta_state=beta_state
+                )
+            if publication_allowed is not None:
+                model = await repo.set_publication_allowed(
+                    session, github_installation_id=github_installation_id, allowed=publication_allowed
+                )
+            if model is None:
+                raise ValueError(f"no installation with github_installation_id={github_installation_id}")
+            await session.commit()
+            return model
+    finally:
+        await engine.dispose()
+
+
+def _run_ops_installations(args: argparse.Namespace) -> int:
+    if args.activate or args.suspend or args.allow_publication is not None:
+        github_installation_id = args.activate or args.suspend or args.installation
+        if github_installation_id is None:
+            print("error: --activate/--suspend/--allow-publication/--disallow-publication require an installation id", file=sys.stderr)
+            return 1
+        beta_state = None
+        if args.activate:
+            beta_state = BetaState.ACTIVE
+        elif args.suspend:
+            beta_state = BetaState.SUSPENDED
+        publication_allowed = args.allow_publication if args.allow_publication is not None else None
+        try:
+            model = asyncio.run(
+                _ops_installation_mutate_async(
+                    github_installation_id=int(github_installation_id),
+                    beta_state=beta_state,
+                    publication_allowed=publication_allowed,
+                )
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(
+            f"installation={model.github_installation_id} beta_state={model.beta_state.value} "
+            f"publication_allowed={model.publication_allowed}"
+        )
+        return 0
+
+    for installation in asyncio.run(_ops_installations_async()):
+        print(
+            f"installation={installation.github_installation_id} account={installation.account_login} "
+            f"status={installation.status.value} beta_state={installation.beta_state.value} "
+            f"publication_allowed={installation.publication_allowed} "
+            f"daily_review_limit={installation.daily_review_limit}"
+        )
+    return 0
+
+
+def _run_ops(args: argparse.Namespace) -> int:
+    if args.ops_command == "health":
+        return _run_ops_health(args)
+    if args.ops_command == "stale":
+        return _run_ops_stale(args)
+    if args.ops_command == "failed":
+        return _run_ops_failed(args)
+    if args.ops_command == "retry":
+        return _run_ops_retry(args)
+    if args.ops_command == "usage":
+        return _run_ops_usage(args)
+    if args.ops_command == "installations":
+        return _run_ops_installations(args)
+    raise ValueError(f"unknown ops subcommand: {args.ops_command}")
+
+
+# ---------------------------------------------------------------------------
 # Phase 8: quality evaluation harness (patchfrog.evaluation)
 # ---------------------------------------------------------------------------
 
@@ -1558,6 +1815,45 @@ def main(argv: list[str] | None = None) -> int:
         "--include-reply-bodies", action="store_true", help="Include reply text (never the default)"
     )
 
+    ops_parser = subparsers.add_parser(
+        "ops", help="Public-beta operations (patchfrog.ops) -- health, recovery, usage, installations"
+    )
+    ops_subparsers = ops_parser.add_subparsers(dest="ops_command", required=True)
+
+    ops_subparsers.add_parser("health", help="Check DB/Redis/migration readiness")
+
+    ops_stale_parser = ops_subparsers.add_parser(
+        "stale", help="List review runs stuck RUNNING past the stale-run threshold"
+    )
+    ops_stale_parser.add_argument(
+        "--recover", action="store_true", help="Mark each stale run FAILED (never re-publishes; destructive to run state, not to GitHub)"
+    )
+
+    ops_failed_parser = ops_subparsers.add_parser("failed", help="List failed review runs")
+    ops_failed_parser.add_argument("--since", default=None, help="ISO 8601 timestamp lower bound")
+
+    ops_retry_parser = ops_subparsers.add_parser(
+        "retry", help="Re-enqueue the index/analyze/review pipeline for one review run's commit"
+    )
+    ops_retry_parser.add_argument("review_run_id", help="review_runs.id to retry")
+
+    ops_subparsers.add_parser("usage", help="Per-installation quota usage in the last 24h")
+
+    ops_installations_parser = ops_subparsers.add_parser(
+        "installations", help="List installations, or activate/suspend one / toggle its beta publication gate"
+    )
+    ops_installations_parser.add_argument("--installation", type=int, default=None, help="github_installation_id")
+    ops_installations_parser.add_argument("--activate", type=int, default=None, help="Activate this github_installation_id's beta_state")
+    ops_installations_parser.add_argument("--suspend", type=int, default=None, help="Suspend this github_installation_id's beta_state")
+    ops_installations_parser.add_argument(
+        "--allow-publication", dest="allow_publication", action="store_const", const=True, default=None,
+        help="Allow real GitHub writes for --installation",
+    )
+    ops_installations_parser.add_argument(
+        "--disallow-publication", dest="allow_publication", action="store_const", const=False,
+        help="Disallow real GitHub writes for --installation",
+    )
+
     eval_parser = subparsers.add_parser("eval", help="Phase 8 quality evaluation harness (patchfrog.evaluation)")
     eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
 
@@ -1633,6 +1929,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_publish(args)
     if args.command == "feedback":
         return _run_feedback(args)
+    if args.command == "ops":
+        return _run_ops(args)
     if args.command == "eval":
         if args.eval_command == "run":
             return _run_eval_run(args)

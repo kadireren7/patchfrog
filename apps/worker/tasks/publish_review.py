@@ -27,6 +27,7 @@ the outcome (see :mod:`patchfrog.publishing.errors`).
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 
 import httpx
@@ -37,6 +38,7 @@ from apps.worker.celery_app import celery_app
 from patchfrog.config.settings import Settings, get_settings
 from patchfrog.github.auth import InstallationTokenProvider
 from patchfrog.github.client import GitHubClient
+from patchfrog.ops import metrics
 from patchfrog.persistence.database import create_engine, create_session_factory
 from patchfrog.persistence.models.pull_request import PullRequestModel
 from patchfrog.persistence.models.repository import RepositoryModel
@@ -146,6 +148,7 @@ def publish_review_task(*, review_run_id: str, publish: bool = False) -> str:
     mode = ReviewPublicationMode.PUBLISH if publish else ReviewPublicationMode.DRY_RUN
     settings = get_settings()
 
+    started_at = time.monotonic()
     try:
         result = asyncio.run(
             _publish_review(review_run_id=uuid.UUID(review_run_id), mode=mode, settings=settings)
@@ -154,6 +157,8 @@ def publish_review_task(*, review_run_id: str, publish: bool = False) -> str:
         # Non-retryable: no amount of retrying makes a missing run or a
         # run with no associated PR publishable.
         raise Reject(str(exc), requeue=False) from exc
+    metrics.publication_duration_seconds.observe(time.monotonic() - started_at)
+    metrics.findings_published_total.inc(result.published_inline)
 
     logger.info(
         "publish_review_task_completed",

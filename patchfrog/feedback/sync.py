@@ -47,6 +47,7 @@ from patchfrog.feedback.domain import (
 )
 from patchfrog.github.client import GitHubClient
 from patchfrog.github.errors import GitHubNotFoundError
+from patchfrog.ops import metrics
 from patchfrog.persistence.models.feedback import FeedbackEventModel
 from patchfrog.persistence.models.publishing import (
     ReviewPublicationCommentModel,
@@ -619,6 +620,7 @@ class _Counters:
     def record(self, model: FeedbackEventModel | None, *, attributed: bool) -> None:
         if model is not None:
             self.ingested += 1
+            metrics.feedback_events_total.labels(event_type=model.event_type.value).inc()
             if not attributed:
                 self.unattributed += 1
         else:
