@@ -54,6 +54,51 @@ class Settings(BaseSettings):
     # provider-construction step both handle this explicitly).
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
 
+    # -- Public beta operational limits (patchfrog.ops) --
+    # All optional with conservative defaults; never required for
+    # startup, never a source of secrets. See docs/operations.md.
+
+    #: When true, a newly `created` GitHub App installation starts in
+    #: `BetaState.PENDING` (must be explicitly activated via
+    #: `patchfrog ops installations activate`) instead of self-serve
+    #: `BetaState.ACTIVE`. Off by default -- public self-serve beta.
+    beta_allowlist_mode: bool = Field(default=False, alias="BETA_ALLOWLIST_MODE")
+    #: Process-wide kill switch for scheduling *any* new review work
+    #: (indexing/analysis/AI review) -- an emergency stop that takes
+    #: effect on the next worker restart, never mid-request. Per-
+    #: installation/per-repository switches (DB-persisted, no restart
+    #: required) layer on top of this -- see `patchfrog.ops.eligibility`.
+    global_review_processing_enabled: bool = Field(default=True, alias="GLOBAL_REVIEW_PROCESSING_ENABLED")
+    #: Same as above, but for the publish stage specifically.
+    global_publication_enabled: bool = Field(default=True, alias="GLOBAL_PUBLICATION_ENABLED")
+    #: A PR with more changed files than this is skipped (RESOURCE_LIMIT,
+    #: never processed partially) rather than attempting an unbounded
+    #: review of a monorepo-sized change during beta.
+    max_changed_files: int = Field(default=300, alias="MAX_CHANGED_FILES")
+    #: Total diff size (sum of all changed files' patch text, bytes)
+    #: above which a PR is skipped for the same reason.
+    max_diff_bytes: int = Field(default=2_000_000, alias="MAX_DIFF_BYTES")
+    #: Per-installation daily review count, used unless
+    #: `InstallationModel.daily_review_limit` overrides it for one
+    #: installation specifically.
+    default_daily_review_limit: int = Field(default=50, alias="DEFAULT_DAILY_REVIEW_LIMIT")
+    #: How many reviews may run concurrently for one installation --
+    #: fairness, so one large/active installation can't starve every
+    #: other beta user sharing the same worker pool.
+    per_installation_concurrent_review_limit: int = Field(
+        default=2, alias="PER_INSTALLATION_CONCURRENT_REVIEW_LIMIT"
+    )
+    #: A review run still `RUNNING` after this many minutes is
+    #: considered stale (crashed worker, lost task) -- see
+    #: `patchfrog ops stale`.
+    stale_run_threshold_minutes: int = Field(default=60, alias="STALE_RUN_THRESHOLD_MINUTES")
+    #: Port the worker container's own aggregating /metrics endpoint
+    #: listens on -- only ever bound when `PROMETHEUS_MULTIPROC_DIR` is
+    #: also set (see `patchfrog.ops.metrics`'s module docstring for why
+    #: the API process's own /metrics can never see worker-incremented
+    #: counters otherwise).
+    worker_metrics_port: int = Field(default=9100, alias="WORKER_METRICS_PORT")
+
     @field_validator("log_level")
     @classmethod
     def _validate_log_level(cls, value: str) -> str:

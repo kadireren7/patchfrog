@@ -50,3 +50,18 @@ class RepositoryRepository:
         session.add(model)
         await session.flush()
         return model
+
+    async def set_selected(
+        self, session: AsyncSession, *, github_repository_id: int, selected: bool
+    ) -> RepositoryModel | None:
+        """Flip ``is_selected`` -- driven by ``installation_repositories``
+        webhook events (added/removed). Returns ``None`` (a no-op) if the
+        repository has never been seen before; a "removed" event for a
+        repository PatchFrog never indexed needs no local state change."""
+
+        model = await self.get_by_github_id(session, github_repository_id=github_repository_id)
+        if model is None:
+            return None
+        model.is_selected = selected
+        await session.flush()
+        return model

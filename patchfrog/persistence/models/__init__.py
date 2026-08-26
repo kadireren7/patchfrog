@@ -23,6 +23,11 @@ from patchfrog.persistence.models.context import (
     ContextItemModel,
 )
 from patchfrog.persistence.models.feedback import FeedbackAssessmentModel, FeedbackEventModel
+from patchfrog.persistence.models.installation import (
+    BetaState,
+    InstallationModel,
+    InstallationStatus,
+)
 from patchfrog.persistence.models.parsed_file_cache import ParsedFileCacheModel
 from patchfrog.persistence.models.publishing import (
     ReviewPublicationCommentModel,
@@ -56,6 +61,7 @@ __all__ = [
     "AnalysisRunStatus",
     "AnalyzerExecutionModel",
     "Base",
+    "BetaState",
     "CallReferenceModel",
     "ContextBundleModel",
     "ContextBundleStatus",
@@ -71,6 +77,8 @@ __all__ = [
     "IndexStatus",
     "IndexedFileModel",
     "IngestionStatus",
+    "InstallationModel",
+    "InstallationStatus",
     "ParsedFileCacheModel",
     "PullRequestIngestionModel",
     "PullRequestModel",

@@ -16,6 +16,7 @@ from patchfrog.persistence.repositories.finding import FindingRepository
 from patchfrog.persistence.repositories.finding_source import FindingSourceRepository
 from patchfrog.persistence.repositories.import_reference import ImportReferenceRepository
 from patchfrog.persistence.repositories.indexed_file import IndexedFileRepository
+from patchfrog.persistence.repositories.installation import InstallationRepository
 from patchfrog.persistence.repositories.parsed_file_cache import ParsedFileCacheRepository
 from patchfrog.persistence.repositories.pull_request import PullRequestRepository
 from patchfrog.persistence.repositories.pull_request_ingestion import (
@@ -52,6 +53,7 @@ __all__ = [
     "FindingSourceRepository",
     "ImportReferenceRepository",
     "IndexedFileRepository",
+    "InstallationRepository",
     "ParsedFileCacheRepository",
     "PullRequestIngestionRepository",
     "PullRequestRepository",
