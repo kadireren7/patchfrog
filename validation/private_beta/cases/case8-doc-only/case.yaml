@@ -1,0 +1,16 @@
+case:
+  id: case8-doc-only
+  title: docstring-only addition pointing to the operations troubleshooting table
+  description: >
+    A single sentence is added to a module docstring; zero lines of code
+    change. Ground truth expects zero findings.
+  language: python
+  difficulty: easy
+  tags: [clean, documentation-only, controlled, noise-test]
+
+expected: []
+forbidden:
+  - reason: no code changed, only a docstring.
+    category: correctness
+  - reason: no code changed, only a docstring.
+    category: security

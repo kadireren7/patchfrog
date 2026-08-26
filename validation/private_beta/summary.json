@@ -1,0 +1,40 @@
+{
+  "sprint": "private_beta_validation",
+  "branch": "chore/private-beta-validation",
+  "baseline_main_sha": "f7e4735e464e4c09752894a85a19c66456f2a8dc",
+  "live_provider_available": false,
+  "repositories_tested": 5,
+  "pr_scenarios_tested": 21,
+  "controlled": {
+    "benchmark_label": "pipeline_correctness",
+    "TP": 8,
+    "FP": 0,
+    "missed": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "clean_case_pass_rate": "4/4",
+    "cases": 12
+  },
+  "natural": {
+    "cases": 6,
+    "static_findings_in_diff_total": 0,
+    "static_findings_repo_wide_total": 33,
+    "note": "AI review not evaluated on natural PRs (no live model) -- only real static-analyzer findings, verified by direct DB query to be diff-scoped (0/5 small naturals had any finding within their actual changed files; n1's 27 files not individually re-verified). No false positives observed on any natural PR in this sample."
+  },
+  "incremental_review": {
+    "unsafe_carry_forward_count": 0,
+    "duplicate_publication_count": 0,
+    "carry_forward_observed": true,
+    "resolution_observed": true
+  },
+  "real_github_dogfood": {
+    "pr": "kadireren7/patchfrog#23 (closed, branch deleted)",
+    "onboarding_without_manual_db_edit": true,
+    "automatic_orchestration_verified": true,
+    "duplicate_webhook_idempotent": true,
+    "forged_signature_rejected": true,
+    "safe_publication_default_verified": true,
+    "real_bug_found_and_fixed": "MissingProviderCredentialsError misclassified as INTERNAL_ERROR instead of PROVIDER_ERROR"
+  }
+}

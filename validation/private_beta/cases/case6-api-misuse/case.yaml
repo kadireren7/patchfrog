@@ -1,0 +1,26 @@
+case:
+  id: case6-api-misuse
+  title: MergePatchInto() uses patch after moving from it
+  description: >
+    `stolen = std::move(patch)` transfers patch's internal state into
+    stolen, leaving patch in a valid-but-unspecified moved-from state.
+    The very next statement calls `patch.MemberCount()` on that
+    moved-from object for a diagnostic log line -- a textbook
+    use-after-move that will print a misleading (likely zero) count.
+  language: cpp
+  difficulty: medium
+  tags: [api-misuse, use-after-move, controlled]
+
+expected:
+  - id: ef1
+    category: api_misuse
+    file: include/rapidjson/mergeobjects.h
+    symbol: MergePatchInto
+    issue_family: use_after_move
+    severity: medium
+    line: 21
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: "capture patch.MemberCount() into a local variable before the std::move, not after"
+
+forbidden: []

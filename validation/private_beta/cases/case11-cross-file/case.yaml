@@ -1,0 +1,29 @@
+case:
+  id: case11-cross-file
+  title: connectOnStartup() violates retry_policy.h's documented attempt-count contract
+  description: >
+    retry_policy.h documents RETRY_POLICY_MAX_ATTEMPTS = 5 and states
+    computeBackoffMs() "must only ever be called with attempt_number in
+    [0, RETRY_POLICY_MAX_ATTEMPTS)." connectOnStartup() (in a different
+    file) calls reconnectWithBackoff(..., 20) -- four times past the
+    documented contract -- so computeBackoffMs() is called with
+    attempt_number up to 19, far outside its documented valid range.
+    The violation is only visible by reading retry_policy.h's contract
+    together with conn_manager.c's call site.
+  language: c
+  difficulty: hard
+  tags: [correctness, cross-file-dependency, controlled]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: conn_manager.c
+    symbol: connectOnStartup
+    issue_family: cross_file_contract_violation
+    severity: medium
+    line: 19
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: "20 exceeds RETRY_POLICY_MAX_ATTEMPTS (5) documented in retry_policy.h; must not pass a bound the backoff policy doesn't support"
+
+forbidden: []

@@ -1,0 +1,28 @@
+case:
+  id: case12-incremental-arc
+  title: is_loyalty_tier() inverted comparison, 3-commit lifecycle
+  description: >
+    3-commit arc for Phase 7 incremental review validation: commit1
+    introduces the bug (same as case1's pattern), commit2 is a wholly
+    unrelated change (a scratch README in the same directory), commit3
+    fixes the bug. Ground truth is scoped to commit1/commit2 (bug
+    present, must persist/carry-forward, not be re-flagged from scratch
+    on commit2's unrelated diff) and commit3 (bug fixed, finding must
+    resolve, no stale comment).
+  language: python
+  difficulty: easy
+  tags: [correctness, incremental, controlled, multi-commit]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: patchfrog/ops/loyalty.py
+    symbol: is_loyalty_tier
+    issue_family: inverted_comparison
+    severity: medium
+    line: 11
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: "present at commit1 and commit2 (unrelated diff must not clear it); fixed at commit3"
+
+forbidden: []

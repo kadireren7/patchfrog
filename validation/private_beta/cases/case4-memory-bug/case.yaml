@@ -1,0 +1,24 @@
+case:
+  id: case4-memory-bug
+  title: buildSetCommand() leaks buf on the truncation error path
+  description: >
+    buf is malloc'd at line 18. If snprintf fails or truncates, the
+    function returns NULL at line 26 without freeing buf first -- the
+    allocation is leaked on every truncated/failed format.
+  language: c
+  difficulty: medium
+  tags: [memory-leak, resource-bug, controlled]
+
+expected:
+  - id: ef1
+    category: resource_management
+    file: cmdbuild.c
+    symbol: buildSetCommand
+    issue_family: memory_leak_on_error_path
+    severity: medium
+    line: 26
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: "must free(buf) before returning NULL on the truncation path"
+
+forbidden: []

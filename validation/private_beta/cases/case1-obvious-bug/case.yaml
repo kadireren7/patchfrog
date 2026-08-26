@@ -1,0 +1,25 @@
+case:
+  id: case1-obvious-bug
+  title: is_eligible_for_discount() inverts the age comparison
+  description: >
+    The docstring says an account qualifies once it has been active for
+    at least minimum_age_days, but the implementation returns True only
+    when account_age_days <= minimum_age_days -- the exact opposite: new
+    accounts qualify and long-tenured accounts do not.
+  language: python
+  difficulty: easy
+  tags: [correctness, obvious-bug, controlled]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: patchfrog/ops/discount.py
+    symbol: is_eligible_for_discount
+    issue_family: inverted_comparison
+    severity: medium
+    line: 11
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: "should be >=, not <=, to match the docstring's stated contract"
+
+forbidden: []

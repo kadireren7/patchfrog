@@ -1,0 +1,27 @@
+case:
+  id: case3-security-bug
+  title: log_outgoing_notification() logs the raw API key
+  description: >
+    A structured log line includes api_key=api_key verbatim on every
+    outgoing notification call -- the credential lands in plaintext in
+    whatever log aggregator ingests this, with no redaction.
+  language: python
+  difficulty: easy
+  tags: [security, credential-exposure, controlled]
+
+expected:
+  - id: ef1
+    category: security
+    file: patchfrog/services/webhook_debug.py
+    symbol: log_outgoing_notification
+    issue_family: credential_log_exposure
+    severity: high
+    line: 19
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: api_key must never be passed to a log call, redacted or omitted entirely.
+    expected_root_cause_concept: "the raw credential value is passed as a structured log field"
+    expected_impact_concept: "the credential becomes readable in plaintext by anyone with log access"
+    acceptable_remediation_direction: "omit api_key from the log call, or redact/mask it before logging"
+
+forbidden: []
