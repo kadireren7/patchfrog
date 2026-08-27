@@ -41,6 +41,12 @@ def test_different_enabled_changes_fingerprint() -> None:
     assert a.fingerprint() != b.fingerprint()
 
 
+def test_different_frog_marker_changes_fingerprint() -> None:
+    a = PublicationConfig(frog_marker=True)
+    b = PublicationConfig(frog_marker=False)
+    assert a.fingerprint() != b.fingerprint()
+
+
 def test_comment_format_version_bump_changes_fingerprint() -> None:
     """A PatchFrog-side formatting change (patchfrog.publishing.body)
     must invalidate reuse even when the repository's own .patchfrog.yml

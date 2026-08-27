@@ -14,6 +14,18 @@ def test_default_config_never_publishes() -> None:
     assert config.enabled is False
 
 
+def test_default_config_has_frog_marker_on() -> None:
+    config = PublicationConfig()
+    assert config.frog_marker is True
+
+
+def test_repository_can_opt_out_of_frog_marker(tmp_path: Path) -> None:
+    (tmp_path / ".patchfrog.yml").write_text("publish:\n  enabled: true\n  frog_marker: false\n")
+    config = load_publication_config(tmp_path)
+    assert config.enabled is True
+    assert config.frog_marker is False
+
+
 def test_missing_file_defaults_to_disabled(tmp_path: Path) -> None:
     config = load_publication_config(tmp_path)
     assert config.enabled is False
