@@ -7,7 +7,7 @@ from __future__ import annotations
 def is_within_budget(spent: int, budget: int) -> bool:
     """An operation is within budget once spent has not yet exceeded it."""
 
-    return spent <= budget
+    return spent >= budget
 
 
 def log_login_attempt(username: str, password: str) -> None:
