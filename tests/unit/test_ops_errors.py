@@ -17,6 +17,7 @@ from patchfrog.github.errors import (
 )
 from patchfrog.ops.errors import ErrorCategory, classify_exception
 from patchfrog.review.provider import ProviderFatalError, ProviderTransientError
+from patchfrog.review.provider_factory import MissingProviderCredentialsError
 
 
 def test_rate_limited_is_retryable() -> None:
@@ -68,6 +69,20 @@ def test_value_and_type_errors_are_validation_errors_never_retryable() -> None:
         category, retryable, _ = classify_exception(exc)
         assert category is ErrorCategory.VALIDATION_ERROR
         assert retryable is False
+
+
+def test_missing_provider_credentials_is_provider_error_never_retryable() -> None:
+    """Regression test: found live during the private beta validation
+    sprint's real GitHub dogfood -- a real webhook-triggered review on a
+    real PR hit this exact exception (no ANTHROPIC_API_KEY in the
+    environment) and it fell through to the generic INTERNAL_ERROR
+    catch-all, making a routine, actionable deployment-configuration
+    problem indistinguishable from an unexpected PatchFrog bug in
+    `patchfrog_reviews_failed_total`/`patchfrog ops failed`."""
+
+    category, retryable, _ = classify_exception(MissingProviderCredentialsError("ANTHROPIC_API_KEY is not set"))
+    assert category is ErrorCategory.PROVIDER_ERROR
+    assert retryable is False
 
 
 def test_unrecognized_exception_is_internal_error_never_retryable() -> None:

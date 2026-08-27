@@ -1,0 +1,51 @@
+{
+  "failure_injection_performed": [
+    {
+      "scenario": "forged webhook signature",
+      "method": "real signed-vs-forged HMAC POST to the live /webhooks/github endpoint",
+      "result": "401, rejected before any parsing/DB work",
+      "verdict": "correct"
+    },
+    {
+      "scenario": "missing provider credentials at real review time",
+      "method": "real webhook -> orchestrator -> pipeline against a real PR, no ANTHROPIC_API_KEY in the environment",
+      "result": "review_pull_request_task correctly hit MissingProviderCredentialsError; no review_runs row was created (no partial/stuck state), reviews_started_total incremented, reviews_failed_total incremented -- but originally misclassified error_category=internal_error",
+      "verdict": "real bug found and fixed this sprint (see bugs_found_and_fixed below); reverified live post-fix as error_category=provider_error"
+    },
+    {
+      "scenario": "duplicate webhook delivery (same PR, redelivered)",
+      "method": "real signed POST redelivered for the same PR/commit",
+      "result": "indexing reused (incremental=true, 0 files re-parsed), analysis run reused (analysis_run_reused, not recomputed) -- no duplicate review_runs row, no double-charged work",
+      "verdict": "correct"
+    },
+    {
+      "scenario": "publication attempted on a repo with no .patchfrog.yml",
+      "method": "real `patchfrog cli publish --review-run-id <id> --publish` against kadireren7/patchfrog (no config file committed)",
+      "result": "review_publish_skipped_no_findings -- PublicationConfig().enabled defaults False with no config file, zero GitHub writes even with --publish explicitly passed",
+      "verdict": "correct, safe-by-default"
+    },
+    {
+      "scenario": "malformed .patchfrog.yml, oversized/adversarial repository content",
+      "method": "not re-run live this sprint -- covered by existing regression suite",
+      "result": "tests/integration/test_review_config_bundle_adversarial.py and tests/integration/test_security_boundaries.py (13 tests, forged webhook / oversized payload / malicious filename / symlink escape / prompt injection / malformed config / poisoned git metadata / huge analyzer output / secrets-in-exceptions) all pass",
+      "verdict": "existing coverage confirmed still passing, not independently re-exercised live"
+    }
+  ],
+  "bugs_found_and_fixed": [
+    {
+      "id": "bug-1",
+      "summary": "MissingProviderCredentialsError fell through classify_exception() to the generic INTERNAL_ERROR category instead of PROVIDER_ERROR",
+      "found_via": "real GitHub webhook dogfood against kadireren7/patchfrog#23",
+      "root_cause": "patchfrog/ops/errors.py's classify_exception() had no isinstance branch for MissingProviderCredentialsError, a RuntimeError subclass that doesn't match any existing GitHub/Provider/Value/Type error branch, so it fell through to the INTERNAL_ERROR catch-all",
+      "impact": "a routine, actionable deployment-configuration problem (missing/misconfigured provider credential) was indistinguishable from an unexpected internal PatchFrog bug in patchfrog_reviews_failed_total and would show the wrong category to an operator",
+      "fix": "added an explicit isinstance(exc, MissingProviderCredentialsError) branch returning (PROVIDER_ERROR, retryable=False, str(exc))",
+      "fix_file": "patchfrog/ops/errors.py",
+      "regression_test": "tests/unit/test_ops_errors.py::test_missing_provider_credentials_is_provider_error_never_retryable",
+      "reverified_live": true
+    }
+  ],
+  "no_regression_scenarios": [
+    "no stuck RUNNING review_runs row after the credential-boundary failure (none was ever created, by design)",
+    "no autoretry_for configured on review_pull_request_task -- a non-retryable failure is not retried"
+  ]
+}

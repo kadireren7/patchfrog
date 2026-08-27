@@ -1,0 +1,8 @@
+{
+  "n": 21,
+  "median_ms": 12050.7405870012,
+  "p90_ms": 15614.859763399,
+  "worst_ms": 16906.935926992446,
+  "best_ms": 6138.39992400608,
+  "note": "cold, single-process CLI-driven index+analyze+review latency against real repos (first index, no reuse) -- not production warm-worker steady-state; the real webhook dogfood's indexing+analysis stage alone (against patchfrog's own 601-file repo, real GitHub API fetch included) took ~11.5s indexing + ~6.6s analysis on first run, ~11.5s indexing (incremental) + reused analysis on redelivery."
+}

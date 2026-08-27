@@ -1,0 +1,26 @@
+case:
+  id: case2-subtle-bug
+  title: redisConnPoolRelease() off-by-one writes past the slots array
+  description: >
+    slots is allocated with calloc(capacity, ...), giving valid indices
+    0..capacity-1. The guard `pool->count <= pool->capacity` lets
+    pool->count == pool->capacity through, so the very next write
+    (`pool->slots[pool->count] = c`) writes to slots[capacity], one past
+    the end of the allocation.
+  language: c
+  difficulty: medium
+  tags: [correctness, memory-safety, off-by-one, controlled]
+
+expected:
+  - id: ef1
+    category: memory_safety
+    file: connpool.c
+    symbol: redisConnPoolRelease
+    issue_family: off_by_one_buffer_write
+    severity: high
+    line: 26
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: "guard must be `pool->count < pool->capacity`, not <=, to stay within slots[0..capacity-1]"
+
+forbidden: []

@@ -1,0 +1,26 @@
+case:
+  id: case5-concurrency-bug
+  title: ParseSizeCache::RecordParse() has a data race on shared counters
+  description: >
+    The class docstring says RecordParse is "called from multiple worker
+    threads," but count_ and totalBytes_ are plain size_t members updated
+    with unguarded ++/+= -- no mutex, no atomic, no synchronization of
+    any kind. Concurrent calls race.
+  language: cpp
+  difficulty: medium
+  tags: [concurrency, data-race, controlled]
+
+expected:
+  - id: ef1
+    category: concurrency
+    file: include/rapidjson/parsecache.h
+    symbol: RecordParse
+    issue_family: unsynchronized_shared_state
+    severity: high
+    line: 19
+    line_end: 20
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: "count_ and totalBytes_ need a mutex or std::atomic given the documented multi-threaded call pattern"
+
+forbidden: []

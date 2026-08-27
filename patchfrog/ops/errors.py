@@ -24,6 +24,7 @@ from patchfrog.github.errors import (
     GitHubUnprocessableError,
 )
 from patchfrog.review.provider import ProviderFatalError, ProviderTransientError
+from patchfrog.review.provider_factory import MissingProviderCredentialsError
 
 
 class ErrorCategory(StrEnum):
@@ -63,6 +64,17 @@ def classify_exception(exc: BaseException) -> tuple[ErrorCategory, bool, str]:
     ``ProviderTransientError``.
     """
 
+    if isinstance(exc, MissingProviderCredentialsError):
+        # A missing/misconfigured provider credential is a deployment
+        # configuration problem discovered live, in production, at
+        # review time -- never an unexpected internal fault. Classified
+        # here (rather than left to fall through to INTERNAL_ERROR)
+        # specifically so it shows up in `patchfrog_reviews_failed_total`
+        # and `patchfrog ops failed` as something an operator can
+        # actually act on (fix the deployment's secret), not something
+        # that looks like a PatchFrog code bug. Never retryable -- no
+        # amount of retrying fixes a credential that was never set.
+        return ErrorCategory.PROVIDER_ERROR, False, str(exc)
     if isinstance(exc, GitHubRateLimitedError):
         return (
             ErrorCategory.GITHUB_RATE_LIMIT,

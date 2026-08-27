@@ -1,0 +1,19 @@
+case:
+  id: case15-clean-fixture
+  title: add bounded in-memory NotificationQueue to a small clean service
+  description: >
+    A self-authored, deliberately clean 4-file Python fixture (config
+    loader, retry helper, validators, and this PR's new bounded queue).
+    No known bugs anywhere in the fixture. Ground truth expects zero
+    findings -- this is the sprint's dedicated "clean/simple repo, PR
+    should generate little or no noise" scenario (spec section 3E / 20).
+  language: python
+  difficulty: easy
+  tags: [clean, controlled, noise-test]
+
+expected: []
+forbidden:
+  - reason: self-authored fixture with no known defects.
+    category: correctness
+  - reason: self-authored fixture with no known defects.
+    category: security

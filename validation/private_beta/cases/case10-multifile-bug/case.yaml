@@ -1,0 +1,27 @@
+case:
+  id: case10-multifile-bug
+  title: validate_depth() ignores the shared DEFAULT_MAX_DEPTH contract
+  description: >
+    pywrap/limits.py documents DEFAULT_MAX_DEPTH = 32 and states every
+    wrapper that pre-validates depth "must use this constant, never a
+    hardcoded literal." pywrap/safe_decode.py's validate_depth() instead
+    defaults max_depth to a hardcoded 64 and never imports
+    pywrap.limits -- the two files silently disagree, and the bug is
+    only visible reading both together.
+  language: python
+  difficulty: hard
+  tags: [correctness, multi-file, cross-file-dependency, controlled]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: pywrap/safe_decode.py
+    symbol: validate_depth
+    issue_family: cross_file_constant_drift
+    severity: medium
+    line: 26
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: "default should reference pywrap.limits.DEFAULT_MAX_DEPTH (32), not a hardcoded, looser 64"
+
+forbidden: []

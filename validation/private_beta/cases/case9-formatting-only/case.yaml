@@ -1,0 +1,17 @@
+case:
+  id: case9-formatting-only
+  title: reflow cutoff computation across two lines
+  description: >
+    A single expression is reformatted from one line to a wrapped,
+    parenthesized two-line form. Identical AST, zero semantic change.
+    Ground truth expects zero findings.
+  language: python
+  difficulty: easy
+  tags: [clean, formatting-only, controlled, noise-test]
+
+expected: []
+forbidden:
+  - reason: purely a formatting change, no semantic diff.
+    category: correctness
+  - reason: purely a formatting change, no semantic diff.
+    category: security

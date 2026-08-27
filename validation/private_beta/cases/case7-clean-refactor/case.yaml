@@ -1,0 +1,18 @@
+case:
+  id: case7-clean-refactor
+  title: extract _limit_violation() helper, no behavior change
+  description: >
+    check_resource_limits() is refactored to delegate to a small new
+    _limit_violation() helper. Same short-circuit order, same messages,
+    same return values -- a pure, behavior-preserving extraction. Ground
+    truth expects zero findings.
+  language: python
+  difficulty: easy
+  tags: [clean, refactor, controlled, noise-test]
+
+expected: []
+forbidden:
+  - reason: this is a behavior-preserving refactor of real, already-correct code -- no bug was introduced.
+    category: correctness
+  - reason: this is a behavior-preserving refactor of real, already-correct code -- no bug was introduced.
+    category: security

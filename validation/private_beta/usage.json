@@ -1,0 +1,6 @@
+{
+  "note": "No live ANTHROPIC_API_KEY in this environment (unchanged since Phase 5) -- every provider call in this sprint used a scripted FakeLLMProvider, so token/cost figures are genuinely zero, not a measurement gap. Real production token/cost accounting (patchfrog_provider_input_tokens_total / _output_tokens_total, per-installation/repository/provider/model) is implemented and verified working in patchfrog/ops/metrics.py (see docs/operations.md) -- this sprint could not exercise it with real, non-zero values.",
+  "provider_calls_total": 99,
+  "input_tokens_total": 0,
+  "output_tokens_total": 0
+}

@@ -1,0 +1,24 @@
+{
+  "note": "Real static analyzers (ruff, semgrep) confirmed working correctly against real third-party repositories in this sandbox; cppcheck/clang-tidy are unavailable in this dev environment (known, documented limitation -- both are bundled in the real worker Docker image and were verified present there during Public Beta Readiness's Docker-hardening gate).",
+  "analyzers_available_this_sandbox": ["ruff", "semgrep"],
+  "analyzers_unavailable_this_sandbox": ["cppcheck", "clang-tidy"],
+  "analyzers_confirmed_in_worker_docker_image": ["ruff", "semgrep", "cppcheck", "clang-tidy"],
+  "real_findings_observed": [
+    {
+      "repo": "ultrajson (real clone)",
+      "analyzer": "ruff",
+      "file": "tests/test_ujson.py / tests/memory.py",
+      "count": 27,
+      "note": "genuine pre-existing ruff findings (F601, S110, PLW1510, etc.) in ultrajson's own real test suite -- repo-wide, not within either natural PR's actual changed files (decode.c/encode.c, which ruff doesn't analyze)"
+    },
+    {
+      "repo": "hiredis (real clone)",
+      "analyzer": "semgrep (patchfrog-c-unsafe-strcpy bundled rule)",
+      "file": "test.c",
+      "count": 3,
+      "note": "genuine semgrep pattern match for unsafe strcpy() usage in hiredis's own real test.c -- repo-wide, not within either natural PR's actual changed files (ssl.c, SECURITY.md)"
+    }
+  ],
+  "controlled_cases_static_contribution": "0 of 8 controlled bugs (all self-authored new files) were independently caught by ruff/semgrep -- expected, since the planted bugs (inverted comparison, off-by-one, credential logging, memory leak, data race, use-after-move, cross-file contract violations) are semantic/logic bugs outside these linters' pattern-matching scope; this is exactly the class of bug PatchFrog's AI review layer exists to catch on top of static analysis, not a static-analyzer gap.",
+  "overlap_with_ai": "not measurable this sprint -- AI findings came exclusively from a scripted oracle (no live model), so a real static/AI overlap matrix (as Phase 8's benchmark_baseline already reports for the existing 74-case corpus) could not be produced here without re-deriving Phase 8's own evidence."
+}
