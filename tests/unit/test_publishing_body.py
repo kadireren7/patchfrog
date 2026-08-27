@@ -8,6 +8,7 @@ import uuid
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.publishing.body import (
+    FROG_MARKER,
     MAX_COMMENT_BODY_CHARS,
     format_inline_comment_body,
     format_summary_body,
@@ -143,7 +144,7 @@ def test_summary_body_untruncated_case_also_has_marker() -> None:
     )
     assert not truncated
     assert find_marker(body) == publication_id
-    assert "PatchFrog review summary" in body
+    assert "🐸 PatchFrog review" in body
     assert "2 high" in body
 
 
@@ -159,3 +160,138 @@ def test_summary_body_sanitizes_untrusted_title() -> None:
         omitted_count=0,
     )
     assert find_marker(body) == real_id
+
+
+# -- Branding & Review Presentation Refinement -------------------------------
+
+
+def test_inline_body_has_frog_marker_exactly_once_by_default() -> None:
+    finding = _finding()
+    body, _truncated = format_inline_comment_body(finding)
+    assert body.count(FROG_MARKER) == 1
+    assert body.startswith(FROG_MARKER)
+
+
+def test_inline_body_frog_marker_can_be_disabled() -> None:
+    finding = _finding()
+    body, _truncated = format_inline_comment_body(finding, frog_marker=False)
+    assert FROG_MARKER not in body
+    assert body.startswith("**")
+
+
+def test_inline_body_shows_severity_and_category_header() -> None:
+    finding = _finding(severity=Severity.HIGH, category=FindingCategory.SECURITY)
+    body, _truncated = format_inline_comment_body(finding)
+    assert f"{FROG_MARKER} **HIGH · security**" in body
+
+
+def test_inline_body_omits_category_when_unknown() -> None:
+    finding = _finding(category=FindingCategory.UNKNOWN)
+    body, _truncated = format_inline_comment_body(finding)
+    assert f"{FROG_MARKER} **MEDIUM**" in body
+    assert "unknown" not in body.lower()
+
+
+def test_inline_body_low_severity_renders() -> None:
+    finding = _finding(severity=Severity.LOW)
+    body, _truncated = format_inline_comment_body(finding)
+    assert "LOW" in body
+
+
+def test_inline_body_never_says_ai_or_llm_finding() -> None:
+    finding = _finding()
+    body, _truncated = format_inline_comment_body(finding)
+    assert "ai finding" not in body.lower()
+    assert "llm finding" not in body.lower()
+    assert "powered by" not in body.lower()
+
+
+def test_inline_body_never_repeats_patchfrog_name() -> None:
+    """GitHub already shows `patchfrog[bot]` as the comment's author --
+    the inline body itself must never also say "PatchFrog"."""
+
+    finding = _finding()
+    body, _truncated = format_inline_comment_body(finding)
+    assert "patchfrog" not in body.lower()
+
+
+def test_summary_body_heading_is_frog_patchfrog_review() -> None:
+    body, _truncated = format_summary_body(
+        publication_id=uuid.uuid4(),
+        counts_by_severity={Severity.HIGH: 1, Severity.MEDIUM: 2},
+        inline_findings=[_finding()],
+        summary_only_findings=[],
+        omitted_count=0,
+    )
+    assert body.startswith(f"## {FROG_MARKER} PatchFrog review\n")
+    assert body.count("PatchFrog") == 1
+    assert body.count(FROG_MARKER) == 1
+
+
+def test_summary_body_frog_marker_can_be_disabled() -> None:
+    body, _truncated = format_summary_body(
+        publication_id=uuid.uuid4(),
+        counts_by_severity={Severity.HIGH: 1},
+        inline_findings=[_finding()],
+        summary_only_findings=[],
+        omitted_count=0,
+        frog_marker=False,
+    )
+    assert FROG_MARKER not in body
+    assert body.startswith("## PatchFrog review\n")
+
+
+def test_summary_body_findings_line_uses_middot_separator() -> None:
+    body, _truncated = format_summary_body(
+        publication_id=uuid.uuid4(),
+        counts_by_severity={Severity.HIGH: 1, Severity.MEDIUM: 2},
+        inline_findings=[_finding()],
+        summary_only_findings=[],
+        omitted_count=0,
+    )
+    assert "**Findings:** 1 high · 2 medium" in body
+
+
+def test_summary_body_omits_zero_omitted_count() -> None:
+    body, _truncated = format_summary_body(
+        publication_id=uuid.uuid4(),
+        counts_by_severity={Severity.HIGH: 1},
+        inline_findings=[_finding()],
+        summary_only_findings=[],
+        omitted_count=0,
+    )
+    assert "Omitted" not in body
+
+
+def test_summary_body_shows_nonzero_omitted_count() -> None:
+    body, _truncated = format_summary_body(
+        publication_id=uuid.uuid4(),
+        counts_by_severity={Severity.HIGH: 1},
+        inline_findings=[_finding()],
+        summary_only_findings=[],
+        omitted_count=3,
+    )
+    assert "**Omitted:** 3" in body
+
+
+def test_summary_body_never_has_marketing_copy() -> None:
+    body, _truncated = format_summary_body(
+        publication_id=uuid.uuid4(),
+        counts_by_severity={Severity.HIGH: 1},
+        inline_findings=[_finding()],
+        summary_only_findings=[],
+        omitted_count=0,
+    )
+    for phrase in ("ai-powered", "powered by ai", "code review assistant", "cutting-edge"):
+        assert phrase not in body.lower()
+
+
+def test_confidence_wording_unaffected_by_branding() -> None:
+    """The Security Review Quality confidence-qualifier behavior must be
+    completely unchanged by the branding refinement."""
+
+    finding = _finding(confidence=Confidence.LOW)
+    body, _truncated = format_inline_comment_body(finding)
+    assert "needs verification" in body.lower()
+    assert not re.search(r"0\.\d+", body)
+    assert "confidence:" not in body.lower()

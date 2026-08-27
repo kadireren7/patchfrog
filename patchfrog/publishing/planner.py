@@ -148,7 +148,12 @@ class PublicationPlanner:
             )
             if outcome.is_mappable:
                 comment = self._to_comment(
-                    finding, snapshot, PublicationDisposition.INLINE, position=outcome.position, reason="mapped to a valid diff line"
+                    finding,
+                    snapshot,
+                    PublicationDisposition.INLINE,
+                    position=outcome.position,
+                    reason="mapped to a valid diff line",
+                    frog_marker=config.frog_marker,
                 )
                 mappable.append((finding, comment))
             else:
@@ -205,6 +210,7 @@ class PublicationPlanner:
             inline_findings=[finding_by_id[c.finding_id] for c in inline_comments],
             summary_only_findings=[finding_by_id[c.finding_id] for c in summary_only],
             omitted_count=len(omitted_tuple),
+            frog_marker=config.frog_marker,
         )
 
         return ReviewPublicationPlan(
@@ -242,6 +248,7 @@ class PublicationPlanner:
         *,
         position: MappedPosition | None,
         reason: str,
+        frog_marker: bool = True,
     ) -> ReviewPublicationComment:
         fingerprint = compute_finding_fingerprint(
             repository_id=snapshot.repository_id,
@@ -251,7 +258,7 @@ class PublicationPlanner:
         )
         body = ""
         if disposition == PublicationDisposition.INLINE:
-            body, _truncated = format_inline_comment_body(finding)
+            body, _truncated = format_inline_comment_body(finding, frog_marker=frog_marker)
         return ReviewPublicationComment(
             finding_id=finding.finding_id,
             fingerprint=fingerprint,

@@ -13,9 +13,18 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from uuid import UUID
 
-from patchfrog.analysis.domain import Confidence, Severity
+from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.publishing.domain import PublishableFinding
 from patchfrog.publishing.marker import render_marker, sanitize_untrusted_text
+
+#: PatchFrog's subtle visual marker -- see docs/brand.md. Appears once in
+#: the summary heading and once per inline comment header, never repeated
+#: in body prose (GitHub already shows `patchfrog[bot]` as the comment
+#: author). Configurable via `PublicationConfig.frog_marker` (default
+#: on); every function here takes it as an explicit parameter rather than
+#: reading config directly, keeping this module free of any config
+#: dependency.
+FROG_MARKER = "🐸"
 
 #: A deterministic, minimal wording qualifier for anything below HIGH
 #: confidence (Phase 8 spec sections 6/15: never present a non-HIGH
@@ -46,15 +55,25 @@ def _truncate(text: str, *, limit: int) -> tuple[str, bool]:
     return text[:keep] + _TRUNCATION_SUFFIX, True
 
 
-def _header_line(finding: PublishableFinding) -> str:
-    header = f"**{finding.severity.value.upper()} · {finding.category.value}**"
+def _header_line(finding: PublishableFinding, *, frog_marker: bool) -> str:
+    # UNKNOWN means the category taxonomy genuinely doesn't fit (see
+    # patchfrog.analysis.domain.FindingCategory's own docstring: "use
+    # UNKNOWN rather than forcing a fake fit") -- showing it to a reader
+    # ("· unknown") would be noise, not signal, so it's the one category
+    # value this header omits rather than prints.
+    if finding.category is FindingCategory.UNKNOWN:
+        header = f"**{finding.severity.value.upper()}**"
+    else:
+        header = f"**{finding.severity.value.upper()} · {finding.category.value}**"
+    if frog_marker:
+        header = f"{FROG_MARKER} {header}"
     qualifier = _CONFIDENCE_QUALIFIER.get(finding.confidence)
     if qualifier is not None:
         header += f" ({qualifier})"
     return f"{header} — {sanitize_untrusted_text(finding.title.strip())}"
 
 
-def format_inline_comment_body(finding: PublishableFinding) -> tuple[str, bool]:
+def format_inline_comment_body(finding: PublishableFinding, *, frog_marker: bool = True) -> tuple[str, bool]:
     """Render one finding as the shortest useful, technically justified
     comment. Returns ``(body, truncated)``.
 
@@ -66,6 +85,11 @@ def format_inline_comment_body(finding: PublishableFinding) -> tuple[str, bool]:
     already included. A finding with only ``message`` (the common case
     for a simple, obvious bug) renders as a single short sentence; nothing
     here artificially pads a comment to "look complete."
+
+    ``frog_marker`` (default on, see :data:`FROG_MARKER`) is the only
+    branding this function ever adds -- never "PatchFrog", never "AI
+    finding"/"LLM finding" (see docs/brand.md), since GitHub already
+    shows `patchfrog[bot]` as the comment's author.
     """
 
     message = sanitize_untrusted_text(finding.message.strip())
@@ -79,7 +103,7 @@ def format_inline_comment_body(finding: PublishableFinding) -> tuple[str, bool]:
             sentences.append(extra)
     paragraph = " ".join(sentences)
 
-    lines = [_header_line(finding), "", paragraph]
+    lines = [_header_line(finding, frog_marker=frog_marker), "", paragraph]
     body = "\n".join(lines)
     return _truncate(body, limit=MAX_COMMENT_BODY_CHARS)
 
@@ -97,21 +121,29 @@ def format_summary_body(
     inline_findings: Sequence[PublishableFinding],
     summary_only_findings: Sequence[PublishableFinding],
     omitted_count: int,
+    frog_marker: bool = True,
 ) -> tuple[str, bool]:
     """Render the deterministic top-level review summary. Returns
-    ``(body, truncated)``."""
+    ``(body, truncated)``.
 
-    lines = ["## PatchFrog review summary", ""]
+    ``frog_marker`` (default on, see :data:`FROG_MARKER`) controls only
+    the heading's emoji -- "PatchFrog" itself always appears exactly
+    once here (the one place this module names the product), never
+    repeated elsewhere in the body, and never with marketing copy
+    alongside it (see docs/brand.md).
+    """
 
-    severity_line = ", ".join(
+    heading = f"## {FROG_MARKER} PatchFrog review" if frog_marker else "## PatchFrog review"
+    lines = [heading, ""]
+
+    severity_line = " · ".join(
         f"{counts_by_severity[s]} {s.value}" for s in _SEVERITY_ORDER if counts_by_severity.get(s, 0) > 0
     )
     lines.append(f"**Findings:** {severity_line or 'none'}")
-    lines.append(
-        f"**Published inline:** {len(inline_findings)} · "
-        f"**Summary-only:** {len(summary_only_findings)} · "
-        f"**Omitted:** {omitted_count}"
-    )
+    counts_line = f"**Published inline:** {len(inline_findings)} · **Summary-only:** {len(summary_only_findings)}"
+    if omitted_count:
+        counts_line += f" · **Omitted:** {omitted_count}"
+    lines.append(counts_line)
     lines.append("")
 
     if inline_findings:

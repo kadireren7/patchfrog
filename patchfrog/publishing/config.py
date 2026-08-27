@@ -36,14 +36,18 @@ DEFAULT_MAX_INLINE_COMMENTS = 20
 DEFAULT_MAX_SUMMARY_FINDINGS = 50
 
 #: Bumped whenever PublicationConfig's own shape/semantics change --
-#: mirrors patchfrog.review.config.CONFIG_SCHEMA_VERSION.
-PUBLICATION_CONFIG_SCHEMA_VERSION = 1
+#: mirrors patchfrog.review.config.CONFIG_SCHEMA_VERSION. Bumped to 2 for
+#: the addition of `frog_marker`.
+PUBLICATION_CONFIG_SCHEMA_VERSION = 2
 
 #: Bumped whenever patchfrog.publishing.body's inline-comment/summary
 #: formatting (structure, headings, truncation behavior) changes
 #: materially enough that a prior publication's rendered content can no
 #: longer be considered equivalent to what publishing now would produce.
-COMMENT_FORMAT_VERSION = 2
+#: Bumped to 3 for the branding refinement (frog marker, "PatchFrog
+#: review" heading, "·"-separated counts) -- purely visual, no change to
+#: finding selection/content.
+COMMENT_FORMAT_VERSION = 3
 
 #: Bumped whenever patchfrog.publishing.planner's selection/ordering/
 #: funnel logic (severity threshold application, cap selection,
@@ -70,6 +74,12 @@ class PublicationConfig(BaseModel):
     min_severity: Severity = DEFAULT_MIN_SEVERITY
     max_inline_comments: int = DEFAULT_MAX_INLINE_COMMENTS
     max_summary_findings: int = DEFAULT_MAX_SUMMARY_FINDINGS
+    #: The 🐸 marker in inline comment headers and the summary heading --
+    #: on by default for hosted PatchFrog (spec: "Branding & Review
+    #: Presentation Refinement"). A repository can opt out via its own
+    #: `.patchfrog.yml` (`publish.frog_marker: false`) without affecting
+    #: any other publication behavior.
+    frog_marker: bool = True
 
     def fingerprint(self) -> str:
         """A deterministic fingerprint of the *effective* publication
@@ -94,6 +104,7 @@ class PublicationConfig(BaseModel):
             "min_severity": self.min_severity.value,
             "max_inline_comments": self.max_inline_comments,
             "max_summary_findings": self.max_summary_findings,
+            "frog_marker": self.frog_marker,
             "comment_format_version": COMMENT_FORMAT_VERSION,
             "publication_engine_version": PUBLICATION_ENGINE_VERSION,
         }
