@@ -10,6 +10,13 @@ case:
     attempt_number up to 19, far outside its documented valid range.
     The violation is only visible by reading retry_policy.h's contract
     together with conn_manager.c's call site.
+
+    Fixture note: reconnect_loop.c (real definition of
+    reconnectWithBackoff, the actual bridge between conn_manager.c's
+    extern declaration and retry_policy.c/h's contract) was missing from
+    this fixture in the original private beta validation sprint commit
+    -- added in feat/extern-cross-file-context to make the reproduction
+    complete; see that PR for the resolution fix this case validates.
   language: c
   difficulty: hard
   tags: [correctness, cross-file-dependency, controlled]

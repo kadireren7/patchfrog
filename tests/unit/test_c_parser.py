@@ -24,6 +24,24 @@ def test_extracts_function_prototype_declaration() -> None:
     assert fn.visibility == "declaration"
 
 
+def test_static_function_definition_has_internal_linkage_visibility() -> None:
+    parsed = _parse("static int helper(void)\n{\n    return 1;\n}\n")
+    fn = next(s for s in parsed.symbols if s.name == "helper")
+    assert fn.visibility == "static_definition"
+
+
+def test_static_function_prototype_has_internal_linkage_visibility() -> None:
+    parsed = _parse("static int helper(void);\n")
+    fn = next(s for s in parsed.symbols if s.name == "helper")
+    assert fn.visibility == "static_declaration"
+
+
+def test_extern_function_prototype_is_plain_declaration_not_static() -> None:
+    parsed = _parse("extern int helper(void);\n")
+    fn = next(s for s in parsed.symbols if s.name == "helper")
+    assert fn.visibility == "declaration"
+
+
 def test_extracts_struct_definition() -> None:
     parsed = _parse("struct point\n{\n    int x;\n    int y;\n};\n")
     struct = next(s for s in parsed.symbols if s.name == "point")

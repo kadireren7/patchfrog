@@ -11,18 +11,61 @@ Resolution tiers for a call, in order (first match wins):
 1. **Scoped match** — the caller's own ``parent_qualified_name`` plus the
    callee name forms a real symbol in the same file (e.g. ``self.foo()``
    inside ``ClassName.bar`` resolves against ``ClassName.foo``).
-2. **Same-file match** — exactly one symbol in the same file has that
-   plain name (multiple matches: ambiguous, not guessed).
+2. **Same-file match** — exactly one symbol (after collapsing any
+   same-file declaration/definition pair onto the definition, see below)
+   has that plain name. If that one match is itself a real definition
+   (or a kind with no declaration/definition distinction, e.g. a
+   class/struct constructor call), resolve immediately. If it is a bare,
+   non-``static`` declaration — the C/C++ "extern function declared and
+   called in the same file, defined elsewhere" pattern — defer to tiers
+   3-5 instead of resolving to that bodyless prototype, falling back to
+   it only if nothing better is found. Multiple same-file matches:
+   ambiguous, not guessed.
 3. **Import-based match** — the file has a resolved import/include whose
    imported name matches the callee, and the target file defines a
    matching top-level symbol.
 4. **Include-narrowed repo match** — among all repository-wide top-level
-   symbols with that name, only those in files this file actually
+   symbols with that name (after the same declaration/definition
+   collapse, applied *before* narrowing so a repository-wide-unique real
+   definition always wins over a same-named bare declaration in a
+   directly-included header), only those in files this file actually
    imports/includes (multiple after narrowing: ambiguous).
 5. **Unconstrained repo match** — exactly one repository-wide top-level
    symbol has that name (multiple: ambiguous).
 
 Otherwise the call is unresolved.
+
+Extern cross-file resolution (tiers 2/4-5's declaration/definition
+collapse): a C/C++ function's prototype (in a header, or declared
+`extern` alongside a call to it in the same file) and its real
+definition (in a `.c`/`.cpp` file, possibly a different one) are the
+*same* repository function, not two ambiguous candidates or — worse — a
+bodyless prototype mistaken for the real thing. Collapsing is symbol-
+name-and-kind based and fully deterministic: never embeddings, never an
+LLM, and fails closed (stays ambiguous, or falls back to the bare
+declaration) whenever more than one real definition could plausibly
+match. `static` (C/C++ internal linkage) symbols are excluded from
+repository-wide candidate pools entirely (tracked via
+`ParsedSymbol.visibility`'s `"static_definition"`/`"static_declaration"`
+values) — a `static` function in one file must never satisfy another
+file's unresolved call, no matter how the names line up.
+
+**Known limitation, not attempted here**: this resolves *function*
+extern declarations/calls only. A bare, non-call identifier reference
+(e.g. a macro constant like `RETRY_POLICY_MAX_ATTEMPTS` used only in a
+comment or an expression, never called) is not tracked as any kind of
+relationship at all — there is no `ParsedReference` concept, only
+`ParsedCall`. Extending this to extern global variables and macro
+references would need genuine reference extraction added to every
+language parser, a materially larger change than this fix's scope.
+Also out of scope: namespace-qualified repository-wide matching (tiers
+4-5 only ever consider genuinely top-level symbols,
+``parent_qualified_name is None`` — a namespace-scoped C++ free
+function's extern declaration safely falls back to its own bare
+declaration rather than crashing or misresolving, but does not find its
+real cross-namespace definition; see
+``test_namespace_scoped_extern_declaration_falls_back_safely_not_misresolved``
+in ``tests/unit/test_extern_cross_file_resolution.py``).
 
 Import/include resolution: Python absolute/relative imports are resolved
 by mapping the repository's file paths to dotted module paths and
@@ -69,6 +112,19 @@ _RESOLVABLE_CALL_TARGET_KINDS = {
     SymbolKind.STRUCT,
 }
 _RELATIVE_IMPORT_RE = re.compile(r"^(\.+)(.*)$")
+
+#: A symbol with one of these ``visibility`` values has internal (C/C++
+#: ``static``) linkage -- it must never be treated as a candidate
+#: definition for a call/reference from a *different* file. Same-file
+#: resolution is unaffected (see ``_symbols_by_name_in_file`` below,
+#: which is never filtered by linkage).
+_INTERNAL_LINKAGE_VISIBILITY = frozenset({"static_definition", "static_declaration"})
+#: A symbol with this ``visibility`` is a bare prototype/forward
+#: declaration with no body -- never itself a resolution target when a
+#: real definition exists elsewhere (see ``_collapse_declarations_onto_definition``
+#: and the extern cross-file resolution in ``_resolve_one_call``).
+_BARE_DECLARATION_VISIBILITY = frozenset({"declaration", "static_declaration"})
+_DEFINITION_VISIBILITY = frozenset({"definition", "static_definition"})
 
 
 class ResolutionStatus(StrEnum):
@@ -118,7 +174,13 @@ class RepositoryResolver:
                     continue
                 ref = SymbolRef(pf.path, sym.qualified_name)
                 self._symbol_by_qualified[(pf.path, sym.qualified_name)] = sym
-                self._symbols_by_name[sym.name].append(ref)
+                if sym.visibility not in _INTERNAL_LINKAGE_VISIBILITY:
+                    # A `static` (C/C++ internal-linkage) symbol must never
+                    # satisfy a *different* file's unresolved call/reference
+                    # — same name, same kind, but definitively not the same
+                    # symbol. Same-file resolution (below) is unaffected;
+                    # only the repository-wide pool excludes it.
+                    self._symbols_by_name[sym.name].append(ref)
                 if sym.kind is not SymbolKind.METHOD:
                     # Tier 2 (below) matches by plain name within a file
                     # with no evidence about a call's receiver — safe for a
@@ -171,11 +233,37 @@ class RepositoryResolver:
                         pf.path, call, ResolutionStatus.RESOLVED, SymbolRef(pf.path, candidate_qn)
                     )
 
-        # Tier 2: unique same-file match by plain name.
-        same_file = self._symbols_by_name_in_file.get((pf.path, call.callee_name), [])
+        # Tier 2: unique same-file match by plain name. Collapsed the same
+        # way as tiers 4-5 (a same-file forward declaration plus its own
+        # same-file definition are one symbol, not two ambiguous ones).
+        same_file = self._collapse_declarations_onto_definition(
+            self._symbols_by_name_in_file.get((pf.path, call.callee_name), [])
+        )
+        same_file_declaration_fallback: SymbolRef | None = None
         if len(same_file) == 1:
-            return ResolvedCall(pf.path, call, ResolutionStatus.RESOLVED, same_file[0])
-        if len(same_file) > 1:
+            match = same_file[0]
+            match_symbol = self._symbol_by_qualified[(match.file_path, match.qualified_name)]
+            if match_symbol.visibility != "declaration":
+                # A real definition (static or not), a static bare
+                # declaration, or a kind with no declaration/definition
+                # distinction (e.g. a class/struct constructor call) --
+                # resolve immediately, exactly as before. A *static* bare
+                # declaration is also resolved immediately: `static`
+                # linkage means its definition (if any) must be in this
+                # same file too, so there is nothing to gain from
+                # deferring to repository-wide resolution.
+                return ResolvedCall(pf.path, call, ResolutionStatus.RESOLVED, match)
+            # A bare, non-static ("extern" or unspecified-linkage)
+            # same-file declaration -- e.g. `extern int foo(void);`
+            # followed by a call to `foo()` in the same file. This is
+            # never itself a real callable target (no body), and C/C++
+            # give it external linkage by default, so a real definition
+            # may exist in another file. Defer to repository-wide
+            # resolution (tiers 3-5) below, which can find and collapse
+            # onto that real definition; fall back to this bare
+            # declaration only if nothing better exists anywhere.
+            same_file_declaration_fallback = match
+        elif len(same_file) > 1:
             return ResolvedCall(pf.path, call, ResolutionStatus.AMBIGUOUS)
 
         # Tier 3: import-based match — an imported name resolving to a
@@ -199,7 +287,10 @@ class RepositoryResolver:
 
         # Tiers 4-5: repository-wide match by plain name, restricted to
         # top-level symbols (nested/member symbols require real scoping,
-        # already attempted in tier 1).
+        # already attempted in tier 1). Internal-linkage (`static`)
+        # symbols are already excluded from ``_symbols_by_name`` entirely
+        # (see the constructor), so every candidate here is genuinely a
+        # cross-file resolution possibility.
         repo_candidates = [
             ref
             for ref in self._symbols_by_name.get(call.callee_name, [])
@@ -207,15 +298,35 @@ class RepositoryResolver:
             is None
         ]
         if not repo_candidates:
+            if same_file_declaration_fallback is not None:
+                # No real definition exists anywhere in the indexed
+                # repository (e.g. a genuinely external/library symbol,
+                # or an incomplete/partial checkout) -- the bare same-file
+                # declaration deferred above is the best available
+                # answer, exactly what pre-fix behavior would have
+                # returned for this call.
+                return ResolvedCall(pf.path, call, ResolutionStatus.RESOLVED, same_file_declaration_fallback)
             return ResolvedCall(pf.path, call, ResolutionStatus.UNRESOLVED)
+
+        # Collapse declaration/definition pairs *before* narrowing by
+        # `#include`/import evidence, not after: a repository-wide-unique
+        # real definition is always a better answer than a same-named
+        # bare declaration in a directly-included header, whether or not
+        # the caller happens to include that specific header (the
+        # "extern function declared here, defined over there" pattern —
+        # see this module's docstring and the regression tests in
+        # tests/unit/test_extern_cross_file_resolution.py).
+        collapsed = self._collapse_declarations_onto_definition(repo_candidates)
+        if len(collapsed) == 1:
+            return ResolvedCall(pf.path, call, ResolutionStatus.RESOLVED, collapsed[0])
 
         included_paths = {
             ri.resolved_file_path
             for ri in self._resolved_imports_by_file.get(pf.path, [])
             if ri.resolved_file_path is not None
         }
-        narrowed = [c for c in repo_candidates if c.file_path in included_paths]
-        pool = self._collapse_declarations_onto_definition(narrowed or repo_candidates)
+        narrowed = [c for c in collapsed if c.file_path in included_paths]
+        pool = narrowed or collapsed
         if len(pool) == 1:
             return ResolvedCall(pf.path, call, ResolutionStatus.RESOLVED, pool[0])
         return ResolvedCall(pf.path, call, ResolutionStatus.AMBIGUOUS)
@@ -226,24 +337,27 @@ class RepositoryResolver:
         *same repository function* — they must not read as two ambiguous
         candidates. Collapse the pool down to the one definition only when
         it's unambiguous which definition the declarations belong to
-        (exactly one candidate has ``visibility == "definition"`` and every
-        other candidate is a bare ``"declaration"``). If two or more
-        candidates are themselves definitions, that is genuine ambiguity —
-        e.g. two same-named ``static`` functions in different files with no
-        import evidence to disambiguate — and is left untouched."""
+        (exactly one candidate is a definition -- ``visibility`` in
+        :data:`_DEFINITION_VISIBILITY` -- and every other candidate is a
+        bare declaration -- ``visibility`` in
+        :data:`_BARE_DECLARATION_VISIBILITY`). If two or more candidates
+        are themselves definitions, that is genuine ambiguity — e.g. two
+        same-named ``static`` functions in different files with no import
+        evidence to disambiguate — and is left untouched."""
 
         if len(candidates) < 2:
             return candidates
         definitions = [
             c
             for c in candidates
-            if self._symbol_by_qualified[(c.file_path, c.qualified_name)].visibility == "definition"
+            if self._symbol_by_qualified[(c.file_path, c.qualified_name)].visibility in _DEFINITION_VISIBILITY
         ]
         if len(definitions) != 1:
             return candidates
         non_definitions = [c for c in candidates if c not in definitions]
         if all(
-            self._symbol_by_qualified[(c.file_path, c.qualified_name)].visibility == "declaration"
+            self._symbol_by_qualified[(c.file_path, c.qualified_name)].visibility
+            in _BARE_DECLARATION_VISIBILITY
             for c in non_definitions
         ):
             return definitions

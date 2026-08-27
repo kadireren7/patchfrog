@@ -24,7 +24,7 @@ class LanguageParser(Protocol):
     def parse_file(self, *, relative_path: str, content: bytes) -> ParsedFile: ...
 
 
-PARSER_VERSION = 1
+PARSER_VERSION = 2
 """Bump whenever any language parser's *extraction logic* changes.
 
 The content-addressed parse cache (:mod:`patchfrog.indexing.parse_cache`,
@@ -34,6 +34,13 @@ bugfix (e.g. the header-guard extraction fix) would never take effect for
 any file whose content hasn't otherwise changed — its stale, pre-fix parse
 would be served from cache indefinitely. A grammar/Tree-sitter dependency
 upgrade that changes extracted structure should also bump this.
+
+Bumped to 2: C/C++ function symbols now record ``static`` storage-class
+linkage in ``ParsedSymbol.visibility`` (``"static_definition"`` /
+``"static_declaration"``, alongside the existing ``"definition"`` /
+``"declaration"``) — see :mod:`patchfrog.intelligence.resolution`'s
+extern cross-file resolution fix. A cached pre-bump parse would report
+every static function as externally-linked, exactly the bug being fixed.
 """
 
 
@@ -66,3 +73,19 @@ def qualify(parent_qualified_name: str | None, name: str) -> str:
     """Join a parent qualified name and a child name with a dot."""
 
     return f"{parent_qualified_name}.{name}" if parent_qualified_name else name
+
+
+def has_static_storage_class(node: Node) -> bool:
+    """Whether a C/C++ ``function_definition``/``declaration`` node carries
+    the ``static`` storage-class specifier — internal linkage, so the
+    symbol must never be treated as a candidate definition for a call or
+    reference in a *different* file (see
+    :mod:`patchfrog.intelligence.resolution`'s cross-file extern
+    resolution). Only ``static`` is checked here — ``extern`` and an
+    unspecified storage class are both external linkage in C/C++ and
+    require no special handling."""
+
+    return any(
+        child.type == "storage_class_specifier" and node_text(child) == "static"
+        for child in node.children
+    )
