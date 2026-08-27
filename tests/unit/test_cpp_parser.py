@@ -41,6 +41,30 @@ def test_extracts_out_of_class_method_definition_qualified() -> None:
     assert definition.kind is SymbolKind.METHOD
 
 
+def test_static_free_function_has_internal_linkage_visibility() -> None:
+    parsed = _parse("static int helper() { return 1; }\n")
+    fn = next(s for s in parsed.symbols if s.name == "helper")
+    assert fn.kind is SymbolKind.FUNCTION
+    assert fn.visibility == "static_definition"
+
+
+def test_static_member_function_is_not_treated_as_internal_linkage() -> None:
+    """A `static` *member* function is a wholly different C++ concept from
+    a `static` free function -- it's still externally callable via
+    `ClassName::method()`, not internally linked to this translation
+    unit. Internal-linkage visibility must never apply to it."""
+
+    parsed = _parse(
+        "class Cache {\n"
+        "public:\n"
+        "    static int get(int key) { return key; }\n"
+        "};\n"
+    )
+    method = next(s for s in parsed.symbols if s.qualified_name == "Cache::get")
+    assert method.kind is SymbolKind.METHOD
+    assert method.visibility == "definition"
+
+
 def test_extracts_constructor_and_destructor_as_methods() -> None:
     parsed = _parse(
         "class Widget {\n"

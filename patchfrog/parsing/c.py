@@ -30,7 +30,7 @@ from patchfrog.domain.code import (
     ParsedSymbol,
     SymbolKind,
 )
-from patchfrog.parsing.base import content_hash, node_text, span_of
+from patchfrog.parsing.base import content_hash, has_static_storage_class, node_text, span_of
 
 _C_LANGUAGE = TSLanguage(tsc.language())
 
@@ -144,6 +144,12 @@ def _extract_function(node: Node, symbols: list[ParsedSymbol], *, is_definition:
         .strip()
     )
 
+    is_static = has_static_storage_class(node)
+    if is_definition:
+        visibility = "static_definition" if is_static else "definition"
+    else:
+        visibility = "static_declaration" if is_static else "declaration"
+
     symbols.append(
         ParsedSymbol(
             name=name,
@@ -152,7 +158,7 @@ def _extract_function(node: Node, symbols: list[ParsedSymbol], *, is_definition:
             span=span_of(node),
             signature=signature,
             parent_qualified_name=None,
-            visibility="definition" if is_definition else "declaration",
+            visibility=visibility,
             content_hash=content_hash(node.text or b""),
         )
     )

@@ -32,7 +32,7 @@ from patchfrog.domain.code import (
     ParsedSymbol,
     SymbolKind,
 )
-from patchfrog.parsing.base import content_hash, node_text, span_of
+from patchfrog.parsing.base import content_hash, has_static_storage_class, node_text, span_of
 
 _CPP_LANGUAGE = TSLanguage(tscpp.language())
 
@@ -255,6 +255,18 @@ def _extract_function(
         .strip()
     )
 
+    # A `static` member function (kind == METHOD) is a wholly different
+    # C++ concept from a `static` free function -- it's still externally
+    # callable via `ClassName::method()`, not internally-linked to this
+    # translation unit. Internal-linkage tracking (for cross-file extern
+    # resolution safety, see patchfrog.intelligence.resolution) therefore
+    # only ever applies to free functions.
+    is_static_free_function = kind is SymbolKind.FUNCTION and has_static_storage_class(node)
+    if has_body:
+        visibility = "static_definition" if is_static_free_function else "definition"
+    else:
+        visibility = "static_declaration" if is_static_free_function else "declaration"
+
     symbols.append(
         ParsedSymbol(
             name=name,
@@ -263,7 +275,7 @@ def _extract_function(
             span=span_of(node),
             signature=f"{template_prefix}{header}",
             parent_qualified_name=scope.qualified_name,
-            visibility="definition" if has_body else "declaration",
+            visibility=visibility,
             content_hash=content_hash(node.text or b""),
         )
     )
