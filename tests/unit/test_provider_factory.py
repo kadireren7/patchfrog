@@ -92,3 +92,24 @@ def test_unknown_provider_raises_clear_value_error() -> None:
             ReviewConfig(provider="openai", model="gpt-x"),
             settings=_settings(),
         )
+
+
+def test_minimal_gemini_config_builds_reviewer_and_critic_without_claude_opus_5() -> None:
+    """G: the minimal documented Gemini config (provider + model only,
+    critic_model omitted) must build a Gemini critic using the Gemini
+    model -- never request claude-opus-5 from Gemini's API. Regression
+    for a real bug found live: an omitted critic_model previously stayed
+    the Anthropic default regardless of provider."""
+
+    config = ReviewConfig(provider="gemini", model="gemini-3.6-flash")
+    settings = _settings(GEMINI_API_KEY="fake-not-real")
+
+    reviewer = build_reviewer_provider(config, settings=settings)
+    critic = build_critic_provider(config, settings=settings)
+
+    assert isinstance(reviewer, GeminiLLMProvider)
+    assert reviewer.identity.model == "gemini-3.6-flash"
+    assert isinstance(critic, GeminiLLMProvider)
+    assert critic is not None
+    assert critic.identity.model == "gemini-3.6-flash"
+    assert critic.identity.model != "claude-opus-5"

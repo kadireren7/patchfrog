@@ -23,7 +23,7 @@ from typing import Literal
 
 import structlog
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from patchfrog.analysis.domain import Confidence
 
@@ -31,8 +31,14 @@ logger = structlog.get_logger(__name__)
 
 _CONFIG_FILENAMES = (".patchfrog.yml", ".patchfrog.yaml")
 
-#: Bumped whenever ReviewConfig's own shape/semantics change.
-CONFIG_SCHEMA_VERSION = 1
+#: Bumped whenever ReviewConfig's own shape/semantics change -- including a
+#: change to how an *omitted* field's effective value is computed, even
+#: when the field list itself doesn't change (see the critic_model/
+#: request_timeout_seconds effective-default fix below: two YAML configs
+#: that look identical to an older PatchFrog version can now produce a
+#: materially different effective config, so any prior canonical run must
+#: never be silently reused across this version boundary).
+CONFIG_SCHEMA_VERSION = 2
 
 #: Bumped whenever patchfrog.review.prompt's system/user prompt templates
 #: change materially enough that a prior run's proposals can no longer be
@@ -59,6 +65,20 @@ DEFAULT_MAX_CONCURRENT_REQUESTS = 4
 DEFAULT_MIN_FINAL_CONFIDENCE: Confidence = Confidence.MEDIUM
 DEFAULT_MAX_RETRIES = 2
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
+
+#: Per-provider effective timeout used only when a repository's
+#: `.patchfrog.yml` omits `request_timeout_seconds` entirely. Anthropic
+#: keeps the 30s general default (unchanged). Gemini's default
+#: ("AUTOMATIC") thinking behavior is slower and far more variable --
+#: live validation observed real 504 DEADLINE_EXCEEDED failures at 30s
+#: and single calls up to ~144s -- so an explicit, more generous default
+#: applies automatically for `provider: gemini` alone, without requiring
+#: every Gemini-configured repository to remember to raise it by hand.
+#: An explicitly-configured `request_timeout_seconds` always wins over
+#: this table, for either provider (see `_apply_effective_defaults`).
+_DEFAULT_TIMEOUT_SECONDS_BY_PROVIDER: dict[str, float] = {
+    "gemini": 120.0,
+}
 
 
 class ReviewConfig(BaseModel):
@@ -88,6 +108,43 @@ class ReviewConfig(BaseModel):
     min_final_confidence: Confidence = DEFAULT_MIN_FINAL_CONFIDENCE
     max_retries: int = DEFAULT_MAX_RETRIES
     request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+    @model_validator(mode="after")
+    def _apply_effective_defaults(self) -> ReviewConfig:
+        """Fill in provider-coherent effective values for fields the
+        caller *omitted* -- never for a field explicitly supplied, even
+        when the explicit value happens to equal a class default.
+
+        ``model_fields_set`` (populated by pydantic during construction,
+        both for direct keyword construction and for
+        ``model_validate(review_section)`` in :func:`load_review_config`)
+        is exactly "which field names were actually present in the
+        input" -- the only reliable way to distinguish "omitted" from
+        "explicitly set to the default-looking value", which comparing
+        against ``DEFAULT_CRITIC_MODEL``/``DEFAULT_REQUEST_TIMEOUT_SECONDS``
+        cannot do (a user may deliberately choose exactly that string).
+
+        Mutating the fields here (rather than exposing a separate
+        "effective config" object) means every reader --
+        :meth:`fingerprint`, :mod:`patchfrog.review.provider_factory`,
+        anything else that reads ``config.critic_model`` /
+        ``config.request_timeout_seconds`` -- automatically sees the
+        correct effective value with no change needed at the read site;
+        config normalization is the single boundary, not scattered
+        provider-aware branches.
+        """
+
+        if "critic_model" not in self.model_fields_set:
+            # Same reviewer/critic model unless the caller says otherwise
+            # -- provider-neutral (an Anthropic config with an explicit
+            # non-default `model` and no `critic_model` gets the same
+            # coherent behavior, not just Gemini).
+            self.critic_model = self.model
+        if "request_timeout_seconds" not in self.model_fields_set:
+            self.request_timeout_seconds = _DEFAULT_TIMEOUT_SECONDS_BY_PROVIDER.get(
+                self.provider, DEFAULT_REQUEST_TIMEOUT_SECONDS
+            )
+        return self
 
     def fingerprint(self) -> str:
         """A deterministic fingerprint of *configuration intent* --

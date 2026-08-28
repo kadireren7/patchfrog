@@ -52,7 +52,19 @@
     "unsupported_repository_claims": 0,
     "hallucinated_false_positives": 0,
     "critic_data_available": false,
-    "critic_unavailable_reason": "test .patchfrog.yml omitted critic_model, defaulted to claude-opus-5, every critic call 404'd and gracefully degraded"
+    "critic_unavailable_reason": "test .patchfrog.yml omitted critic_model, defaulted to claude-opus-5, every critic call 404'd and gracefully degraded",
+    "historical_note": "This result is preserved as-is, not rewritten. The config gap it exposed is fixed as of config_semantics_fix below (same PR), but this specific sample genuinely ran before that fix existed and remains reviewer-only data."
+  },
+  "config_semantics_fix": {
+    "root_cause": "ReviewConfig.critic_model defaulted to the class-level Anthropic default (claude-opus-5) regardless of provider, so an omitted critic_model produced an impossible provider/model pair for the critic call",
+    "fix_location": "config normalization boundary (ReviewConfig.model_validator, not provider_factory)",
+    "mechanism": "pydantic model_fields_set distinguishes omitted vs explicitly-set fields; omitted critic_model defaults to the same value as model; omitted request_timeout_seconds defaults to 120.0 for provider=gemini (30.0 unchanged elsewhere)",
+    "config_schema_version_before": 1,
+    "config_schema_version_after": 2,
+    "minimal_gemini_config_after_fix": {"provider": "gemini", "model": "gemini-3.6-flash"},
+    "regression_tests_added": 11,
+    "live_call_made_to_verify": false,
+    "live_call_reason_skipped": "unit/integration tests sufficient; free-tier daily quota from live_quality_sample had not reset"
   },
   "extern_case11": {"status": "NOT_RUN", "reason": "quota exhausted before reaching it"},
   "natural_pr_dry_run": {"status": "NOT_RUN", "reason": "quota exhausted before reaching it"},

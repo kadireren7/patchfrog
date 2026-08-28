@@ -130,13 +130,12 @@ the same mechanism -- no separate config system:
 review:
   provider: gemini
   model: gemini-3.6-flash
-  critic_model: gemini-3.6-flash
-  request_timeout_seconds: 120
 ```
 
 See [Selecting Gemini](deployment.md#selecting-gemini) for the required
-`GEMINI_API_KEY`, why `critic_model` must be set explicitly, and the
-current free-tier data-policy/quota caveats.
+`GEMINI_API_KEY`, the provider-appropriate effective defaults this
+normalizes to (`critic_model`, `request_timeout_seconds`) and how to
+override them, and the current free-tier data-policy/quota caveats.
 
 ## Repository/installation lifecycle
 

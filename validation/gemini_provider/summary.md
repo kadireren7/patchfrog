@@ -57,21 +57,25 @@ present (`test_missing_gemini_credential_never_falls_back_to_anthropic`).
 
 No second config system: `.patchfrog.yml`'s existing `review:` section
 (`ReviewConfig.provider`/`.model`, already a free-form string) is the only
-mechanism. Minimal config to select Gemini:
+mechanism. Minimal config to select Gemini, **as of the config-semantics
+fix landed later in this same PR** (see §16):
 
 ```yaml
 review:
   provider: gemini
   model: gemini-3.6-flash
-  critic_model: gemini-3.6-flash
-  request_timeout_seconds: 120
 ```
 
-**`critic_model` and `request_timeout_seconds` are not optional in
-practice**, both discovered live during this validation (see §3 and §9) --
-`docs/deployment.md`'s "Selecting Gemini" section documents exactly why.
-Anthropic remains the production default; nothing changes for existing
-deployments unless `.patchfrog.yml` explicitly opts into `provider: gemini`.
+`ReviewConfig` now fills in provider-coherent effective values for any
+omitted field -- `critic_model` defaults to the same value as `model`
+(not the Anthropic default), and `request_timeout_seconds` defaults to
+120s specifically for `provider: gemini` (30s elsewhere, unchanged).
+Both remain overridable. **This is a fix, not the original behavior**:
+§9's quality sample below genuinely ran *before* this fix existed, with
+a `.patchfrog.yml` that only set `provider`/`model` -- see §9 for exactly
+what that produced and why. Anthropic remains the production default;
+nothing changes for existing deployments unless `.patchfrog.yml`
+explicitly opts into `provider: gemini`.
 
 ## 6. Docker wiring
 
@@ -80,7 +84,7 @@ Mirrors `ANTHROPIC_API_KEY` exactly: `worker` receives `GEMINI_API_KEY` via
 it (`GEMINI_API_KEY: ""`) since the API process never instantiates a
 provider. No key in the Dockerfile, image layers, `docker history`, or
 tracked compose source -- verified via `docker compose config` (presence/
-length checks only; see the redaction incident in §16).
+length checks only; see the redaction incident in §15).
 
 ## 7. Redaction
 
@@ -120,8 +124,13 @@ used only set `provider`/`model`, not `critic_model` -- every critic call
 therefore requested Gemini's API for a nonexistent `claude-opus-5` model
 (the Anthropic default), failing with a clean `404` that the existing review
 service correctly classified as fatal and gracefully degraded from (no
-crash, no silent accept). **This sample is reviewer-only Gemini data, not
-reviewer+critic** -- see the corrected config in §5 for a future run.
+crash, no silent accept). **This sample remains reviewer-only Gemini
+data, not reviewer+critic -- this fact is not rewritten.** The
+underlying config-semantics gap this run exposed has since been fixed at
+the `ReviewConfig` normalization layer in this same PR (§5, §16); a
+corrected re-run for real critic-path data is still needed once quota
+resets (§17) -- this historical sample was not, and will not be,
+retroactively relabeled as having critic data it didn't have.
 
 | Case | Type | Result |
 |---|---|---|
@@ -186,7 +195,7 @@ classification, a real bug found and fixed). It is **not** ready for a
 broader quality verdict: the live quality sample is 4/9 planned cases, has
 no critic-path data, and the free tier's daily quota (20 requests) makes it
 unsuitable for anything beyond very light internal dogfood without a paid
-tier. See §16 for the exact remaining steps.
+tier. See §17 for the exact remaining steps.
 
 ## 15. Incident: a real secret was printed mid-session
 
@@ -200,14 +209,41 @@ resolved value. See the corresponding feedback/memory entry for the lesson
 (does not affect anything committed to the repository -- the exposure was
 transcript-only, not a commit, log file, or artifact).
 
-## 16. Remaining limitations / next steps
+## 16. Config-semantics fix (post-CI-review, same PR)
+
+§9's live run exposed a real config-normalization gap: `ReviewConfig`'s
+`critic_model` defaulted to the class-level Anthropic default
+(`claude-opus-5`) regardless of `provider`, so a `.patchfrog.yml` setting
+only `provider`/`model` produced an impossible provider/model pair for
+the critic call. Fixed at the config-normalization boundary (not in
+`provider_factory`, per the reviewer's explicit preference for that
+boundary): `ReviewConfig` gained a `model_validator(mode="after")` that
+fills in `critic_model` (defaults to the same value as `model`) and
+`request_timeout_seconds` (120s specifically for `provider: gemini`, 30s
+elsewhere unchanged) **only for fields the caller genuinely omitted** --
+distinguished via pydantic's `model_fields_set`, never by comparing
+against the old default string (a user may deliberately choose
+`claude-opus-5` explicitly, and that must still be respected).
+`CONFIG_SCHEMA_VERSION` bumped `1` → `2` since two YAML configs that look
+identical to the older schema version can now produce a materially
+different effective config -- any prior canonical run is never silently
+reused across this boundary. 10 new regression tests (`tests/unit/test_review_config.py`)
+plus 1 in `test_provider_factory.py` cover: omitted-vs-explicit for both
+fields, Anthropic behavior provably unchanged, the minimal Gemini YAML
+normalizing correctly end-to-end, and the fingerprint distinguishing the
+old broken default from the new correct one. No live call was needed or
+made to verify this fix -- unit/integration tests are sufficient, and the
+free-tier daily quota from §9 had not reset.
+
+## 17. Remaining limitations / next steps
 
 1. **Free-tier daily quota (20 requests/day)** is the primary blocker to
    completing the quality sample, the extern case11 comparison, the natural
    PR dry-run, and any critic-enabled data. Needs either a wait for daily
    reset or a paid tier.
-2. Corrected `.patchfrog.yml` (`critic_model: gemini-3.6-flash`) needed for
-   any future run to get real critic-path data.
+2. A fresh live run (now needing no config workaround at all, per §16) to
+   get real critic-path data -- the minimal documented config is now
+   sufficient by itself.
 3. The remaining 5 of 9 planned quality-sample cases (C++ bug/clean,
    security, multi-file, extern case11).
 4. Natural PR dry-run (0 of the planned 1-2 attempted).

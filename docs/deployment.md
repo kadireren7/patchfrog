@@ -86,33 +86,48 @@ Gemini is an explicit, per-repository opt-in via `.patchfrog.yml`:
 review:
   provider: gemini
   model: gemini-3.6-flash
-  critic_model: gemini-3.6-flash
-  request_timeout_seconds: 120
 ```
 
-(`gemini-2.5-flash` is retired -- Gemini's own API returns `404 NOT_FOUND`
-for it as of this writing and recommends `gemini-3.6-flash`, confirmed
-live; use the model name above, not the older one.) Setting only
-`GEMINI_API_KEY` in the environment does **not** switch the default --
-`.patchfrog.yml` must explicitly request `provider: gemini`, so existing
-Anthropic-configured deployments are never silently affected by adding a
-Gemini key to the environment.
+That's the whole file -- `.patchfrog.yml` must explicitly request
+`provider: gemini` (setting only `GEMINI_API_KEY` in the environment does
+**not** switch the default, so existing Anthropic-configured deployments
+are never silently affected by adding a Gemini key). `gemini-2.5-flash`
+is retired -- Gemini's own API returns `404 NOT_FOUND` for it as of this
+writing and recommends `gemini-3.6-flash`, confirmed live; use the model
+name above, not the older one.
 
-`critic_model` must be set explicitly too: it defaults to `claude-opus-5`
-(the Anthropic default) regardless of `provider`, so a `.patchfrog.yml`
-that only sets `provider`/`model` silently sends the critic call to
-Gemini's API asking for a nonexistent `claude-opus-5` model. This fails
-cleanly (a 404, correctly classified as fatal, gracefully degraded to
-no-critic aggregation by `patchfrog.review.service` -- never a crash or a
-silent wrong answer) but means critic review never actually runs. This
-gap was found live during this provider's own validation -- see
-`validation/gemini_provider/quality_sample.json`.
+`ReviewConfig` fills in provider-coherent effective values for any field
+this minimal config omits, deterministically (see
+`patchfrog.review.config.ReviewConfig._apply_effective_defaults`, and
+`CONFIG_SCHEMA_VERSION`, bumped when this normalization was introduced so
+a run canonicalized under the old broken default is never silently
+reused):
 
-`request_timeout_seconds` also needs raising from the 30s default:
-Gemini 3.6-flash's default thinking behavior is slower and far more
-variable than Anthropic's (single calls up to ~144s were observed live,
-median around 50s) -- 30s produced spurious `504 DEADLINE_EXCEEDED`
-transient failures in testing.
+- **`critic_model`**, if omitted, defaults to the same value as `model`
+  -- so Gemini's critic call also asks Gemini, never a stale
+  `claude-opus-5` (an earlier version of this provider had exactly that
+  bug: omitting `critic_model` silently kept the Anthropic default
+  regardless of `provider`, so every critic call 404'd against Gemini's
+  API -- found live, see `validation/gemini_provider/quality_sample.json`
+  -- and is now fixed at the config-normalization boundary, not
+  documented around).
+- **`request_timeout_seconds`**, if omitted, defaults to 120s specifically
+  for `provider: gemini` (30s elsewhere, unchanged). Gemini 3.6-flash's
+  default thinking behavior is slower and far more variable than
+  Anthropic's (single live calls up to ~144s were observed, median
+  around 50s) -- 30s produced spurious `504 DEADLINE_EXCEEDED` failures
+  in testing.
+
+Both remain overridable -- an explicit value in `.patchfrog.yml` always
+wins over the provider-appropriate default:
+
+```yaml
+review:
+  provider: gemini
+  model: gemini-3.6-flash
+  critic_model: some-other-valid-gemini-model  # optional override
+  request_timeout_seconds: 60                  # optional override
+```
 
 **Data policy**: Google's Gemini API free tier states that prompts and
 responses may be used to improve Google's products (see Google's current

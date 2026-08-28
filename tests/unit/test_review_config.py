@@ -201,3 +201,92 @@ def test_two_different_malformed_contents_have_different_error_raw_text(tmp_path
         load_review_config(tmp_path, on_malformed="raise")
 
     assert first.value.raw_text != second.value.raw_text
+
+
+# -- Effective-default normalization (critic_model / request_timeout_seconds) --
+#
+# Regression coverage for a real gap found live: a repository selecting
+# `provider: gemini` without also setting `critic_model` previously kept
+# the class-level default `claude-opus-5` (an Anthropic model), so the
+# critic call asked Gemini's API for a model that doesn't exist there.
+# ReviewConfig now fills in provider-coherent effective values for any
+# field the caller genuinely omitted (via pydantic's model_fields_set),
+# never for one explicitly supplied -- even when that explicit value
+# happens to match the old default string.
+
+
+def test_a_gemini_critic_model_omitted_defaults_to_reviewer_model() -> None:
+    config = ReviewConfig(provider="gemini", model="gemini-3.6-flash")
+    assert config.critic_model == "gemini-3.6-flash"
+
+
+def test_b_gemini_explicit_critic_model_is_preserved() -> None:
+    config = ReviewConfig(
+        provider="gemini", model="gemini-3.6-flash", critic_model="some-other-valid-gemini-model"
+    )
+    assert config.critic_model == "some-other-valid-gemini-model"
+
+
+def test_c_anthropic_defaults_remain_unchanged() -> None:
+    config = ReviewConfig()
+    assert config.provider == "anthropic"
+    assert config.model == "claude-opus-5"
+    assert config.critic_model == "claude-opus-5"
+    assert config.request_timeout_seconds == 30.0
+
+
+def test_d_gemini_timeout_omitted_uses_provider_appropriate_default() -> None:
+    config = ReviewConfig(provider="gemini", model="gemini-3.6-flash")
+    assert config.request_timeout_seconds == 120.0
+
+
+def test_e_gemini_explicit_timeout_is_preserved() -> None:
+    config = ReviewConfig(provider="gemini", model="gemini-3.6-flash", request_timeout_seconds=45.0)
+    assert config.request_timeout_seconds == 45.0
+
+
+def test_f_anthropic_timeout_omitted_preserves_existing_default() -> None:
+    config = ReviewConfig(provider="anthropic", model="claude-opus-5")
+    assert config.request_timeout_seconds == 30.0
+
+
+def test_explicit_critic_model_equal_to_old_default_string_is_still_respected() -> None:
+    """The distinction must be "was this field present in the input", not
+    "does its value differ from the class default" -- a user may
+    deliberately choose the exact string that also happens to be the
+    default."""
+
+    config = ReviewConfig.model_validate(
+        {"provider": "gemini", "model": "gemini-3.6-flash", "critic_model": "claude-opus-5"}
+    )
+    assert config.critic_model == "claude-opus-5"
+
+
+def test_minimal_gemini_yaml_config_normalizes_correctly(tmp_path: Path) -> None:
+    """The documented minimal Gemini config (provider + model only) must
+    be sufficient -- no separately-remembered critic_model or timeout."""
+
+    (tmp_path / ".patchfrog.yml").write_text(
+        "review:\n  provider: gemini\n  model: gemini-3.6-flash\n"
+    )
+    config = load_review_config(tmp_path)
+    assert config.critic_model == "gemini-3.6-flash"
+    assert config.request_timeout_seconds == 120.0
+
+
+def test_config_schema_version_bumped_for_effective_default_semantics_change() -> None:
+    from patchfrog.review.config import CONFIG_SCHEMA_VERSION
+
+    assert CONFIG_SCHEMA_VERSION == 2
+
+
+def test_omitted_vs_explicit_gemini_critic_model_produce_different_fingerprints() -> None:
+    """A config that silently defaulted critic_model to claude-opus-5
+    (the pre-fix behavior) must never be treated as canonically identical
+    to one that correctly defaults it to the reviewer model."""
+
+    omitted = ReviewConfig(provider="gemini", model="gemini-3.6-flash")
+    explicit_old_default = ReviewConfig(
+        provider="gemini", model="gemini-3.6-flash", critic_model="claude-opus-5"
+    )
+    assert omitted.fingerprint() != explicit_old_default.fingerprint()
