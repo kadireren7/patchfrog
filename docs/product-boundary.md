@@ -81,7 +81,7 @@ Two GitHub App identities exist in this model, and they are never shared:
   matters.
 - Self-hosting **never** grants you access to PatchFrog Cloud's official
   App credentials, infrastructure, or account data. The two are completely
-  independent deployments that happen to run the same open codebase.
+  independent deployments that happen to run the same source-available codebase.
 
 No real App secret, key, or credential is (or should ever be) placed in
 this documentation. Every example in `docs/deployment.md` uses placeholder
