@@ -53,6 +53,12 @@ def test_provider_specific_api_key_field_names_are_redacted() -> None:
         assert result[key] == _REDACTED
 
 
+def test_gemini_api_key_field_names_are_redacted() -> None:
+    for key in ("gemini_api_key", "GEMINI_API_KEY", "google_api_key", "GOOGLE_API_KEY"):
+        result = _redact({key: "fake-gemini-key-not-real"})
+        assert result[key] == _REDACTED
+
+
 def test_anthropic_key_shaped_value_is_redacted_under_any_field_name() -> None:
     result = _redact({"detail": "provider call failed using key sk-ant-fake0000000000000000000000"})
     assert "sk-ant-fake" not in str(result["detail"])

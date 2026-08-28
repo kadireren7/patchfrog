@@ -12,6 +12,9 @@ from patchfrog.config.settings import Settings
 from patchfrog.review.config import ReviewConfig
 from patchfrog.review.provider import LLMProvider
 from patchfrog.review.providers.anthropic_provider import AnthropicLLMProvider
+from patchfrog.review.providers.gemini_provider import GeminiLLMProvider
+
+_SUPPORTED_PROVIDERS = ("anthropic", "gemini")
 
 
 class MissingProviderCredentialsError(RuntimeError):
@@ -33,14 +36,26 @@ def build_critic_provider(config: ReviewConfig, *, settings: Settings) -> LLMPro
 
 
 def _build(provider: str, model: str, *, settings: Settings, timeout_seconds: float) -> LLMProvider:
-    if provider != "anthropic":
-        raise ValueError(f"unsupported review provider: {provider!r} (only 'anthropic' is implemented)")
-    if not settings.anthropic_api_key:
-        raise MissingProviderCredentialsError(
-            "ANTHROPIC_API_KEY is not set. Set it in the environment or a secret store "
-            "(never in .patchfrog.yml) before running a real AI review. "
-            "Use --dry-run to build candidates/context without calling the provider."
+    if provider == "anthropic":
+        if not settings.anthropic_api_key:
+            raise MissingProviderCredentialsError(
+                "ANTHROPIC_API_KEY is not set. Set it in the environment or a secret store "
+                "(never in .patchfrog.yml) before running a real AI review. "
+                "Use --dry-run to build candidates/context without calling the provider."
+            )
+        return AnthropicLLMProvider(
+            api_key=settings.anthropic_api_key, model=model, timeout_seconds=timeout_seconds
         )
-    return AnthropicLLMProvider(
-        api_key=settings.anthropic_api_key, model=model, timeout_seconds=timeout_seconds
+    if provider == "gemini":
+        if not settings.gemini_api_key:
+            raise MissingProviderCredentialsError(
+                "GEMINI_API_KEY is not set. Set it in the environment or a secret store "
+                "(never in .patchfrog.yml) before running a real AI review. "
+                "Use --dry-run to build candidates/context without calling the provider."
+            )
+        return GeminiLLMProvider(
+            api_key=settings.gemini_api_key, model=model, timeout_seconds=timeout_seconds
+        )
+    raise ValueError(
+        f"unsupported review provider: {provider!r} (supported: {', '.join(_SUPPORTED_PROVIDERS)})"
     )

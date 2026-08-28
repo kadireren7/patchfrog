@@ -82,3 +82,12 @@ def test_settings_repr_never_leaks_secrets() -> None:
     text = repr(settings)
     assert settings.github_private_key not in text
     assert settings.github_webhook_secret not in text
+
+
+def test_settings_repr_never_leaks_provider_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-fake0000000000000000000000")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-key-not-real-00000000")
+    settings = Settings(_env_file=None)
+    text = repr(settings)
+    assert "sk-ant-fake" not in text
+    assert "fake-gemini-key-not-real" not in text

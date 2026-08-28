@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # actually requested (CLI --dry-run and the Celery task's own
     # provider-construction step both handle this explicitly).
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    # Same environment-only security model as anthropic_api_key above --
+    # never read from .patchfrog.yml, never logged, never persisted.
+    # Optional: patchfrog.review.provider_factory raises a clear,
+    # actionable error only when provider="gemini" is actually requested.
+    gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
 
     # -- Public beta operational limits (patchfrog.ops) --
     # All optional with conservative defaults; never required for

@@ -37,6 +37,13 @@ class ProviderRequest:
 class ProviderUsage:
     input_tokens: int = 0
     output_tokens: int = 0
+    #: Reasoning/"thinking" tokens, when a provider bills and reports them
+    #: as a distinct line item from ``output_tokens`` (e.g. Gemini's
+    #: ``thoughts_token_count``). Always 0 for a provider that doesn't
+    #: expose this separately (e.g. Anthropic folds extended-thinking
+    #: tokens into ``output_tokens``) -- never fabricated when a provider
+    #: doesn't report it.
+    thinking_tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)

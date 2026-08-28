@@ -123,6 +123,21 @@ That's the entire file most repositories will ever need. See
 `patchfrog/review/config.py` and `patchfrog/publishing/config.py` for
 every other (all optional) knob.
 
+Selecting a non-default AI provider (Anthropic remains the default) is
+the same mechanism -- no separate config system:
+
+```yaml
+review:
+  provider: gemini
+  model: gemini-3.6-flash
+  critic_model: gemini-3.6-flash
+  request_timeout_seconds: 120
+```
+
+See [Selecting Gemini](deployment.md#selecting-gemini) for the required
+`GEMINI_API_KEY`, why `critic_model` must be set explicitly, and the
+current free-tier data-policy/quota caveats.
+
 ## Repository/installation lifecycle
 
 - `installation_repositories` `removed` -> `RepositoryModel.is_selected`

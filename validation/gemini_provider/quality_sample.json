@@ -1,0 +1,71 @@
+{
+  "status": "PARTIAL",
+  "label": "LIVE_GEMINI_QUALITY_SAMPLE",
+  "planned_cases": 9,
+  "cases_with_genuine_reviewer_coverage": 4,
+  "cases_blocked_by_quota": 5,
+  "blocked_reason": "gemini_free_tier_daily_quota_exhausted (GenerateRequestsPerDayPerProjectPerModel-FreeTier, limit=20/day for gemini-3.6-flash)",
+  "critic_note": "The .patchfrog.yml used for this batch set review.provider/model but not review.critic_model, which defaults to claude-opus-5 (the Anthropic default) -- every critic call therefore failed with a clean 404 (\"models/claude-opus-5 is not found\"), correctly classified as ProviderFatalError and gracefully degraded to no-critic aggregation by the existing review service (never crashed, never silently accepted). This sample is REVIEWER-ONLY Gemini data, not reviewer+critic. A corrected config (critic_model: gemini-3.6-flash) is documented for a future run once quota resets.",
+  "cases": [
+    {
+      "case": "py-off-by-one-loop",
+      "type": "bug",
+      "expected": {"category": "correctness", "file": "src/batch.py", "symbol": "send_all", "line": 4},
+      "candidates": 4,
+      "reviewed": 4,
+      "quota_blocked": 0,
+      "accepted": 1,
+      "verdict": "TP",
+      "finding": "Off-by-one error in send_all loop bounds (correctness, src/batch.py:4)"
+    },
+    {
+      "case": "clean-py-defensive-check",
+      "type": "clean",
+      "expected": [],
+      "candidates": 5,
+      "reviewed": 5,
+      "quota_blocked": 0,
+      "accepted": 0,
+      "verdict": "clean_pass"
+    },
+    {
+      "case": "c-memory-leak",
+      "type": "bug",
+      "expected": {"category": "memory_safety", "file": "buffer.c", "symbol": "load_message", "line": 14},
+      "candidates": 4,
+      "reviewed": 2,
+      "quota_blocked": 2,
+      "accepted": 1,
+      "verdict": "TP",
+      "finding": "Memory leak on max length check failure (resource_management, buffer.c:13)",
+      "note": "2 of 4 candidates never reached the reviewer -- quota exhausted mid-case"
+    },
+    {
+      "case": "clean-c-correct-realloc-pattern",
+      "type": "clean",
+      "expected": [],
+      "candidates": 4,
+      "reviewed": 2,
+      "quota_blocked": 2,
+      "accepted": 0,
+      "verdict": "clean_pass_partial_coverage",
+      "note": "only 2 of 4 candidates got genuine reviewer coverage before quota exhaustion; 0 findings in what was reviewed"
+    }
+  ],
+  "not_attempted": [
+    {"case": "cpp-missing-lock-race", "type": "bug", "reason": "indexed only; quota exhausted before the review call"},
+    {"case": "clean-cpp-raii-correct", "type": "clean", "reason": "batch stopped before this case started"},
+    {"case": "secq-a-credential-log-exposure", "type": "security", "reason": "batch stopped before this case started"},
+    {"case": "hard-c-cross-file-null-check-removed", "type": "multi-file", "reason": "batch stopped before this case started"},
+    {"case": "case11-cross-file", "type": "extern-context", "reason": "planned as a separate step after the main batch; never reached due to quota exhaustion"}
+  ],
+  "summary_metrics": {
+    "target_bugs_found": 2,
+    "target_bugs_missed": 0,
+    "unsupported_repository_claims": 0,
+    "clean_zero_finding_cases": 2,
+    "real_but_out_of_scope_findings": 0,
+    "duplicates": 0,
+    "hallucinated_false_positives": 0
+  }
+}
