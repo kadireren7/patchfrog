@@ -71,21 +71,29 @@ cases, 4 clean cases — manually cross-checked against each case's `case.yaml`
 ground truth (no automated harness report was produced, since the run never
 reached its own summary step):
 
-| Metric (13-case partial sample) | Result |
+| Metric (13-case benchmark partial sample) | Result |
 |---|---|
 | Bug cases attempted | 9 |
-| Target bug found (TP) | 9 / 9 |
-| Missed | 0 |
-| Hallucinated/false findings | 0 |
-| Near-duplicate re-reports of the *same* bug | 3 (`c-double-free` ×2 extra, `c-memory-leak` ×1 extra) |
+| Target bug recall on completed bug cases | 9 / 9 |
+| Missed target bugs | 0 |
+| Hallucinated FP *in this 13-case sample* | 0 |
+| Near-duplicate extra reports (same bug re-reported) | 3 (`c-double-free` ×2 extra, `c-memory-leak` ×1 extra) |
 | One additional, real, different finding (not in ground truth) | 1 (`c-file-handle-leak`: a second genuine issue, `out_size=0` passed to `fgets`) |
 | Clean cases attempted | 4 |
-| Clean cases with zero findings | 2 / 4 (`clean-c-correct-realloc-pattern`, `clean-c-manual-memory-valid`) |
-| Clean cases with a real-but-out-of-scope finding | 2 / 4 (both flagged genuine integer-overflow-in-allocation-size patterns — see §5) |
+| Strict clean zero-finding pass | 2 / 4 (`clean-c-correct-realloc-pattern`, `clean-c-manual-memory-valid`) |
+| Clean cases that produced a real-but-out-of-scope finding | 2 / 4 (both flagged genuine integer-overflow-in-allocation-size patterns — see §5) |
 
-No hallucinated findings were observed in this sample: every finding, including
-the "extra" ones on clean cases, described a real, verifiable property of the
-actual code.
+**This 0-hallucination figure is scoped strictly to these 13 benchmark cases —
+it is not a global claim.** A separate, unsupported repository-level claim
+*was* observed elsewhere in this session's live validation, in the independent
+context-ablation run against a different fixture (§8): the model asserted a
+macro wasn't defined in a header when it in fact was, because that part of the
+header was omitted from its `ContextBundle`. That finding belongs to a
+disjoint population from this benchmark sample and is not double-counted here
+or excluded from the report — see §8 for the full classification. No
+precision/recall/F1 figure is reported as a completed benchmark result: the
+full 74-case harness never finished, so nothing here should be read as
+"the canonical Phase 8 precision/recall number."
 
 ## 5. Clean-case finding review (manual, per case)
 
@@ -134,9 +142,29 @@ identified reason than before the fix:
   by querying `context_items` directly: only the target symbol, its direct
   callee, and one same-file adjacent symbol were included).
 - The model, given a truncated view, correctly reasoned about what it *could*
-  see but produced two demonstrably-plausible-but-not-fully-grounded findings
-  instead (see raw data in `context_ablation.json`) — a consequence of the
-  narrower context, not a reasoning defect.
+  see, but one of its resulting findings makes a claim that is **false against
+  the actual repository**: it stated `retry_policy.h` does not define
+  `RETRY_POLICY_MAX_ATTEMPTS`. Direct repository inspection shows the macro
+  **is** defined there (`#define RETRY_POLICY_MAX_ATTEMPTS 5`). This is
+  classified precisely, not softened:
+
+  - `unsupported_repository_claims_observed`: **1**
+  - `root_cause`: relevant source (the macro definition + its CONTRACT
+    comment) omitted from this candidate's `ContextBundle` — confirmed by
+    querying `context_items` directly, which shows only an
+    include-guard-range slice of the header for this candidate
+  - `model_reasoning_given_supplied_context`: plausible — the model's stated
+    reasoning ("the header as shown contains only the include-guard") is an
+    accurate description of what it was actually handed
+  - `repository_ground_truth`: incorrect
+  - This is a **repository-level unsupported/incorrect claim caused by
+    incomplete context**, not counted in and not double-counted against §4's
+    13-case benchmark sample (a disjoint population — see §4's note).
+
+  A second finding in this same run ("unbounded shift in `computeBackoffMs`
+  overflows int") is real and technically valid about that function in
+  isolation, just not reachable given the actual caller's bound of 20 —
+  `correct_but_out_of_scope`, not an unsupported claim.
 
 **This is a real, previously-undocumented Context Engine limitation** (call-graph
 context depth is 1 hop, not transitive) — reported here as a finding for a
@@ -207,8 +235,13 @@ session:
   (`tests/unit/test_publishing_body.py`). Rerun of the exact reproduction
   after the fix confirms a single-line header.
 
-No other PatchFrog defect was found in any of the ~117 real provider calls
-made this session.
+No other **PatchFrog code defect** was found in any of the ~117 real provider
+calls made this session. This is a distinct claim from "the model's output was
+always correct" — it was not: §8 documents one unsupported/incorrect
+repository-level claim the model made during the context-ablation run, caused
+by an incomplete `ContextBundle` rather than a PatchFrog code bug in the usual
+sense (nothing crashed, mis-rendered, or leaked; the *content* of one finding
+was simply wrong about the fixture it was reviewing).
 
 ## 15. Failure safety (no new live calls needed)
 
@@ -243,20 +276,36 @@ median ~15–20s, worst observed 91.9s (`case11-cross-file`, 12 candidates). See
 
 # `BLOCKED`
 
-Not because anything PatchFrog does is broken — every real call that *did* go
-through succeeded cleanly, found real bugs with zero hallucinations observed,
-and led to one genuine code fix. It's `BLOCKED` strictly because the
-`READY_FOR_EXTERNAL_PRIVATE_BETA` bar requires a completed real webhook E2E and
-a completed benchmark/security-quality pass, and **neither could be attempted
-past the point the Anthropic account ran out of credit balance**. This is an
-external funding/billing constraint on the operator's own account, fully
-outside PatchFrog's code — re-run this exact validation once credits are
-topped up to reach a real readiness verdict.
+**Primary blocking condition:** live validation could not be completed because
+the configured Anthropic account's credit balance was exhausted mid-run. The
+`READY_FOR_EXTERNAL_PRIVATE_BETA` bar requires a completed real webhook E2E
+and a completed benchmark/security-quality pass, and neither could be
+attempted past that point. This is an external funding/billing constraint on
+the operator's own account, fully outside PatchFrog's code — re-run this
+exact validation once credits are topped up to reach a real readiness verdict.
+
+**Additionally identified product limitation (independent of the credit
+issue):** the Context Engine's call-graph expansion is currently 1-hop only
+(direct callees, not transitive). The live extern-case check (§8) demonstrated
+this can cause a real cross-file contract bug to be missed even when the
+underlying symbol-resolution fix (PR #25) is working correctly. **This
+limitation is not fixed in PR #30** — it's a real design tradeoff (context
+size/noise vs. traversal depth) that deserves its own design discussion, not a
+hot-fix bundled into this validation PR.
+
+To be precise about what "every real call succeeded cleanly" does and doesn't
+mean here: every call completed technically (no crash, no malformed response,
+no leaked secret) and no PatchFrog code defect was found beyond the one fixed
+in §14. That is a narrower claim than "every finding was correct" — §8
+documents one real unsupported/incorrect finding, caused by incomplete
+context, not by anything crashing or by hallucination unconnected to the
+supplied input.
 
 ## Remaining limitations / what's needed to finish this validation
 
-1. **Anthropic account credit balance** — the single blocking item. Everything
-   below is otherwise ready to run as soon as credits are available.
+1. **Anthropic account credit balance** — the primary blocking item for
+   *completing* this validation. Everything below (except item 7) is
+   otherwise ready to run as soon as credits are available.
 2. Full 74-case Phase 8 benchmark + security-quality corpus (live).
 3. Critic ON/OFF ablation on a representative subset.
 4. Broader context ablation (this session only spot-checked the extern case).

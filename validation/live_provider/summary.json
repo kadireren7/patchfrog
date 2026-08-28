@@ -53,7 +53,11 @@
     "case": "case11-cross-file",
     "expected_finding_found": false,
     "root_cause": "context bundle for the buggy candidate included only 1 hop of the call graph (direct callee); the contract constant lived 2 hops away (callee-of-callee)",
-    "extern_symbol_resolution_confirmed_working": true
+    "extern_symbol_resolution_confirmed_working": true,
+    "unsupported_repository_claims_observed": 1,
+    "unsupported_claim_root_cause": "relevant source (RETRY_POLICY_MAX_ATTEMPTS macro + CONTRACT comment) omitted from this candidate's ContextBundle",
+    "model_reasoning_given_supplied_context": "plausible",
+    "repository_ground_truth": "incorrect -- the macro IS defined in retry_policy.h; see context_ablation.json for full detail"
   },
   "natural_prs": {
     "attempted": 4,
@@ -82,6 +86,8 @@
     "credit_exhausted_failed_calls": 265
   },
   "readiness_classification": "BLOCKED",
-  "readiness_reason": "Anthropic account credit balance exhausted mid-validation; every real call attempted succeeded cleanly with zero hallucinations and one real bug found+fixed. Blocking is external/billing, not a PatchFrog defect.",
+  "readiness_primary_blocking_condition": "Live validation could not be completed because the configured Anthropic account's credit balance was exhausted mid-run (external/billing constraint, not a PatchFrog defect).",
+  "readiness_additional_identified_limitation": "Context Engine call-graph expansion is currently 1-hop only (direct callees, not transitive); the live extern-case check (case11-cross-file) demonstrated this can cause a real cross-file contract bug to be missed. Not fixed in this PR -- a real design tradeoff (token budget/noise), reported for a future session.",
+  "hallucination_summary": "0 hallucinated findings in the 13-case benchmark partial sample; 1 unsupported/incorrect repository-level claim observed in the separate context-ablation run (root cause: source omitted from ContextBundle, not a reasoning defect). These are not the same population -- see context_ablation.json.",
   "pr_merged": false
 }

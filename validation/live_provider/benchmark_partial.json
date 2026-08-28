@@ -11,6 +11,7 @@
   "clean_pass": 2,
   "clean_out_of_scope_finding": 2,
   "hallucinated_false_positives": 0,
+  "scope_note": "hallucinated_false_positives is scoped to these 13 benchmark cases only. A separate, unsupported repository-level claim was observed in the independent context-ablation run against a different fixture (case11-cross-file) -- see context_ablation.json's unsupported_claim_classification. This benchmark sample and that ablation run are disjoint; do not read this field as a global 'zero hallucinations' claim.",
   "cases": [
     {
       "case": "both-py-bare-except-hides-bug",
