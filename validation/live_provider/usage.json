@@ -1,0 +1,25 @@
+{
+  "note": "Real, observed token usage from every live Anthropic call made during this validation session. No estimated/fabricated figures. No dollar cost computed.",
+  "by_scenario": [
+    {"scenario": "direct_provider_smoke_test", "reviewer_input": 3636, "reviewer_output": 590, "critic_input": 0, "critic_output": 0},
+    {"scenario": "cli_review_smoke_auth_py", "reviewer_input": 7286, "reviewer_output": 1358, "critic_input": 3991, "critic_output": 415},
+    {"scenario": "context_ablation_case11_cross_file", "reviewer_input": 40893, "reviewer_output": 6968, "critic_input": 14237, "critic_output": 3667},
+    {"scenario": "natural_pr_27_review_branding", "reviewer_input": 144147, "reviewer_output": 14621, "critic_input": 22547, "critic_output": 2198},
+    {"scenario": "benchmark_partial_13_cases", "reviewer_input": 152663, "reviewer_output": 25211, "critic_input": 49706, "critic_output": 6005}
+  ],
+  "totals": {
+    "reviewer_input_tokens": 348625,
+    "reviewer_output_tokens": 48748,
+    "critic_input_tokens": 90481,
+    "critic_output_tokens": 12285,
+    "grand_total_tokens": 500139
+  },
+  "provider_calls": {
+    "successful": 117,
+    "failed_credit_exhaustion_zero_token": 265
+  },
+  "derived": {
+    "tokens_per_successful_call_avg": 4275.5,
+    "critic_overhead_pct_of_reviewer_tokens": 25.9
+  }
+}

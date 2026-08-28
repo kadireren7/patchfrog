@@ -70,7 +70,12 @@ def _header_line(finding: PublishableFinding, *, frog_marker: bool) -> str:
     qualifier = _CONFIDENCE_QUALIFIER.get(finding.confidence)
     if qualifier is not None:
         header += f" ({qualifier})"
-    return f"{header} — {sanitize_untrusted_text(finding.title.strip())}"
+    # finding.title is model-generated structured output -- the schema
+    # doesn't forbid an embedded newline/tab, and .split()/" ".join()
+    # (not just .strip()) is what actually guarantees the header stays
+    # exactly one line no matter what whitespace the model emits.
+    single_line_title = " ".join(finding.title.split())
+    return f"{header} — {sanitize_untrusted_text(single_line_title)}"
 
 
 def format_inline_comment_body(finding: PublishableFinding, *, frog_marker: bool = True) -> tuple[str, bool]:
@@ -110,7 +115,7 @@ def format_inline_comment_body(finding: PublishableFinding, *, frog_marker: bool
 
 def _finding_summary_line(finding: PublishableFinding) -> str:
     location = f"`{finding.file_path}:{finding.start_line}`"
-    title = sanitize_untrusted_text(finding.title.strip())
+    title = sanitize_untrusted_text(" ".join(finding.title.split()))
     return f"- **{finding.severity.value.upper()}** {location} — {title}"
 
 

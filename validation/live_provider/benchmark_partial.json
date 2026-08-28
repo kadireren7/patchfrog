@@ -1,0 +1,113 @@
+{
+  "status": "PARTIAL",
+  "label": "LIVE_AI_QUALITY_PARTIAL",
+  "corpus_size": 74,
+  "cases_with_genuine_result": 13,
+  "blocked_reason": "anthropic_account_credit_exhaustion",
+  "bug_cases": 9,
+  "clean_cases": 4,
+  "tp": 9,
+  "missed": 0,
+  "clean_pass": 2,
+  "clean_out_of_scope_finding": 2,
+  "hallucinated_false_positives": 0,
+  "cases": [
+    {
+      "case": "both-py-bare-except-hides-bug",
+      "run_id": "4a4566d1-059e-4094-9810-d8b870fefd97",
+      "type": "bug",
+      "verdict": "TP",
+      "accepted": 1
+    },
+    {
+      "case": "both-py-eval-usage",
+      "run_id": "73807e2c-211f-4b07-9379-ffe82f52d1b1",
+      "type": "bug",
+      "verdict": "TP",
+      "accepted": 1
+    },
+    {
+      "case": "both-py-undefined-name-in-branch",
+      "run_id": "cb9f0726-1a0b-457d-8f60-cc8b066e3dd5",
+      "type": "bug",
+      "verdict": "TP",
+      "accepted": 1
+    },
+    {
+      "case": "c-buffer-overflow-off-by-one",
+      "run_id": "eae0cfa8-99a4-4878-adc8-1e74b9486eb8",
+      "type": "bug",
+      "verdict": "TP",
+      "accepted": 1
+    },
+    {
+      "case": "c-double-free",
+      "run_id": "a5dbeb04-5db1-4541-8a28-26468625f845",
+      "type": "bug",
+      "verdict": "TP",
+      "accepted": 3,
+      "note": "1 TP + 2 near-duplicate re-reports of the same bug"
+    },
+    {
+      "case": "c-file-handle-leak",
+      "run_id": "19cad6ab-812e-44c6-af95-fa613c947e3b",
+      "type": "bug",
+      "verdict": "TP",
+      "accepted": 2,
+      "note": "1 TP + 1 additional real (different) finding: out_size=0 passed to fgets"
+    },
+    {
+      "case": "c-integer-overflow-wraparound",
+      "run_id": "2ed36ce2-5e20-4b49-9de2-d81ccd1960f9",
+      "type": "bug",
+      "verdict": "TP",
+      "accepted": 1
+    },
+    {
+      "case": "c-memory-leak",
+      "run_id": "c3539d1f-24c5-47cf-8674-312019f57260",
+      "type": "bug",
+      "verdict": "TP",
+      "accepted": 2,
+      "note": "1 TP + 1 near-duplicate re-report"
+    },
+    {
+      "case": "c-use-after-free",
+      "run_id": "187c94bc-e781-4bc3-b184-655e313771d5",
+      "type": "bug",
+      "verdict": "TP",
+      "accepted": 1
+    },
+    {
+      "case": "clean-c-correct-bounds-loop",
+      "run_id": "fc5ca3a8-3781-4273-9429-a1c7b9b80a47",
+      "type": "clean",
+      "verdict": "correct_but_out_of_scope_finding",
+      "accepted": 1,
+      "note": "real int-overflow observation, unrelated to the loop-bounds property under test"
+    },
+    {
+      "case": "clean-c-correct-realloc-pattern",
+      "run_id": "f9a6ffcb-09a3-4085-8e63-eb2976c39710",
+      "type": "clean",
+      "verdict": "pass",
+      "accepted": 0
+    },
+    {
+      "case": "clean-c-defensive-null-check",
+      "run_id": "4b769353-9d03-4fb4-afeb-3747e8d43588",
+      "type": "clean",
+      "verdict": "correct_but_out_of_scope_finding",
+      "accepted": 1,
+      "note": "real int-overflow-in-allocation-size observation, unrelated to the null-check property under test"
+    },
+    {
+      "case": "clean-c-manual-memory-valid",
+      "run_id": "a70dc2a2-e07d-4c7e-ad1e-9e3e8fb47df8",
+      "type": "clean",
+      "verdict": "pass",
+      "accepted": 0,
+      "note": "run status=partial (1 candidate hit credit exhaustion mid-case) but 0 findings among what completed"
+    }
+  ]
+}

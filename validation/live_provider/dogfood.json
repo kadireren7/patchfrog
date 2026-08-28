@@ -1,0 +1,23 @@
+{
+  "status": "NOT_RUN",
+  "reason": "Anthropic account credit balance exhausted before a real PR could be opened and reviewed; no webhook-driven review was scheduled, so nothing was published.",
+  "infrastructure_verified": {
+    "cloudflared_tunnel": "started with explicit user approval after the permission classifier correctly blocked the first unapproved attempt; confirmed reachable (/health/live returned 200 through the tunnel)",
+    "github_app_webhook_url_update": "PATCH /app/hook/config via a JWT minted with patchfrog.github.auth.build_app_jwt; confirmed applied (200, url updated)",
+    "webhook_secret_touched": false,
+    "app_permissions_touched": false,
+    "app_events_touched": false,
+    "reverted_after_use": true,
+    "reverted_to_exact_prior_url": true,
+    "tunnel_stopped": true
+  },
+  "next_steps_once_credits_available": [
+    "create branch dogfood/live-anthropic-e2e with one correctness bug + one safe change",
+    "start cloudflared tunnel, repoint webhook URL (same procedure verified here)",
+    "open a real PR from that branch against kadireren7/patchfrog main",
+    "verify opened webhook -> automatic scheduling -> index/static/context/live reviewer/critic -> persistence -> automatic patchfrog[bot] publication with 🐸 branding, no manual CLI invocation",
+    "push a second commit fixing the bug, verify synchronize -> incremental review -> safe resolution, unsafe_carry_forward=0, no duplicate publication",
+    "react to a published comment, sync feedback, verify attribution, remove reaction, sync again",
+    "revert webhook URL and stop tunnel afterward, exactly as done in this session"
+  ]
+}

@@ -162,6 +162,21 @@ def test_summary_body_sanitizes_untrusted_title() -> None:
     assert find_marker(body) == real_id
 
 
+def test_summary_body_finding_line_collapses_embedded_newlines_in_title() -> None:
+    # Same root cause as test_inline_body_header_collapses_embedded_newlines_in_title,
+    # for the summary body's per-finding bullet line.
+    finding = _finding(title="Bad title\nwith an embedded newline")
+    body, _truncated = format_summary_body(
+        publication_id=uuid.uuid4(),
+        counts_by_severity={Severity.MEDIUM: 1},
+        inline_findings=[finding],
+        summary_only_findings=[],
+        omitted_count=0,
+    )
+    bullet_line = next(line for line in body.split("\n") if line.startswith("- **MEDIUM**"))
+    assert bullet_line == "- **MEDIUM** `src/billing.py:14` — Bad title with an embedded newline"
+
+
 # -- Branding & Review Presentation Refinement -------------------------------
 
 
@@ -177,6 +192,24 @@ def test_inline_body_frog_marker_can_be_disabled() -> None:
     body, _truncated = format_inline_comment_body(finding, frog_marker=False)
     assert FROG_MARKER not in body
     assert body.startswith("**")
+
+
+def test_inline_body_header_collapses_embedded_newlines_in_title() -> None:
+    # Found by live Anthropic-model review during validation
+    # (validation/live_provider): finding.title is model-generated
+    # structured output -- the JSON Schema places no constraint against
+    # an embedded newline, and .strip() only trims the ends, not internal
+    # whitespace -- so a title containing "\n" previously broke the
+    # single-line "SEVERITY · category — title" header across multiple
+    # lines in the rendered comment.
+    finding = _finding(title="Bad title\nwith an embedded newline")
+    body, _truncated = format_inline_comment_body(finding)
+    header_line = body.split("\n", 1)[0]
+    assert header_line == (
+        f"{FROG_MARKER} **MEDIUM · correctness** "
+        "(medium confidence, verify before treating as confirmed) "
+        "— Bad title with an embedded newline"
+    )
 
 
 def test_inline_body_shows_severity_and_category_header() -> None:
