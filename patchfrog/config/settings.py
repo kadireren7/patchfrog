@@ -59,6 +59,21 @@ class Settings(BaseSettings):
     # actionable error only when provider="gemini" is actually requested.
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
 
+    # Operator-controlled AI provider/model runtime selection (see
+    # patchfrog.review.runtime_config.ReviewRuntimeConfig). Deliberately
+    # NOT read from .patchfrog.yml -- provider/model/critic model/timeout
+    # are a trust/cost boundary a reviewed repository must never control.
+    # model/critic_model/request_timeout_seconds are optional so
+    # `resolve_review_runtime_config` can distinguish "operator didn't
+    # set this" (None) from an explicit value, and apply the same
+    # provider-coherent effective defaults as before.
+    review_provider: str = Field(default="anthropic", alias="PATCHFROG_REVIEW_PROVIDER")
+    review_model: str | None = Field(default=None, alias="PATCHFROG_REVIEW_MODEL")
+    review_critic_model: str | None = Field(default=None, alias="PATCHFROG_REVIEW_CRITIC_MODEL")
+    review_request_timeout_seconds: float | None = Field(
+        default=None, alias="PATCHFROG_REVIEW_REQUEST_TIMEOUT_SECONDS"
+    )
+
     # -- Public beta operational limits (patchfrog.ops) --
     # All optional with conservative defaults; never required for
     # startup, never a source of secrets. See docs/operations.md.
@@ -112,6 +127,15 @@ class Settings(BaseSettings):
         if normalized not in allowed:
             raise ValueError(f"LOG_LEVEL must be one of {sorted(allowed)}, got {value!r}")
         return normalized
+
+    @field_validator("review_request_timeout_seconds")
+    @classmethod
+    def _validate_review_request_timeout_seconds(cls, value: float | None) -> float | None:
+        if value is not None and value <= 0:
+            raise ValueError(
+                f"PATCHFROG_REVIEW_REQUEST_TIMEOUT_SECONDS must be positive, got {value!r}"
+            )
+        return value
 
     @model_validator(mode="after")
     def _resolve_private_key(self) -> Settings:

@@ -105,12 +105,16 @@ access:
   repositories (the ones PatchFrog reviews) should never contain provider
   API keys either -- PatchFrog never reads secrets out of the code it's
   reviewing.
-- Which provider/model a self-hosted instance uses today is chosen via
-  `.patchfrog.yml`'s `review.provider`/`review.model` (see
-  [`docs/deployment.md`](deployment.md#selecting-gemini)). **Operator-
-  controlled provider selection is a separate, future piece of work, not
-  started in this PR** -- today's mechanism is the plain `ReviewConfig`
-  fields described in `docs/deployment.md`, unchanged by this document.
+- Which provider/model a self-hosted instance uses is chosen via
+  operator/deployment environment variables (`PATCHFROG_REVIEW_PROVIDER`,
+  `PATCHFROG_REVIEW_MODEL`, and related -- see
+  [`docs/deployment.md`](deployment.md#providermodel-selection-operator-controlled)),
+  never via `.patchfrog.yml`. This is a deliberate trust/cost boundary:
+  a reviewed repository cannot choose PatchFrog's provider/model, force
+  a more expensive model, or swap the critic model -- only the operator
+  running the deployment can. `.patchfrog.yml` still controls review
+  *behavior* (candidate/token budgets, confidence thresholds, and so
+  on), just never provider/model identity.
 
 ## PatchFrog Cloud model
 

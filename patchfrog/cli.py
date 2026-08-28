@@ -131,6 +131,7 @@ from patchfrog.review.provider_factory import (
     build_critic_provider,
     build_reviewer_provider,
 )
+from patchfrog.review.runtime_config import ReviewRuntimeConfig, resolve_review_runtime_config
 from patchfrog.review.service import (
     PullRequestReviewService,
     StaleReviewIndexError,
@@ -294,10 +295,16 @@ async def _context_local(
 
 async def _review_dry_run(
     *, repository_path: Path, full_name: str, base_ref: str, incremental: bool
-) -> tuple[ReviewConfig, tuple[ReviewCandidate, ...], IncrementalPlan | None]:
+) -> tuple[ReviewConfig, ReviewRuntimeConfig, tuple[ReviewCandidate, ...], IncrementalPlan | None]:
     """Build review candidates (and, implicitly, the context each would
     use) without ever constructing a provider or making a network call --
     the safe path required before anyone runs a real, billed review.
+
+    Resolving the operator's :class:`ReviewRuntimeConfig` here is safe and
+    credential-free -- it only reads ``Settings`` (with defaults), it
+    never requires ``ANTHROPIC_API_KEY``/``GEMINI_API_KEY`` to be set.
+    Only actually *constructing* a provider (:mod:`patchfrog.review.provider_factory`,
+    never called by this function) requires credentials.
 
     ``incremental`` additionally builds (but never persists) the Phase 7
     incremental plan against a synthetic local "PR" scoped to this
@@ -317,6 +324,7 @@ async def _review_dry_run(
         config = await resolve_repository_review_config(
             local=True, commit_sha=commit_sha, repository_full_name=full_name, root_path=repository_path
         )
+        runtime_config = resolve_review_runtime_config(settings)
         diff_files = diff_against_base(repository_path, base_ref)
 
         async with session_factory() as session:
@@ -334,7 +342,7 @@ async def _review_dry_run(
             )
 
         if not incremental:
-            return config, candidates, None
+            return config, runtime_config, candidates, None
 
         base_sha = run_git(["rev-parse", base_ref], cwd=repository_path).strip()
         pull_request_id = await _upsert_cli_pull_request(
@@ -351,11 +359,11 @@ async def _review_dry_run(
             clone_url=str(repository_path),
             token=None,
             current_candidates=candidates,
-            reviewer_provider=config.provider,
-            reviewer_model=config.model,
+            reviewer_provider=runtime_config.provider,
+            reviewer_model=runtime_config.model,
             incremental_config=incremental_config,
         )
-        return config, candidates, prepared.plan
+        return config, runtime_config, candidates, prepared.plan
     finally:
         await engine.dispose()
 
@@ -386,8 +394,14 @@ async def _review_local(
             raise
         diff_files = diff_against_base(repository_path, base_ref)
 
-        reviewer_provider = build_reviewer_provider(config, settings=settings)
-        critic_provider = build_critic_provider(config, settings=settings)
+        # Provider/model selection is operator/deployment-controlled --
+        # resolved from trusted Settings, never from the repository's
+        # config above (see patchfrog.review.runtime_config).
+        runtime_config = resolve_review_runtime_config(settings)
+        reviewer_provider = build_reviewer_provider(runtime_config, settings=settings)
+        critic_provider = build_critic_provider(
+            runtime_config, settings=settings, critic_enabled=config.critic_enabled
+        )
 
         service = PullRequestReviewService(
             session_factory=session_factory,
@@ -690,7 +704,7 @@ def _run_review(args: argparse.Namespace) -> int:
     full_name = args.full_name or _default_full_name(repository_path)
     try:
         if args.dry_run:
-            config, candidates, plan = asyncio.run(
+            _config, runtime_config, candidates, plan = asyncio.run(
                 _review_dry_run(
                     repository_path=repository_path, full_name=full_name, base_ref=args.base,
                     incremental=args.incremental,
@@ -698,7 +712,8 @@ def _run_review(args: argparse.Namespace) -> int:
             )
             print(
                 f"dry-run for {full_name}: {len(candidates)} candidate(s) would be reviewed "
-                f"(provider={config.provider} model={config.model}, no provider call made)"
+                f"(provider={runtime_config.provider} model={runtime_config.model}, "
+                "no provider call made)"
             )
             for c in candidates:
                 target = c.qualified_name or c.symbol_name or f"{c.file_path}:{c.start_line}"
@@ -1336,10 +1351,14 @@ def _build_provider_factory(
     if args.provider == "fake":
         return oracle_reviewer_provider_factory(cases_root=DEFAULT_CASES_ROOT)
 
-    from patchfrog.review.config import ReviewConfig
+    # `--provider live` uses the operator's actual configured runtime
+    # provider/model (see patchfrog.review.runtime_config) -- the same
+    # provider a real review would use, never a hardcoded default.
     from patchfrog.review.provider_factory import build_reviewer_provider
+    from patchfrog.review.runtime_config import resolve_review_runtime_config
 
-    provider = build_reviewer_provider(ReviewConfig(), settings=settings)
+    runtime_config = resolve_review_runtime_config(settings)
+    provider = build_reviewer_provider(runtime_config, settings=settings)
     return lambda case: provider
 
 

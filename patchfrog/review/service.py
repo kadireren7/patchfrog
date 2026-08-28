@@ -274,12 +274,16 @@ class PullRequestReviewService:
         ``config`` is expected to already be resolved by the caller (see
         :func:`patchfrog.review.config_resolution.resolve_repository_review_config`,
         used by both the CLI and the production Celery task so they can
-        never diverge) -- provider selection depends on ``config.provider``/
-        ``config.model``, so resolution necessarily happens before a
-        provider, and therefore this service, can be constructed. Omitting
-        ``config`` here is only a convenience default of
-        :class:`~patchfrog.review.config.ReviewConfig`'s own defaults, not
-        a substitute for real resolution.
+        never diverge) -- it governs repository-controlled review
+        *behavior* only (candidate/token/concurrency/confidence budgets).
+        The reviewer/critic provider objects passed to this service's
+        constructor are built separately from the operator-controlled
+        :class:`~patchfrog.review.runtime_config.ReviewRuntimeConfig` (see
+        :mod:`patchfrog.review.provider_factory`) -- a repository's
+        ``.patchfrog.yml`` has no influence over which provider/model
+        actually runs. Omitting ``config`` here is only a convenience
+        default of :class:`~patchfrog.review.config.ReviewConfig`'s own
+        defaults, not a substitute for real resolution.
 
         ``candidate_filter``/``incremental_context_fingerprint`` are the
         Phase 7 (:mod:`patchfrog.review_memory`) hooks into this

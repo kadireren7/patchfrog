@@ -26,7 +26,7 @@ async def test_local_and_remote_resolve_identical_config_for_same_commit(tmp_pat
 
     snapshot = materialize_fixture_repo(tmp_path / "repo", "ai_review_python", full_name=f"test/{uuid.uuid4().hex[:8]}")
     (snapshot.root_path / ".patchfrog.yml").write_text(
-        "review:\n  max_candidates: 7\n  min_final_confidence: high\n  model: claude-sonnet-5\n"
+        "review:\n  max_candidates: 7\n  min_final_confidence: high\n"
     )
     commit_sha = commit_all(snapshot.root_path, "add review config")
 
@@ -128,6 +128,34 @@ async def test_credential_shaped_fields_are_ignored_in_both_modes(tmp_path: Path
     assert not hasattr(local_config, "api_key")
     assert not hasattr(remote_config, "api_key")
     assert local_config.max_candidates == remote_config.max_candidates == 3
+
+
+async def test_operator_only_field_in_committed_config_raises_for_both_local_and_remote(
+    tmp_path: Path,
+) -> None:
+    """Milestone C trust boundary: a committed ``.patchfrog.yml`` trying
+    to set ``provider``/``model``/``critic_model``/``request_timeout_seconds``
+    must fail loudly for a real review attempt -- both the CLI's local
+    path and the production Celery task's remote path use
+    ``on_malformed="raise"`` (see :func:`resolve_repository_review_config`'s
+    docstring), so neither can silently let a repository influence
+    provider/model selection."""
+
+    snapshot = materialize_fixture_repo(tmp_path / "repo", "ai_review_python", full_name=f"test/{uuid.uuid4().hex[:8]}")
+    (snapshot.root_path / ".patchfrog.yml").write_text("review:\n  provider: gemini\n  model: gemini-3.6-flash\n")
+    commit_sha = commit_all(snapshot.root_path, "attempt to set operator-only fields")
+
+    with pytest.raises(MalformedReviewConfigError, match="no longer repository-controlled"):
+        await resolve_repository_review_config(
+            local=True, commit_sha=commit_sha, repository_full_name="test/boundary", root_path=snapshot.root_path
+        )
+    with pytest.raises(MalformedReviewConfigError, match="no longer repository-controlled"):
+        await resolve_repository_review_config(
+            local=False,
+            commit_sha=commit_sha,
+            repository_full_name="test/boundary",
+            clone_url=str(snapshot.root_path),
+        )
 
 
 async def test_local_requires_root_path() -> None:
