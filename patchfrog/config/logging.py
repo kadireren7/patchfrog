@@ -32,6 +32,15 @@ _SECRET_KEY_PATTERNS = (
     "token",
 )
 
+#: Key *suffixes* checked in addition to the exact-match set above --
+#: `anthropic_api_key`, `openai_api_key`, etc. all normalize to something
+#: ending in `apikey` but aren't caught by an exact-match lookup against
+#: the bare `apikey` entry. Deliberately a suffix check, not a substring
+#: check: a substring check on the generic `token` entry above would also
+#: redact legitimate, non-secret telemetry fields this codebase actually
+#: logs today (`reviewer_input_tokens`, `critic_output_tokens`, ...).
+_SECRET_KEY_SUFFIXES = ("apikey",)
+
 #: Value *shapes* redacted regardless of which field they showed up
 #: under -- catches a secret accidentally interpolated into a free-text
 #: message or an unexpected field name this processor's key-name list
@@ -39,6 +48,7 @@ _SECRET_KEY_PATTERNS = (
 _PEM_BLOCK = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL)
 _BEARER_TOKEN = re.compile(r"Bearer\s+[A-Za-z0-9._\-]+")
 _GITHUB_TOKEN = re.compile(r"gh[a-z]_[A-Za-z0-9]{20,}")
+_ANTHROPIC_TOKEN = re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")
 
 _REDACTED = "***redacted***"
 
@@ -53,6 +63,7 @@ def _redact_value(value: Any) -> Any:
     value = _PEM_BLOCK.sub(_REDACTED, value)
     value = _BEARER_TOKEN.sub(_REDACTED, value)
     value = _GITHUB_TOKEN.sub(_REDACTED, value)
+    value = _ANTHROPIC_TOKEN.sub(_REDACTED, value)
     return value
 
 
@@ -66,7 +77,8 @@ def redact_secrets(
     catches a future mistake before it reaches stdout, rather than after."""
 
     for key, value in list(event_dict.items()):
-        if _normalize_key(key) in _SECRET_KEY_PATTERNS:
+        normalized = _normalize_key(key)
+        if normalized in _SECRET_KEY_PATTERNS or normalized.endswith(_SECRET_KEY_SUFFIXES):
             event_dict[key] = _REDACTED
         else:
             event_dict[key] = _redact_value(value)

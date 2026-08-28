@@ -28,6 +28,26 @@ core infrastructure). The LLM provider is the only thing ever faked in
 this stack, and only when `ANTHROPIC_API_KEY` is unset -- see
 [Live model support](#live-model-support) below.
 
+## Required runtime secrets
+
+Concise summary (see the full tables below for every other variable):
+
+- `GITHUB_APP_ID`
+- `GITHUB_PRIVATE_KEY_PATH` or `GITHUB_PRIVATE_KEY` (exactly one)
+- `GITHUB_WEBHOOK_SECRET`
+- `ANTHROPIC_API_KEY` (required only to actually run the AI reviewer --
+  see [Provider startup/health behavior](#provider-startuphealth-behavior))
+
+`ANTHROPIC_API_KEY` belongs in your deployment platform's secret/
+environment manager, exactly like the three GitHub credentials above --
+**never** in Git (`.env` is gitignored; `.env.example` only ever holds a
+placeholder), **never** in `.patchfrog.yml` (a repository-controlled
+file `patchfrog.review.config.load_review_config` deliberately never
+reads credentials from), and **never** configured per user repository.
+PatchFrog's hosted service always uses the operator's own provider
+credential for every installation -- there is no per-repository
+bring-your-own-key model, and none is planned.
+
 ## Required environment variables
 
 Startup fails clearly (a `pydantic.ValidationError` at process start,
@@ -53,6 +73,22 @@ PatchFrog's provider architecture is deliberately provider-neutral (see
 selects the provider/model, never the runtime code. Never paste a
 credential into a chat/CLI session to configure this; inject it as a
 real secret through your hosting platform's secret manager.
+
+### Provider startup/health behavior
+
+A missing `ANTHROPIC_API_KEY` deliberately does **not** fail `/health/ready`
+or block the process from starting -- confirmed and preserved as-is
+(spec section 5). `/health/ready` fails closed only for what makes the
+API itself unable to accept a webhook: database reachability, migration
+revision, Redis reachability (see [Health endpoints](#health-endpoints)).
+Static analysis and webhook ingestion stay fully available with no
+provider credential configured at all. Instead, the failure surfaces
+exactly where it's actionable: `patchfrog.review.provider_factory`
+raises `MissingProviderCredentialsError` only when a real AI review is
+actually about to run, which the Celery task classifies as a normal
+`FAILED` review run with a clear, non-retryable reason (see
+`patchfrog.ops.errors.classify_exception`) -- visible via `patchfrog ops
+failed`, never a silent no-op and never a process-wide outage.
 
 ## Optional operational settings
 
@@ -158,3 +194,16 @@ clear `MissingProviderCredentialsError`, never silently falls back to a
 fake provider). This is an explicit, documented stopping point --
 productionization was never blocked on it, and a hosted deployment
 simply needs to inject a real key through its own secret manager.
+
+Everything up to that boundary has been audited end-to-end (chore/
+live-runtime-enablement): `.env`/`.env.example`/`docker-compose.yml`
+wiring, secret redaction (structured logs, `Settings.__repr__`, provider
+exceptions), `/health/ready` behavior, and the webhook-to-scheduling path
+for arbitrary branches -- see [Required runtime
+secrets](#required-runtime-secrets), [Provider startup/health
+behavior](#provider-startuphealth-behavior), and `docs/onboarding.md`'s
+"Branch scope" section. The only remaining gap to actually prove a live
+review end-to-end is a real key in this environment; once one is
+injected, `patchfrog.cli review --provider anthropic` (or a real webhook
+delivery) exercises the exact same code path validated here with
+`FakeLLMProvider`.

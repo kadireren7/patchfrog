@@ -41,3 +41,41 @@ def test_github_token_prefix_is_redacted() -> None:
 def test_non_string_values_pass_through() -> None:
     result = _redact({"count": 5, "enabled": True, "ratio": 1.5})
     assert result == {"count": 5, "enabled": True, "ratio": 1.5}
+
+
+def test_provider_specific_api_key_field_names_are_redacted() -> None:
+    # A bare `api_key` field is already covered by the exact-match test
+    # above; provider-qualified names like `anthropic_api_key` normalize
+    # to something ending in, not equal to, `apikey` -- must still be
+    # caught (see _SECRET_KEY_SUFFIXES).
+    for key in ("anthropic_api_key", "ANTHROPIC_API_KEY", "openai-api-key"):
+        result = _redact({key: "sk-ant-fake0000000000000000000000"})
+        assert result[key] == _REDACTED
+
+
+def test_anthropic_key_shaped_value_is_redacted_under_any_field_name() -> None:
+    result = _redact({"detail": "provider call failed using key sk-ant-fake0000000000000000000000"})
+    assert "sk-ant-fake" not in str(result["detail"])
+    assert _REDACTED in str(result["detail"])
+
+
+def test_token_usage_telemetry_fields_are_not_redacted() -> None:
+    # Regression guard for the opposite failure mode: broadening the
+    # `token` key pattern to a substring match (instead of exact-match)
+    # would also catch these real, non-secret telemetry fields.
+    result = _redact(
+        {
+            "reviewer_input_tokens": 512,
+            "reviewer_output_tokens": 64,
+            "critic_input_tokens": 128,
+            "critic_output_tokens": 32,
+            "total_tokens": 736,
+        }
+    )
+    assert result == {
+        "reviewer_input_tokens": 512,
+        "reviewer_output_tokens": 64,
+        "critic_input_tokens": 128,
+        "critic_output_tokens": 32,
+        "total_tokens": 736,
+    }

@@ -23,6 +23,52 @@ webhook events -- `patchfrog.ops.orchestrator` is what sequences the
 existing index/analyze/review/publish stages together (see
 `docs/operations.md` for the full pipeline).
 
+## Branch scope: any branch, PR-driven only
+
+`patchfrog.github.webhooks.parse_pull_request_event` treats `base_branch`/
+`head_branch` purely as metadata carried through to persistence and
+publication -- neither is ever checked against an allowlist, and nothing
+downstream (`patchfrog.ops.eligibility`, `patchfrog.ops.orchestrator`)
+filters on branch name. The only three `pull_request` webhook actions
+PatchFrog acts on are `opened`, `reopened`, and `synchronize`
+(`PullRequestEventAction`); every other action is ignored.
+
+**Supported** (all reach scheduling once the eligibility checks above pass):
+
+- `feature/foo` -> `main`
+- `feature/foo` -> `develop`
+- `hotfix/bar` -> `release/1.x`
+- a fork branch -> a target repo PR, to the extent GitHub's own API
+  permits it for the App's installation (see the fork-PR note below)
+- a subsequent commit pushed to an already-open PR (`synchronize` ->
+  incremental review, see `docs/evaluation.md`'s Phase 7 notes)
+- a `reopened` PR
+- an unusual-but-valid branch name (e.g. `feat/foo-bar_123`)
+
+**Not supported, by design:**
+
+- a branch pushed with no open pull request -- PatchFrog never
+  subscribes to or processes a generic `push` event. It is a pull-request
+  reviewer, not a push-triggered branch scanner, and adding a push-event
+  path is a deliberate non-goal, not a gap.
+
+**Fork-originated PRs**: the installation token scopes to the *base*
+repository (`event.repository.owner/name`), never the fork, for every
+GitHub API call (`GET /repos/{base}/pulls/{n}`,
+`.../pulls/{n}/files`) and for the git fetch PatchFrog's indexer performs
+(`patchfrog.repository.snapshot`, `clone_url` always constructed from the
+base repository's `full_name`). This works because GitHub always creates
+a `refs/pull/<n>/head` ref in the *base* repository for every PR
+(fork-originated or not), and github.com's git protocol allows fetching
+any commit reachable from any ref in a repository the token can read --
+not only advertised branch refs. If a remote ever doesn't support
+fetching an arbitrary SHA directly, `_fetch_one` falls back to a full
+`fetch origin` and then fails the snapshot cleanly (a visible `GitError`,
+never a silent partial checkout) rather than indexing incomplete/wrong
+content. PatchFrog never clones or accesses the fork repository itself,
+and never executes anything from the checked-out tree either way (see
+`patchfrog.repository.git`).
+
 ## Publication is off by default -- two independent gates
 
 A repository never gets real GitHub comments just by installing the

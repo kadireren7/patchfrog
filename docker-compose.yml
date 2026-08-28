@@ -36,6 +36,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://patchfrog:patchfrog@postgres:5432/patchfrog
       REDIS_URL: redis://redis:6379/0
+      # The API process never instantiates the LLM provider (only
+      # apps/worker/tasks/review_pull_request.py and the CLI do) -- blank
+      # it out here even if `.env` (loaded above via env_file) sets one,
+      # so the secret isn't handed to a process that has no use for it.
+      ANTHROPIC_API_KEY: ""
     # To use GITHUB_PRIVATE_KEY_PATH instead of an inline GITHUB_PRIVATE_KEY,
     # bind-mount the real key file read-only and point the env var at its
     # in-container path (the file's host permissions must allow the
@@ -61,6 +66,12 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://patchfrog:patchfrog@postgres:5432/patchfrog
       REDIS_URL: redis://redis:6379/0
+      # ANTHROPIC_API_KEY itself is deliberately NOT set here: it is
+      # already forwarded from `.env` via `env_file` above (this is the
+      # one process that actually needs it, see provider_factory.py) --
+      # no explicit passthrough is required, and none should be added
+      # that risks echoing the value anywhere.
+      #
       # Required for any of the worker's own review/pipeline/publication
       # metrics to be visible anywhere -- the API's own /metrics can
       # never see them (separate process, separate container; see
