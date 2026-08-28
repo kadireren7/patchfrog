@@ -3,13 +3,13 @@
 </p>
 
 <p align="center">
-  GitHub-native AI code review platform — static analysis, an AI reviewer, and a deterministic context engine, published as real GitHub PR reviews.
+  PatchFrog is a <strong>source-available</strong> AI code review engine for GitHub — static analysis, an AI reviewer, and a deterministic context engine, published as real GitHub PR reviews. Self-host it with your own AI provider credentials, or use PatchFrog Cloud (planned / under development).
 </p>
 
 <p align="center">
   <a href="https://github.com/kadireren7/patchfrog/actions/workflows/ci.yml"><img src="https://github.com/kadireren7/patchfrog/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
   <img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+" />
-  <img src="https://img.shields.io/badge/license-Apache--2.0-informational" alt="License: Apache-2.0" />
+  <img src="https://img.shields.io/badge/license-Elastic--2.0-informational" alt="License: Elastic License 2.0 (source available)" />
 </p>
 
 ## What it does
@@ -78,8 +78,8 @@ pytest
 
 ## Architecture and brand
 
-See [`docs/brand.md`](docs/brand.md) for identity/tone guidelines and asset usage, and the `docs/` directory for phase-by-phase design notes.
+See [`docs/brand.md`](docs/brand.md) for identity/tone guidelines and asset usage, [`docs/product-boundary.md`](docs/product-boundary.md) for the self-hosted vs. PatchFrog Cloud architecture, and the `docs/` directory for phase-by-phase design notes.
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Elastic License 2.0](LICENSE) (source available). See [`docs/licensing.md`](docs/licensing.md) for what changed from this repository's earlier Apache-2.0 releases (not retroactive) and what ELv2 means in practice, and [`TRADEMARK.md`](TRADEMARK.md) for name/logo/bot-identity usage.
