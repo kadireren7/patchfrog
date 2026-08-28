@@ -5,21 +5,24 @@ from pathlib import Path
 import pytest
 
 from patchfrog.analysis.domain import Confidence
+from patchfrog.config.settings import Settings
 from patchfrog.review.config import (
+    CONFIG_SCHEMA_VERSION,
     MalformedReviewConfigError,
     ReviewConfig,
     ReviewModelIdentity,
     load_review_config,
 )
+from patchfrog.review.runtime_config import resolve_review_runtime_config
 
 
 def test_identical_config_has_identical_fingerprint() -> None:
     assert ReviewConfig().fingerprint() == ReviewConfig().fingerprint()
 
 
-def test_different_model_changes_config_fingerprint() -> None:
-    a = ReviewConfig(model="claude-opus-5")
-    b = ReviewConfig(model="claude-sonnet-5")
+def test_different_max_candidates_changes_config_fingerprint() -> None:
+    a = ReviewConfig(max_candidates=10)
+    b = ReviewConfig(max_candidates=20)
     assert a.fingerprint() != b.fingerprint()
 
 
@@ -27,6 +30,24 @@ def test_different_min_confidence_changes_config_fingerprint() -> None:
     a = ReviewConfig(min_final_confidence=Confidence.LOW)
     b = ReviewConfig(min_final_confidence=Confidence.HIGH)
     assert a.fingerprint() != b.fingerprint()
+
+
+def test_critic_enabled_toggle_changes_config_fingerprint() -> None:
+    a = ReviewConfig(critic_enabled=True)
+    b = ReviewConfig(critic_enabled=False)
+    assert a.fingerprint() != b.fingerprint()
+
+
+def test_review_config_has_no_provider_identity_fields() -> None:
+    """Trust boundary (Milestone C): provider/model/critic_model/
+    request_timeout_seconds are operator-controlled runtime concerns
+    (see patchfrog.review.runtime_config), never repository-controlled
+    review behavior. ReviewConfig must not even have these attributes,
+    so nothing downstream can accidentally read a repo-supplied value."""
+
+    config = ReviewConfig()
+    for field in ("provider", "model", "critic_model", "request_timeout_seconds"):
+        assert not hasattr(config, field)
 
 
 def test_identical_model_identity_has_identical_fingerprint() -> None:
@@ -203,90 +224,83 @@ def test_two_different_malformed_contents_have_different_error_raw_text(tmp_path
     assert first.value.raw_text != second.value.raw_text
 
 
-# -- Effective-default normalization (critic_model / request_timeout_seconds) --
+def test_config_schema_version_bumped_for_operator_boundary_change() -> None:
+    assert CONFIG_SCHEMA_VERSION == 3
+
+
+# -- Trust boundary: provider/model/critic_model/request_timeout_seconds
+# are operator-controlled, never repository-controlled (Milestone C).
 #
-# Regression coverage for a real gap found live: a repository selecting
-# `provider: gemini` without also setting `critic_model` previously kept
-# the class-level default `claude-opus-5` (an Anthropic model), so the
-# critic call asked Gemini's API for a model that doesn't exist there.
-# ReviewConfig now fills in provider-coherent effective values for any
-# field the caller genuinely omitted (via pydantic's model_fields_set),
-# never for one explicitly supplied -- even when that explicit value
-# happens to match the old default string.
+# A repository's `.patchfrog.yml` setting any of these fields must have
+# zero effect on which AI provider/model actually runs -- in
+# "defaults"/preview mode the fields are stripped with a warning (never
+# silently accepted via extra="ignore" with no trace); in "raise" mode
+# (the mode both the CLI's real run and the production Celery task use)
+# a repository trying to set one of these fields is a hard, actionable
+# failure, not a quiet no-op.
 
 
-def test_a_gemini_critic_model_omitted_defaults_to_reviewer_model() -> None:
-    config = ReviewConfig(provider="gemini", model="gemini-3.6-flash")
-    assert config.critic_model == "gemini-3.6-flash"
+@pytest.mark.parametrize("field", ["provider", "model", "critic_model", "request_timeout_seconds"])
+def test_operator_only_field_rejected_under_raise_mode(tmp_path: Path, field: str) -> None:
+    (tmp_path / ".patchfrog.yml").write_text(f"review:\n  {field}: some-value\n")
+    with pytest.raises(MalformedReviewConfigError) as excinfo:
+        load_review_config(tmp_path, on_malformed="raise")
+    message = str(excinfo.value)
+    assert field in message
+    assert "operator" in message.lower() or "runtime" in message.lower()
 
 
-def test_b_gemini_explicit_critic_model_is_preserved() -> None:
-    config = ReviewConfig(
-        provider="gemini", model="gemini-3.6-flash", critic_model="some-other-valid-gemini-model"
+def test_operator_only_fields_rejected_together_under_raise_mode(tmp_path: Path) -> None:
+    (tmp_path / ".patchfrog.yml").write_text(
+        "review:\n"
+        "  provider: gemini\n"
+        "  model: gemini-3.6-flash\n"
+        "  critic_model: gemini-3.6-flash\n"
+        "  request_timeout_seconds: 999\n"
     )
-    assert config.critic_model == "some-other-valid-gemini-model"
+    with pytest.raises(MalformedReviewConfigError) as excinfo:
+        load_review_config(tmp_path, on_malformed="raise")
+    message = str(excinfo.value)
+    for field in ("provider", "model", "critic_model", "request_timeout_seconds"):
+        assert field in message
 
 
-def test_c_anthropic_defaults_remain_unchanged() -> None:
-    config = ReviewConfig()
-    assert config.provider == "anthropic"
-    assert config.model == "claude-opus-5"
-    assert config.critic_model == "claude-opus-5"
-    assert config.request_timeout_seconds == 30.0
+@pytest.mark.parametrize("field", ["provider", "model", "critic_model", "request_timeout_seconds"])
+def test_operator_only_field_stripped_under_defaults_mode(tmp_path: Path, field: str) -> None:
+    (tmp_path / ".patchfrog.yml").write_text(f"review:\n  {field}: some-value\n  max_candidates: 9\n")
+    config = load_review_config(tmp_path)
+    assert not hasattr(config, field)
+    assert config.max_candidates == 9
 
 
-def test_d_gemini_timeout_omitted_uses_provider_appropriate_default() -> None:
-    config = ReviewConfig(provider="gemini", model="gemini-3.6-flash")
-    assert config.request_timeout_seconds == 120.0
-
-
-def test_e_gemini_explicit_timeout_is_preserved() -> None:
-    config = ReviewConfig(provider="gemini", model="gemini-3.6-flash", request_timeout_seconds=45.0)
-    assert config.request_timeout_seconds == 45.0
-
-
-def test_f_anthropic_timeout_omitted_preserves_existing_default() -> None:
-    config = ReviewConfig(provider="anthropic", model="claude-opus-5")
-    assert config.request_timeout_seconds == 30.0
-
-
-def test_explicit_critic_model_equal_to_old_default_string_is_still_respected() -> None:
-    """The distinction must be "was this field present in the input", not
-    "does its value differ from the class default" -- a user may
-    deliberately choose the exact string that also happens to be the
-    default."""
-
-    config = ReviewConfig.model_validate(
-        {"provider": "gemini", "model": "gemini-3.6-flash", "critic_model": "claude-opus-5"}
-    )
-    assert config.critic_model == "claude-opus-5"
-
-
-def test_minimal_gemini_yaml_config_normalizes_correctly(tmp_path: Path) -> None:
-    """The documented minimal Gemini config (provider + model only) must
-    be sufficient -- no separately-remembered critic_model or timeout."""
+def test_malicious_repo_config_cannot_influence_operator_runtime_selection(tmp_path: Path) -> None:
+    """The concrete end-to-end trust-boundary guarantee: no matter what a
+    repository's `.patchfrog.yml` claims, the operator's actual runtime
+    provider/model/critic/timeout -- resolved independently from trusted
+    Settings -- is completely unaffected."""
 
     (tmp_path / ".patchfrog.yml").write_text(
-        "review:\n  provider: gemini\n  model: gemini-3.6-flash\n"
+        "review:\n"
+        "  provider: gemini\n"
+        "  model: some-much-more-expensive-model\n"
+        "  critic_model: some-other-critic-model\n"
+        "  request_timeout_seconds: 1\n"
     )
-    config = load_review_config(tmp_path)
-    assert config.critic_model == "gemini-3.6-flash"
-    assert config.request_timeout_seconds == 120.0
+    # Preview/default resolution (as a dry-run would use) -- fields
+    # stripped, not applied.
+    repo_config = load_review_config(tmp_path)
+    assert not hasattr(repo_config, "provider")
+    assert not hasattr(repo_config, "model")
 
-
-def test_config_schema_version_bumped_for_effective_default_semantics_change() -> None:
-    from patchfrog.review.config import CONFIG_SCHEMA_VERSION
-
-    assert CONFIG_SCHEMA_VERSION == 2
-
-
-def test_omitted_vs_explicit_gemini_critic_model_produce_different_fingerprints() -> None:
-    """A config that silently defaulted critic_model to claude-opus-5
-    (the pre-fix behavior) must never be treated as canonically identical
-    to one that correctly defaults it to the reviewer model."""
-
-    omitted = ReviewConfig(provider="gemini", model="gemini-3.6-flash")
-    explicit_old_default = ReviewConfig(
-        provider="gemini", model="gemini-3.6-flash", critic_model="claude-opus-5"
+    operator_settings = Settings(
+        DATABASE_URL="sqlite+aiosqlite:///:memory:",
+        REDIS_URL="redis://localhost:6379/0",
+        GITHUB_APP_ID="1",
+        GITHUB_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----",
+        GITHUB_WEBHOOK_SECRET="x",
     )
-    assert omitted.fingerprint() != explicit_old_default.fingerprint()
+    runtime_config = resolve_review_runtime_config(operator_settings)
+    assert runtime_config.provider == "anthropic"
+    assert runtime_config.model == "claude-opus-5"
+    assert runtime_config.critic_model == "claude-opus-5"
+    assert runtime_config.request_timeout_seconds == 30.0

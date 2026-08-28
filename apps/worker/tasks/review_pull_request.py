@@ -6,7 +6,11 @@ ingestion; see :mod:`patchfrog.services.pull_request_ingestion`), resolves
 the repository's *exact-commit* ``.patchfrog.yml`` review config (see
 :mod:`patchfrog.review.config_resolution` -- the same function the CLI
 uses, so the two paths can never diverge in what config a given
-repository/commit resolves to), and delegates all real work to
+repository/commit resolves to), independently resolves the operator-
+controlled AI provider runtime config (see
+:mod:`patchfrog.review.runtime_config` -- again the same function the
+CLI uses, so provider/model selection can never diverge between the two
+either), and delegates all real work to
 :class:`patchfrog.review.service.PullRequestReviewService`. Phase 2's
 repository index for the exact commit under review must already exist
 (see :class:`patchfrog.review.service.StaleReviewIndexError`) -- the same
@@ -47,6 +51,7 @@ from patchfrog.review.config import MalformedReviewConfigError
 from patchfrog.review.config_resolution import resolve_repository_review_config
 from patchfrog.review.domain import ReviewRunStatus, ReviewRunSummary
 from patchfrog.review.provider_factory import build_critic_provider, build_reviewer_provider
+from patchfrog.review.runtime_config import resolve_review_runtime_config
 from patchfrog.review.service import (
     PullRequestReviewService,
     persist_malformed_config_failure,
@@ -155,8 +160,15 @@ async def _review_pull_request(
             )
             raise
 
-        reviewer_provider = build_reviewer_provider(review_config, settings=settings)
-        critic_provider = build_critic_provider(review_config, settings=settings)
+        # Provider/model selection is operator/deployment-controlled --
+        # resolved from trusted Settings, never from the repository's
+        # review_config above (a PR changing .patchfrog.yml must never
+        # change which provider/model actually runs).
+        runtime_config = resolve_review_runtime_config(settings)
+        reviewer_provider = build_reviewer_provider(runtime_config, settings=settings)
+        critic_provider = build_critic_provider(
+            runtime_config, settings=settings, critic_enabled=review_config.critic_enabled
+        )
 
         incremental_config = await resolve_repository_incremental_config(
             local=False,

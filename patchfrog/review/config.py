@@ -2,16 +2,24 @@
 
 Mirrors :mod:`patchfrog.analysis.config` + :mod:`patchfrog.analysis.toolchain`'s
 split for the static analysis engine: :class:`ReviewConfig` captures
-configuration *intent* (loaded from an optional ``review:`` section in
-``.patchfrog.yml``, same untrusted-repo-content safety rules as analysis
-config), while :class:`ReviewModelIdentity` captures the *effective*
-toolchain a run actually used -- provider, model, prompt version, and
-review-policy version. Both fingerprints together form a review run's
-persisted identity (see :mod:`patchfrog.persistence.repositories.review_run`),
-so a model swap, a provider swap, a prompt-template edit, or a
-validation/critic/confidence-aggregation rule change each invalidate
-reuse of a prior canonical run -- exactly the toolchain-awareness bug
-fixed for the static analysis engine in Phase 3.
+repository-controlled review *behavior* intent (loaded from an optional
+``review:`` section in ``.patchfrog.yml``, same untrusted-repo-content
+safety rules as analysis config), while :class:`ReviewModelIdentity`
+captures the *effective* toolchain a run actually used -- provider,
+model, prompt version, and review-policy version. Both fingerprints
+together form a review run's persisted identity (see
+:mod:`patchfrog.persistence.repositories.review_run`), so a model swap, a
+provider swap, a prompt-template edit, or a validation/critic/confidence-
+aggregation rule change each invalidate reuse of a prior canonical run --
+exactly the toolchain-awareness bug fixed for the static analysis engine
+in Phase 3.
+
+Provider/model selection is deliberately **not** part of this module's
+repository-controlled config -- see :mod:`patchfrog.review.runtime_config`
+for the operator/deployment-controlled ``ReviewRuntimeConfig`` that owns
+provider, model, critic model, and request timeout. A repository cannot
+choose or influence PatchFrog's AI provider; see
+:func:`load_review_config`'s explicit rejection of those fields below.
 """
 
 from __future__ import annotations
@@ -23,7 +31,7 @@ from typing import Literal
 
 import structlog
 import yaml
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict
 
 from patchfrog.analysis.domain import Confidence
 
@@ -33,12 +41,14 @@ _CONFIG_FILENAMES = (".patchfrog.yml", ".patchfrog.yaml")
 
 #: Bumped whenever ReviewConfig's own shape/semantics change -- including a
 #: change to how an *omitted* field's effective value is computed, even
-#: when the field list itself doesn't change (see the critic_model/
-#: request_timeout_seconds effective-default fix below: two YAML configs
-#: that look identical to an older PatchFrog version can now produce a
-#: materially different effective config, so any prior canonical run must
-#: never be silently reused across this version boundary).
-CONFIG_SCHEMA_VERSION = 2
+#: when the field list itself doesn't change. Bumped to 3 because
+#: `provider`/`model`/`critic_model`/`request_timeout_seconds` were removed
+#: from repository-controlled config entirely (see module docstring) --
+#: a `.patchfrog.yml` that used to set those fields now behaves
+#: differently (they're rejected/ignored, never applied), so any prior
+#: canonical run must never be silently reused across this version
+#: boundary.
+CONFIG_SCHEMA_VERSION = 3
 
 #: Bumped whenever patchfrog.review.prompt's system/user prompt templates
 #: change materially enough that a prior run's proposals can no longer be
@@ -54,9 +64,6 @@ REVIEW_POLICY_VERSION = 2
 #: changes materially.
 REVIEW_ENGINE_VERSION = 1
 
-DEFAULT_PROVIDER = "anthropic"
-DEFAULT_MODEL = "claude-opus-5"
-DEFAULT_CRITIC_MODEL = "claude-opus-5"
 DEFAULT_MAX_CANDIDATES = 40
 DEFAULT_MAX_INPUT_TOKENS_PER_CANDIDATE = 12_000
 DEFAULT_MAX_OUTPUT_TOKENS_PER_CANDIDATE = 4_096
@@ -64,42 +71,32 @@ DEFAULT_MAX_TOTAL_INPUT_TOKENS = 400_000
 DEFAULT_MAX_CONCURRENT_REQUESTS = 4
 DEFAULT_MIN_FINAL_CONFIDENCE: Confidence = Confidence.MEDIUM
 DEFAULT_MAX_RETRIES = 2
-DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
 
-#: Per-provider effective timeout used only when a repository's
-#: `.patchfrog.yml` omits `request_timeout_seconds` entirely. Anthropic
-#: keeps the 30s general default (unchanged). Gemini's default
-#: ("AUTOMATIC") thinking behavior is slower and far more variable --
-#: live validation observed real 504 DEADLINE_EXCEEDED failures at 30s
-#: and single calls up to ~144s -- so an explicit, more generous default
-#: applies automatically for `provider: gemini` alone, without requiring
-#: every Gemini-configured repository to remember to raise it by hand.
-#: An explicitly-configured `request_timeout_seconds` always wins over
-#: this table, for either provider (see `_apply_effective_defaults`).
-_DEFAULT_TIMEOUT_SECONDS_BY_PROVIDER: dict[str, float] = {
-    "gemini": 120.0,
-}
+#: Fields that select PatchFrog's AI provider/model/timeout -- an
+#: operator/deployment concern, never a repository one (see
+#: :mod:`patchfrog.review.runtime_config`). A repository's
+#: `.patchfrog.yml` setting any of these has zero effect on which
+#: provider/model actually runs; :func:`load_review_config` explicitly
+#: detects and rejects them rather than silently dropping them via
+#: `extra="ignore"`.
+OPERATOR_ONLY_REVIEW_FIELDS = ("provider", "model", "critic_model", "request_timeout_seconds")
 
 
 class ReviewConfig(BaseModel):
-    """Effective AI-review configuration for one review run.
+    """Repository-controlled AI-review *behavior* configuration for one
+    review run.
 
-    ``provider``/``model`` here are configuration *intent* -- what the
-    caller asked for. The provider adapter's own
-    :class:`~patchfrog.review.provider.ProviderIdentity`, captured at call
-    time, is the *effective* identity folded into
-    :class:`ReviewModelIdentity` below; the two are expected to agree, but
-    only the latter participates in run-identity fingerprinting, so a
-    provider/adapter behavior change is still caught even if the
-    configured strings didn't change.
+    Deliberately does **not** include provider/model/critic model/request
+    timeout -- those are operator/deployment-controlled runtime concerns
+    (see :class:`patchfrog.review.runtime_config.ReviewRuntimeConfig`).
+    Only behavior a repository may legitimately tune lives here: how many
+    candidates to review, token/concurrency budgets, confidence
+    thresholds, and retry counts.
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    provider: str = DEFAULT_PROVIDER
-    model: str = DEFAULT_MODEL
     critic_enabled: bool = True
-    critic_model: str = DEFAULT_CRITIC_MODEL
     max_candidates: int = DEFAULT_MAX_CANDIDATES
     max_input_tokens_per_candidate: int = DEFAULT_MAX_INPUT_TOKENS_PER_CANDIDATE
     max_output_tokens_per_candidate: int = DEFAULT_MAX_OUTPUT_TOKENS_PER_CANDIDATE
@@ -107,57 +104,18 @@ class ReviewConfig(BaseModel):
     max_concurrent_requests: int = DEFAULT_MAX_CONCURRENT_REQUESTS
     min_final_confidence: Confidence = DEFAULT_MIN_FINAL_CONFIDENCE
     max_retries: int = DEFAULT_MAX_RETRIES
-    request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS
-
-    @model_validator(mode="after")
-    def _apply_effective_defaults(self) -> ReviewConfig:
-        """Fill in provider-coherent effective values for fields the
-        caller *omitted* -- never for a field explicitly supplied, even
-        when the explicit value happens to equal a class default.
-
-        ``model_fields_set`` (populated by pydantic during construction,
-        both for direct keyword construction and for
-        ``model_validate(review_section)`` in :func:`load_review_config`)
-        is exactly "which field names were actually present in the
-        input" -- the only reliable way to distinguish "omitted" from
-        "explicitly set to the default-looking value", which comparing
-        against ``DEFAULT_CRITIC_MODEL``/``DEFAULT_REQUEST_TIMEOUT_SECONDS``
-        cannot do (a user may deliberately choose exactly that string).
-
-        Mutating the fields here (rather than exposing a separate
-        "effective config" object) means every reader --
-        :meth:`fingerprint`, :mod:`patchfrog.review.provider_factory`,
-        anything else that reads ``config.critic_model`` /
-        ``config.request_timeout_seconds`` -- automatically sees the
-        correct effective value with no change needed at the read site;
-        config normalization is the single boundary, not scattered
-        provider-aware branches.
-        """
-
-        if "critic_model" not in self.model_fields_set:
-            # Same reviewer/critic model unless the caller says otherwise
-            # -- provider-neutral (an Anthropic config with an explicit
-            # non-default `model` and no `critic_model` gets the same
-            # coherent behavior, not just Gemini).
-            self.critic_model = self.model
-        if "request_timeout_seconds" not in self.model_fields_set:
-            self.request_timeout_seconds = _DEFAULT_TIMEOUT_SECONDS_BY_PROVIDER.get(
-                self.provider, DEFAULT_REQUEST_TIMEOUT_SECONDS
-            )
-        return self
 
     def fingerprint(self) -> str:
-        """A deterministic fingerprint of *configuration intent* --
-        deliberately excludes anything about what actually ran (see
+        """A deterministic fingerprint of repository-controlled review
+        *behavior* intent -- deliberately excludes provider/model/timeout
+        (operator-controlled, see :mod:`patchfrog.review.runtime_config`)
+        and anything about what actually ran (see
         :class:`ReviewModelIdentity`, folded in separately by the
         caller)."""
 
         payload = {
             "schema_version": CONFIG_SCHEMA_VERSION,
-            "provider": self.provider,
-            "model": self.model,
             "critic_enabled": self.critic_enabled,
-            "critic_model": self.critic_model,
             "max_candidates": self.max_candidates,
             "max_input_tokens_per_candidate": self.max_input_tokens_per_candidate,
             "max_output_tokens_per_candidate": self.max_output_tokens_per_candidate,
@@ -286,6 +244,40 @@ def load_review_config(repository_root: Path, *, on_malformed: OnMalformed = "de
                 logger.warning(
                     "review_config_credential_field_ignored", path=str(path), field=forbidden
                 )
+
+        operator_only_present = sorted(
+            field for field in OPERATOR_ONLY_REVIEW_FIELDS if field in review_section
+        )
+        if operator_only_present:
+            # Provider/model/critic model/timeout are operator/deployment
+            # concerns, never repository ones (see module docstring) -- a
+            # repository cannot use `.patchfrog.yml` to influence which
+            # AI provider or model actually runs. A real review attempt
+            # (`on_malformed="raise"`) must fail loudly and actionably
+            # rather than silently proceeding as if the fields had never
+            # been set; a preview/default resolution just warns and
+            # strips them, since `ReviewConfig` doesn't have these fields
+            # at all any more and `extra="ignore"` would otherwise drop
+            # them with no visible trace.
+            logger.warning(
+                "review_config_operator_only_fields_ignored",
+                path=str(path),
+                fields=operator_only_present,
+            )
+            if on_malformed == "raise":
+                raise MalformedReviewConfigError(
+                    f"{path}: review.{', review.'.join(operator_only_present)} "
+                    "are no longer repository-controlled. Remove these fields from "
+                    "'.patchfrog.yml' and configure the PatchFrog runtime/operator "
+                    "instead (see docs/deployment.md).",
+                    path=path,
+                    raw_text=raw_text,
+                )
+            review_section = {
+                key: value
+                for key, value in review_section.items()
+                if key not in OPERATOR_ONLY_REVIEW_FIELDS
+            }
 
         try:
             return ReviewConfig.model_validate(review_section)

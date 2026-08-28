@@ -36,8 +36,8 @@ Concise summary (see the full tables below for every other variable):
 - `GITHUB_PRIVATE_KEY_PATH` or `GITHUB_PRIVATE_KEY` (exactly one)
 - `GITHUB_WEBHOOK_SECRET`
 - `ANTHROPIC_API_KEY` and/or `GEMINI_API_KEY` (only the key for the
-  provider actually selected via `.patchfrog.yml`'s `review.provider` is
-  required to run the AI reviewer -- default `provider: anthropic`; see
+  provider actually selected via `PATCHFROG_REVIEW_PROVIDER` is required
+  to run the AI reviewer -- default `anthropic`; see
   [Provider startup/health behavior](#provider-startuphealth-behavior))
 
 Every credential above belongs in your deployment platform's secret/
@@ -49,6 +49,17 @@ credentials from), and **never** configured per user repository.
 PatchFrog's hosted service always uses the operator's own provider
 credential for every installation -- there is no per-repository
 bring-your-own-key model, and none is planned.
+
+**Provider/model selection is an operator deployment concern, not a
+repository one.** Which AI provider/model actually runs is chosen via
+the `PATCHFROG_REVIEW_*` environment variables below (see
+[Provider/model selection](#providermodel-selection-operator-controlled)) --
+`.patchfrog.yml` cannot select a provider or a raw model name at all; a
+committed `review.provider`/`review.model`/`review.critic_model`/
+`review.request_timeout_seconds` field is rejected with a clear,
+actionable error (see `patchfrog.review.config.load_review_config`).
+`.patchfrog.yml` still controls review *behavior* -- how many candidates
+to review, token/concurrency budgets, confidence thresholds, retries.
 
 ## Required environment variables
 
@@ -68,8 +79,8 @@ missing:
 
 | Variable | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude API key. Required when `.patchfrog.yml`'s `review.provider` is `anthropic` (the default). Unset -> `patchfrog.review.provider_factory` raises a clear, actionable error only when a real review is actually requested; nothing silently degrades to a fake provider in production. |
-| `GEMINI_API_KEY` | Google Gemini API key. Required only when `.patchfrog.yml`'s `review.provider` is set to `gemini`. Same fail-closed behavior as `ANTHROPIC_API_KEY` -- unset raises `MissingProviderCredentialsError` only when a Gemini review actually runs. |
+| `ANTHROPIC_API_KEY` | Claude API key. Required when `PATCHFROG_REVIEW_PROVIDER` is `anthropic` (the default). Unset -> `patchfrog.review.provider_factory` raises a clear, actionable error only when a real review is actually requested; nothing silently degrades to a fake provider in production. |
+| `GEMINI_API_KEY` | Google Gemini API key. Required only when `PATCHFROG_REVIEW_PROVIDER` is set to `gemini`. Same fail-closed behavior as `ANTHROPIC_API_KEY` -- unset raises `MissingProviderCredentialsError` only when a Gemini review actually runs. |
 
 PatchFrog's provider architecture is deliberately provider-neutral (see
 `patchfrog.review.provider.LLMProvider`) -- deployment configuration
@@ -77,57 +88,84 @@ selects the provider/model, never the runtime code. Never paste a
 credential into a chat/CLI session to configure this; inject it as a
 real secret through your hosting platform's secret manager.
 
-### Selecting Gemini
+### Provider/model selection (operator-controlled)
 
-Anthropic (`claude-opus-5`) remains the production default -- selecting
-Gemini is an explicit, per-repository opt-in via `.patchfrog.yml`:
+Provider/model selection is a trust/cost boundary, not a review-behavior
+setting: a reviewed repository must never be able to choose (or
+silently influence) which AI provider/model actually runs, since that
+would let an untrusted `.patchfrog.yml` route traffic to a different
+provider, force a more expensive model, or swap the critic model --
+entirely at the operator's expense. It is controlled exclusively by
+these environment variables (see
+`patchfrog.review.runtime_config.ReviewRuntimeConfig`), resolved
+identically by both the CLI and the production Celery worker (one
+shared resolver -- they can never diverge):
 
-```yaml
-review:
-  provider: gemini
-  model: gemini-3.6-flash
+| Variable | Purpose | Default |
+|---|---|---|
+| `PATCHFROG_REVIEW_PROVIDER` | `anthropic` or `gemini` | `anthropic` |
+| `PATCHFROG_REVIEW_MODEL` | Reviewer model name | `claude-opus-5` |
+| `PATCHFROG_REVIEW_CRITIC_MODEL` | Critic model name (optional) | same as `PATCHFROG_REVIEW_MODEL` |
+| `PATCHFROG_REVIEW_REQUEST_TIMEOUT_SECONDS` | Per-request timeout, seconds (optional) | `30` (`120` if provider is `gemini`) |
+
+Anthropic (`claude-opus-5`) remains the default -- selecting Gemini is an
+explicit operator opt-in:
+
+```
+PATCHFROG_REVIEW_PROVIDER=gemini
+PATCHFROG_REVIEW_MODEL=gemini-3.6-flash
+GEMINI_API_KEY=<secret>
 ```
 
-That's the whole file -- `.patchfrog.yml` must explicitly request
-`provider: gemini` (setting only `GEMINI_API_KEY` in the environment does
-**not** switch the default, so existing Anthropic-configured deployments
-are never silently affected by adding a Gemini key). `gemini-2.5-flash`
-is retired -- Gemini's own API returns `404 NOT_FOUND` for it as of this
-writing and recommends `gemini-3.6-flash`, confirmed live; use the model
-name above, not the older one.
+That's the whole configuration -- setting only `GEMINI_API_KEY` does
+**not** switch the default provider, so existing Anthropic-configured
+deployments are never silently affected by adding a Gemini key.
+`gemini-2.5-flash` is retired -- Gemini's own API returns `404 NOT_FOUND`
+for it as of this writing and recommends `gemini-3.6-flash`, confirmed
+live; use the model name above, not the older one.
 
-`ReviewConfig` fills in provider-coherent effective values for any field
-this minimal config omits, deterministically (see
-`patchfrog.review.config.ReviewConfig._apply_effective_defaults`, and
-`CONFIG_SCHEMA_VERSION`, bumped when this normalization was introduced so
-a run canonicalized under the old broken default is never silently
-reused):
+`resolve_review_runtime_config` fills in provider-coherent effective
+values for any of these variables an operator omits, deterministically
+(see `patchfrog.review.runtime_config`, and `CONFIG_SCHEMA_VERSION` in
+`patchfrog.review.config`, bumped when provider/model selection moved
+out of repository-controlled config entirely, so a run canonicalized
+under the old repo-controlled semantics is never silently reused):
 
-- **`critic_model`**, if omitted, defaults to the same value as `model`
-  -- so Gemini's critic call also asks Gemini, never a stale
-  `claude-opus-5` (an earlier version of this provider had exactly that
-  bug: omitting `critic_model` silently kept the Anthropic default
-  regardless of `provider`, so every critic call 404'd against Gemini's
-  API -- found live, see `validation/gemini_provider/quality_sample.json`
-  -- and is now fixed at the config-normalization boundary, not
-  documented around).
-- **`request_timeout_seconds`**, if omitted, defaults to 120s specifically
-  for `provider: gemini` (30s elsewhere, unchanged). Gemini 3.6-flash's
-  default thinking behavior is slower and far more variable than
-  Anthropic's (single live calls up to ~144s were observed, median
-  around 50s) -- 30s produced spurious `504 DEADLINE_EXCEEDED` failures
-  in testing.
+- **`PATCHFROG_REVIEW_CRITIC_MODEL`**, if unset, defaults to the same
+  value as `PATCHFROG_REVIEW_MODEL` -- so Gemini's critic call also asks
+  Gemini, never a stale `claude-opus-5` (an earlier version of this
+  provider had exactly that bug: an omitted critic model silently kept
+  the Anthropic default regardless of provider, so every critic call
+  404'd against Gemini's API -- found live, see
+  `validation/gemini_provider/quality_sample.json` -- and is now fixed
+  at the runtime-config resolution boundary, not documented around).
+- **`PATCHFROG_REVIEW_REQUEST_TIMEOUT_SECONDS`**, if unset, defaults to
+  120s specifically when `PATCHFROG_REVIEW_PROVIDER=gemini` (30s
+  otherwise, unchanged). Gemini 3.6-flash's default thinking behavior is
+  slower and far more variable than Anthropic's (single live calls up to
+  ~144s were observed, median around 50s) -- 30s produced spurious `504
+  DEADLINE_EXCEEDED` failures in testing.
 
-Both remain overridable -- an explicit value in `.patchfrog.yml` always
-wins over the provider-appropriate default:
+Both remain overridable -- an explicit value always wins over the
+provider-appropriate default:
 
-```yaml
-review:
-  provider: gemini
-  model: gemini-3.6-flash
-  critic_model: some-other-valid-gemini-model  # optional override
-  request_timeout_seconds: 60                  # optional override
 ```
+PATCHFROG_REVIEW_PROVIDER=gemini
+PATCHFROG_REVIEW_MODEL=gemini-3.6-flash
+PATCHFROG_REVIEW_CRITIC_MODEL=some-other-valid-gemini-model  # optional override
+PATCHFROG_REVIEW_REQUEST_TIMEOUT_SECONDS=60                  # optional override
+GEMINI_API_KEY=<secret>
+```
+
+A repository's `.patchfrog.yml` cannot set any of these fields --
+`review.provider`, `review.model`, `review.critic_model`, or
+`review.request_timeout_seconds` in a committed config are rejected
+with a clear, actionable error (never silently ignored, never applied)
+by `patchfrog.review.config.load_review_config`:
+
+> `review.provider are no longer repository-controlled. Remove these
+> fields from '.patchfrog.yml' and configure the PatchFrog
+> runtime/operator instead (see docs/deployment.md).`
 
 **Data policy**: Google's Gemini API free tier states that prompts and
 responses may be used to improve Google's products (see Google's current

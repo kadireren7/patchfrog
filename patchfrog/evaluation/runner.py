@@ -362,10 +362,13 @@ class EvaluationRunner:
                 provider = reviewer_provider or _default_reviewer_provider()
                 effective_critic = critic_provider if critic_enabled else None
                 diff_files = build_whole_repo_diff(repo_root, sorted(fixture_info.valid_file_paths))
+                # ReviewConfig carries repository-controlled review
+                # *behavior* only -- provider/model identity is not one
+                # of its fields (see patchfrog.review.runtime_config). It
+                # flows separately, from the explicitly-injected `provider`/
+                # `effective_critic` objects below, into ReviewModelIdentity.
                 review_config = ReviewConfig(
-                    provider=provider.identity.provider, model=provider.identity.model,
                     critic_enabled=effective_critic is not None,
-                    critic_model=(effective_critic.identity.model if effective_critic else ReviewConfig().critic_model),
                     max_concurrent_requests=1,
                 )
                 service = PullRequestReviewService(

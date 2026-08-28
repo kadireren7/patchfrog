@@ -7,13 +7,17 @@ a given repository/commit resolves to -- the exact bug this module fixes
 ("the production task always used ``ReviewConfig()`` defaults and ignored
 the repository's committed config").
 
-Provider selection (:mod:`patchfrog.review.provider_factory`) depends on
-the resolved config's ``provider``/``model`` fields, so resolution must
-happen *before* a provider -- and therefore before a
-:class:`~patchfrog.review.service.PullRequestReviewService`, which
-requires an already-constructed provider -- can exist. That is why this
-lives as a standalone function callable by both entry points, rather than
-inside the service itself.
+This resolves only repository-controlled review *behavior*
+(:class:`~patchfrog.review.config.ReviewConfig`) -- max candidates, token
+budgets, confidence thresholds, and so on. Provider/model selection is a
+separate, operator-controlled concern resolved independently by
+:func:`patchfrog.review.runtime_config.resolve_review_runtime_config`
+from trusted `Settings`, never from this function's result; a caller
+needs both before constructing a
+:class:`~patchfrog.review.service.PullRequestReviewService` (which
+requires an already-constructed provider). That is why this lives as a
+standalone function callable by both entry points, rather than inside
+the service itself.
 """
 
 from __future__ import annotations

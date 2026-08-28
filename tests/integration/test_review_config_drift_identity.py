@@ -135,18 +135,24 @@ async def test_min_confidence_change_alters_behavior_and_identity(
 async def test_model_change_alters_effective_identity_and_is_never_reused(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """A ``.patchfrog.yml``-resolved ``model`` change must invalidate
-    canonical-run reuse on both halves of a run's identity: the
-    *configuration intent* fingerprint (``config.model``, part of
-    ``ReviewConfig.fingerprint()``) and the *effective* toolchain
-    fingerprint (``ReviewModelIdentity.fingerprint()``, built from the
-    provider actually selected for that model -- see
-    :func:`patchfrog.review.provider_factory.build_reviewer_provider`,
-    which routes on ``config.model``). Two distinct
-    ``FakeLLMProvider(model_id=...)`` instances stand in for what
-    ``build_reviewer_provider`` would actually construct for two
-    different configured models, so this exercises real production
-    routing behavior, not just a fingerprint computed in isolation."""
+    """Milestone C (operator-controlled provider runtime): the AI
+    provider/model is no longer part of repository-controlled
+    ``ReviewConfig`` at all -- it's resolved from
+    :class:`patchfrog.review.runtime_config.ReviewRuntimeConfig`
+    (operator/deployment-controlled) and flows into
+    :class:`~patchfrog.review.config.ReviewModelIdentity` purely from the
+    constructed provider objects' own ``.identity`` (see
+    :mod:`patchfrog.review.service`). This test uses the *same*
+    (identical) repository ``ReviewConfig`` for both runs and swaps only
+    the operator-controlled model via two distinct
+    ``FakeLLMProvider(model_id=...)`` instances -- standing in for what
+    :func:`patchfrog.review.provider_factory.build_reviewer_provider`
+    would actually construct for two different
+    ``PATCHFROG_REVIEW_MODEL`` values -- to prove canonical-run reuse
+    safety now lives entirely on the effective/runtime identity side:
+    identical repo config, different operator model -> identical
+    ``config_fingerprint``, distinct ``model_fingerprint``, never
+    reused."""
 
     repository_id, commit_sha, root_path = await _setup(session_factory, full_name="test/drift-model")
     diff_files = [_diff_marking_lines("src/billing.py", [14])]
@@ -164,13 +170,13 @@ async def test_model_change_alters_effective_identity_and_is_never_reused(
         session_factory=session_factory, reviewer_provider=sonnet_provider
     ).review_local(
         repository_id=repository_id, root_path=root_path, repository_full_name="test/drift-model",
-        commit_sha=commit_sha, diff_files=diff_files, config=ReviewConfig(model="claude-sonnet-5"),
+        commit_sha=commit_sha, diff_files=diff_files, config=ReviewConfig(),
     )
     opus_run = await PullRequestReviewService(
         session_factory=session_factory, reviewer_provider=opus_provider
     ).review_local(
         repository_id=repository_id, root_path=root_path, repository_full_name="test/drift-model",
-        commit_sha=commit_sha, diff_files=diff_files, config=ReviewConfig(model="claude-opus-5"),
+        commit_sha=commit_sha, diff_files=diff_files, config=ReviewConfig(),
     )
 
     assert sonnet_run.reused_existing_run is False
@@ -182,6 +188,6 @@ async def test_model_change_alters_effective_identity_and_is_never_reused(
         ).scalars().all()
     succeeded = [r for r in runs if r.status == ReviewRunStatus.SUCCEEDED]
     assert len(succeeded) == 2
-    assert len({r.config_fingerprint for r in succeeded}) == 2
-    assert len({r.model_fingerprint for r in succeeded}) == 2
+    assert len({r.config_fingerprint for r in succeeded}) == 1  # identical repo behavior config
+    assert len({r.model_fingerprint for r in succeeded}) == 2  # distinct operator-controlled model
     assert {r.reviewer_model for r in succeeded} == {"claude-sonnet-5", "claude-opus-5"}

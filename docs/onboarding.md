@@ -124,18 +124,20 @@ That's the entire file most repositories will ever need. See
 every other (all optional) knob.
 
 Selecting a non-default AI provider (Anthropic remains the default) is
-the same mechanism -- no separate config system:
+**not** a `.patchfrog.yml` concern -- it's an operator/deployment
+decision, made via environment variables the operator running this
+PatchFrog instance controls, not by any repository being reviewed:
 
-```yaml
-review:
-  provider: gemini
-  model: gemini-3.6-flash
+```
+PATCHFROG_REVIEW_PROVIDER=gemini
+PATCHFROG_REVIEW_MODEL=gemini-3.6-flash
 ```
 
-See [Selecting Gemini](deployment.md#selecting-gemini) for the required
-`GEMINI_API_KEY`, the provider-appropriate effective defaults this
-normalizes to (`critic_model`, `request_timeout_seconds`) and how to
-override them, and the current free-tier data-policy/quota caveats.
+See [Provider/model selection](deployment.md#providermodel-selection-operator-controlled)
+for the required `GEMINI_API_KEY`, the provider-appropriate effective
+defaults this normalizes to (`PATCHFROG_REVIEW_CRITIC_MODEL`,
+`PATCHFROG_REVIEW_REQUEST_TIMEOUT_SECONDS`) and how to override them,
+and the current free-tier data-policy/quota caveats.
 
 ## Repository/installation lifecycle
 
