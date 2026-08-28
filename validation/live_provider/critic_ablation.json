@@ -1,0 +1,5 @@
+{
+  "status": "NOT_RUN",
+  "reason": "Anthropic account credit balance was exhausted before a dedicated critic-ON-vs-OFF subset run could be started.",
+  "note": "Critic-ON data exists incidentally throughout this validation (production default is critic_enabled=True, confirmed used in every completed scenario -- see usage.json's non-zero critic_input/critic_output columns), but no critic-OFF comparison run was made, so no delta can be honestly reported."
+}

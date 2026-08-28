@@ -1,0 +1,38 @@
+{
+  "status": "PARTIAL",
+  "note": "Full context-ablation sweep (normal/target-only/no-extra-context across a representative subset) was not reached before credit exhaustion. This file records the one spot-check that was completed: the extern cross-file case the Context Engine fix (PR #25) was built to address.",
+  "case": "validation/private_beta/cases/case11-cross-file",
+  "expected_finding": {
+    "category": "correctness",
+    "file": "conn_manager.c",
+    "symbol": "connectOnStartup",
+    "issue": "calls reconnectWithBackoff(tryConnectToRedis, 20), exceeding retry_policy.h's documented RETRY_POLICY_MAX_ATTEMPTS=5 contract"
+  },
+  "expected_finding_found_live": false,
+  "actual_findings": [
+    {"title": "`computeBackoffMs` is called with no declaration in scope", "category": "correctness", "file": "reconnect_loop.c", "verdict": "context bundle for this candidate genuinely lacked retry_policy.h's declaration"},
+    {"title": "Comment references RETRY_POLICY_MAX_ATTEMPTS, which is not defined in retry_policy.h", "category": "maintainability", "file": "retry_policy.c", "verdict": "the macro/comment IS defined in the full file; the context bundle for this specific candidate was a partial slice that omitted it -- verified via direct query of context_items"},
+    {"title": "Unbounded shift in computeBackoffMs overflows int and becomes undefined for larger attempt numbers", "category": "undefined_behavior", "file": "retry_policy.c", "verdict": "real, technically valid concern about computeBackoffMs in isolation; not reachable given the actual caller's max_total_attempts=20, so correct_but_out_of_scope relative to the actual bug"},
+    {"title": "`usleep` may be passed a value >= 1000000, which is unspecified", "category": "portability", "file": "reconnect_loop.c", "verdict": "real, minor, correct_but_low_value"}
+  ],
+  "root_cause_analysis": {
+    "connectOnStartup_candidate_context_bundle_items": [
+      {"file": "conn_manager.c", "symbol": "connectOnStartup", "reason": "the target symbol itself"},
+      {"file": "reconnect_loop.c", "symbol": "reconnectWithBackoff", "reason": "direct callee of the target symbol"},
+      {"file": "conn_manager.c", "symbol": "tryConnectToRedis", "reason": "adjacent symbol in the same file"}
+    ],
+    "missing_from_bundle": ["retry_policy.h (RETRY_POLICY_MAX_ATTEMPTS, the CONTRACT comment)", "computeBackoffMs's definition in retry_policy.c"],
+    "conclusion": "The extern symbol-resolution fix (PR #25) is confirmed working -- reconnectWithBackoff's real cross-file definition IS correctly resolved and included. The remaining gap is that the Context Engine's call-graph traversal is 1-hop only (direct callees), not transitive -- the contract constant lives 2 hops away (callee-of-callee). This is a distinct, newly-identified limitation, not a regression of the PR #25 fix.",
+    "recommendation": "Worth a design discussion (token-budget/noise tradeoffs of deeper traversal) in a future session -- not attempted as a hot-fix here, per the bug-fix policy's smallest-fix discipline."
+  },
+  "unsupported_claim_classification": {
+    "unsupported_repository_claims_observed": 1,
+    "claim": "\"Comment references RETRY_POLICY_MAX_ATTEMPTS, which is not defined in retry_policy.h\" (retry_policy.c candidate)",
+    "repository_ground_truth": "incorrect -- RETRY_POLICY_MAX_ATTEMPTS IS defined in retry_policy.h (`#define RETRY_POLICY_MAX_ATTEMPTS 5`), confirmed by direct repository inspection",
+    "root_cause": "relevant source (the macro definition and CONTRACT comment) was omitted from this candidate's ContextBundle -- confirmed by querying context_items directly for this bundle_id, which shows only an include-guard-range slice of retry_policy.h",
+    "model_reasoning_given_supplied_context": "plausible -- the model's stated reasoning (\"the header as shown contains only the include-guard\") is an accurate description of what it was actually given; the claim is false only against the real file, not against its own (incomplete) input",
+    "note": "This is a repository-level unsupported/incorrect claim, not a reasoning defect. It is distinct from and not counted in the 13-case benchmark partial sample's hallucination count (benchmark_partial.json) -- this finding comes from a separate context-ablation run against a different fixture."
+  },
+  "tokens": {"reviewer_input": 40893, "reviewer_output": 6968, "critic_input": 14237, "critic_output": 3667},
+  "latency_ms": 91924.4
+}

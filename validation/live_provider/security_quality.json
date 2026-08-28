@@ -1,0 +1,5 @@
+{
+  "status": "NOT_RUN",
+  "reason": "Anthropic account credit balance was exhausted (during the concurrent full-corpus benchmark run) before the dedicated security-quality corpus (15 secq-* cases) could be started with the live provider.",
+  "note": "Not fabricated, not inferred from the FakeLLM-oracle security_quality baseline (evaluation_baselines/security_quality_after_compat59.json) -- that baseline remains a pipeline_correctness result, never relabeled as live AI quality."
+}

@@ -1,0 +1,93 @@
+{
+  "branch": "chore/live-anthropic-validation",
+  "baseline_main_sha": "4fa4a777c297e997cfc067b4365e4b3cb6198688",
+  "provider_identity": {
+    "provider": "anthropic",
+    "reviewer_model": "claude-opus-5",
+    "critic_model": "claude-opus-5",
+    "critic_enabled_default": true,
+    "review_prompt_version": 2,
+    "review_policy_version": 2,
+    "review_engine_version": 1,
+    "review_config_schema_version": 1,
+    "context_engine_version": 1,
+    "parser_version": 2,
+    "comment_format_version": 3,
+    "publication_config_schema_version": 2,
+    "publication_engine_version": 1
+  },
+  "direct_smoke_test": {
+    "status": "PASSED",
+    "auth_succeeded": true,
+    "request_succeeded": true,
+    "structured_output_parsed": true,
+    "input_tokens": 3636,
+    "output_tokens": 590,
+    "latency_ms": 11728.25
+  },
+  "live_redaction_check": {
+    "status": "PASSED",
+    "api_key_found_in_logs": false,
+    "authorization_header_found_in_logs": false,
+    "token_usage_fields_visible": true
+  },
+  "benchmark": {
+    "label": "LIVE_AI_QUALITY_PARTIAL",
+    "corpus_size": 74,
+    "cases_attempted_with_genuine_result": 13,
+    "blocked_reason": "anthropic_account_credit_exhaustion",
+    "bug_cases": 9,
+    "clean_cases": 4,
+    "tp": 9,
+    "missed": 0,
+    "false_positive_hallucinated": 0,
+    "near_duplicate_extra_reports": 3,
+    "additional_real_but_unexpected_findings": 1,
+    "clean_cases_zero_findings": 2,
+    "clean_cases_out_of_scope_finding": 2
+  },
+  "security_quality": {"status": "NOT_RUN", "reason": "credit_exhaustion_before_start"},
+  "critic_ablation": {"status": "NOT_RUN", "reason": "credit_exhaustion_before_start"},
+  "context_ablation": {
+    "status": "PARTIAL",
+    "case": "case11-cross-file",
+    "expected_finding_found": false,
+    "root_cause": "context bundle for the buggy candidate included only 1 hop of the call graph (direct callee); the contract constant lived 2 hops away (callee-of-callee)",
+    "extern_symbol_resolution_confirmed_working": true,
+    "unsupported_repository_claims_observed": 1,
+    "unsupported_claim_root_cause": "relevant source (RETRY_POLICY_MAX_ATTEMPTS macro + CONTRACT comment) omitted from this candidate's ContextBundle",
+    "model_reasoning_given_supplied_context": "plausible",
+    "repository_ground_truth": "incorrect -- the macro IS defined in retry_policy.h; see context_ablation.json for full detail"
+  },
+  "natural_prs": {
+    "attempted": 4,
+    "complete": 1,
+    "blocked_by_credit_exhaustion": 3,
+    "complete_pr": "#27 (review branding)",
+    "findings": 4,
+    "useful_correct": 1,
+    "correct_but_low_value": 3,
+    "false_positive": 0,
+    "unsupported": 0
+  },
+  "webhook_e2e": {"status": "NOT_RUN", "reason": "credit_exhaustion_before_scheduling", "infrastructure_verified": true},
+  "synchronize_e2e": {"status": "NOT_RUN", "reason": "blocked_by_webhook_e2e_not_run"},
+  "feedback_loop_live": {"status": "NOT_RUN", "reason": "blocked_by_webhook_e2e_not_run"},
+  "bugs_found": 1,
+  "bugs_fixed": 1,
+  "bug_fixed_detail": "patchfrog/publishing/body.py: finding.title newline not collapsed before single-line header interpolation (both inline comment header and summary bullet line)",
+  "token_usage_total": {
+    "reviewer_input_tokens": 348625,
+    "reviewer_output_tokens": 48748,
+    "critic_input_tokens": 90481,
+    "critic_output_tokens": 12285,
+    "grand_total": 500139,
+    "successful_provider_calls": 117,
+    "credit_exhausted_failed_calls": 265
+  },
+  "readiness_classification": "BLOCKED",
+  "readiness_primary_blocking_condition": "Live validation could not be completed because the configured Anthropic account's credit balance was exhausted mid-run (external/billing constraint, not a PatchFrog defect).",
+  "readiness_additional_identified_limitation": "Context Engine call-graph expansion is currently 1-hop only (direct callees, not transitive); the live extern-case check (case11-cross-file) demonstrated this can cause a real cross-file contract bug to be missed. Not fixed in this PR -- a real design tradeoff (token budget/noise), reported for a future session.",
+  "hallucination_summary": "0 hallucinated findings in the 13-case benchmark partial sample; 1 unsupported/incorrect repository-level claim observed in the separate context-ablation run (root cause: source omitted from ContextBundle, not a reasoning defect). These are not the same population -- see context_ablation.json.",
+  "pr_merged": false
+}

@@ -1,0 +1,22 @@
+{
+  "note": "Real, observed per-review-run wall-clock latency (index+analyze+context+reviewer+critic+persist), from CLI/log output this session. Not an SLA claim.",
+  "observations_ms": [
+    19916.4,
+    91924.4,
+    78545.3,
+    675.9,
+    1026.9,
+    1005.2
+  ],
+  "labels": [
+    "cli_review_smoke_auth_py",
+    "context_ablation_case11_cross_file (12 candidates)",
+    "natural_pr_27_review_branding (partial, 26 reviewed before credit exhaustion)",
+    "benchmark_case_credit_exhaustion_instant_fail",
+    "benchmark_case_credit_exhaustion_instant_fail",
+    "benchmark_case_credit_exhaustion_instant_fail"
+  ],
+  "median_completed_review_ms_approx": 20000,
+  "worst_observed_ms": 91924.4,
+  "worst_observed_case": "case11-cross-file (12 candidates, 3 reviewer calls + critic per accepted candidate)"
+}
