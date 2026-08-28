@@ -1,0 +1,37 @@
+{
+  "note": "Real, observed token usage from every live Gemini call made during this provider integration's validation. thinking_tokens is captured only for the standalone provider-boundary smoke tests below -- the review-service path (quality_sample runs) does not persist ProviderUsage.thinking_tokens to the DB (no schema/migration change was made for this; see patchfrog/review/domain.py's TokenUsage, deliberately unchanged).",
+  "db_verified_review_service_runs": {
+    "review_runs": 4,
+    "reviewer_input_tokens": 20438,
+    "reviewer_output_tokens": 990,
+    "critic_input_tokens": 0,
+    "critic_output_tokens": 0,
+    "critic_note": "0 because every critic call failed (misconfigured critic_model, see quality_sample.json) -- not because Gemini's critic path is untested at the code level (see test_review_gemini_provider_contract.py)"
+  },
+  "standalone_provider_boundary_smoke_tests": {
+    "count": 5,
+    "reviewer_input_tokens": 5738,
+    "reviewer_output_tokens": 678,
+    "thinking_tokens": 6619
+  },
+  "combined_totals": {
+    "reviewer_input_tokens": 26176,
+    "reviewer_output_tokens": 1668,
+    "known_thinking_tokens": 6619
+  },
+  "provider_calls": {
+    "successful_generateContent_calls": 18,
+    "failed_calls": 8,
+    "failed_breakdown": {
+      "critic_404_misconfigured_model": 2,
+      "quota_exhausted_429": 4,
+      "deadline_exceeded_504_before_thinking_budget_fix": 2
+    }
+  },
+  "quota": {
+    "tier": "free",
+    "limit_observed": "GenerateRequestsPerDayPerProjectPerModel-FreeTier, quotaValue=20, model=gemini-3.6-flash",
+    "status": "exhausted for the remainder of the day this validation was run",
+    "source": "live 429 RESOURCE_EXHAUSTED error body, not inferred"
+  }
+}

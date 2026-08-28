@@ -35,15 +35,17 @@ Concise summary (see the full tables below for every other variable):
 - `GITHUB_APP_ID`
 - `GITHUB_PRIVATE_KEY_PATH` or `GITHUB_PRIVATE_KEY` (exactly one)
 - `GITHUB_WEBHOOK_SECRET`
-- `ANTHROPIC_API_KEY` (required only to actually run the AI reviewer --
-  see [Provider startup/health behavior](#provider-startuphealth-behavior))
+- `ANTHROPIC_API_KEY` and/or `GEMINI_API_KEY` (only the key for the
+  provider actually selected via `.patchfrog.yml`'s `review.provider` is
+  required to run the AI reviewer -- default `provider: anthropic`; see
+  [Provider startup/health behavior](#provider-startuphealth-behavior))
 
-`ANTHROPIC_API_KEY` belongs in your deployment platform's secret/
-environment manager, exactly like the three GitHub credentials above --
-**never** in Git (`.env` is gitignored; `.env.example` only ever holds a
-placeholder), **never** in `.patchfrog.yml` (a repository-controlled
-file `patchfrog.review.config.load_review_config` deliberately never
-reads credentials from), and **never** configured per user repository.
+Every credential above belongs in your deployment platform's secret/
+environment manager -- **never** in Git (`.env` is gitignored;
+`.env.example` only ever holds a placeholder), **never** in
+`.patchfrog.yml` (a repository-controlled file
+`patchfrog.review.config.load_review_config` deliberately never reads
+credentials from), and **never** configured per user repository.
 PatchFrog's hosted service always uses the operator's own provider
 credential for every installation -- there is no per-repository
 bring-your-own-key model, and none is planned.
@@ -66,7 +68,8 @@ missing:
 
 | Variable | Purpose |
 |---|---|
-| `ANTHROPIC_API_KEY` | Claude API key. Unset -> `patchfrog.review.provider_factory` raises a clear, actionable error only when a real review is actually requested; nothing silently degrades to a fake provider in production. |
+| `ANTHROPIC_API_KEY` | Claude API key. Required when `.patchfrog.yml`'s `review.provider` is `anthropic` (the default). Unset -> `patchfrog.review.provider_factory` raises a clear, actionable error only when a real review is actually requested; nothing silently degrades to a fake provider in production. |
+| `GEMINI_API_KEY` | Google Gemini API key. Required only when `.patchfrog.yml`'s `review.provider` is set to `gemini`. Same fail-closed behavior as `ANTHROPIC_API_KEY` -- unset raises `MissingProviderCredentialsError` only when a Gemini review actually runs. |
 
 PatchFrog's provider architecture is deliberately provider-neutral (see
 `patchfrog.review.provider.LLMProvider`) -- deployment configuration
@@ -74,9 +77,71 @@ selects the provider/model, never the runtime code. Never paste a
 credential into a chat/CLI session to configure this; inject it as a
 real secret through your hosting platform's secret manager.
 
+### Selecting Gemini
+
+Anthropic (`claude-opus-5`) remains the production default -- selecting
+Gemini is an explicit, per-repository opt-in via `.patchfrog.yml`:
+
+```yaml
+review:
+  provider: gemini
+  model: gemini-3.6-flash
+```
+
+That's the whole file -- `.patchfrog.yml` must explicitly request
+`provider: gemini` (setting only `GEMINI_API_KEY` in the environment does
+**not** switch the default, so existing Anthropic-configured deployments
+are never silently affected by adding a Gemini key). `gemini-2.5-flash`
+is retired -- Gemini's own API returns `404 NOT_FOUND` for it as of this
+writing and recommends `gemini-3.6-flash`, confirmed live; use the model
+name above, not the older one.
+
+`ReviewConfig` fills in provider-coherent effective values for any field
+this minimal config omits, deterministically (see
+`patchfrog.review.config.ReviewConfig._apply_effective_defaults`, and
+`CONFIG_SCHEMA_VERSION`, bumped when this normalization was introduced so
+a run canonicalized under the old broken default is never silently
+reused):
+
+- **`critic_model`**, if omitted, defaults to the same value as `model`
+  -- so Gemini's critic call also asks Gemini, never a stale
+  `claude-opus-5` (an earlier version of this provider had exactly that
+  bug: omitting `critic_model` silently kept the Anthropic default
+  regardless of `provider`, so every critic call 404'd against Gemini's
+  API -- found live, see `validation/gemini_provider/quality_sample.json`
+  -- and is now fixed at the config-normalization boundary, not
+  documented around).
+- **`request_timeout_seconds`**, if omitted, defaults to 120s specifically
+  for `provider: gemini` (30s elsewhere, unchanged). Gemini 3.6-flash's
+  default thinking behavior is slower and far more variable than
+  Anthropic's (single live calls up to ~144s were observed, median
+  around 50s) -- 30s produced spurious `504 DEADLINE_EXCEEDED` failures
+  in testing.
+
+Both remain overridable -- an explicit value in `.patchfrog.yml` always
+wins over the provider-appropriate default:
+
+```yaml
+review:
+  provider: gemini
+  model: gemini-3.6-flash
+  critic_model: some-other-valid-gemini-model  # optional override
+  request_timeout_seconds: 60                  # optional override
+```
+
+**Data policy**: Google's Gemini API free tier states that prompts and
+responses may be used to improve Google's products (see Google's current
+Gemini API terms). Until an explicit paid-tier/data-processing decision
+is made, treat free-tier Gemini as suitable only for public repositories,
+PatchFrog's own dogfood, and benchmark fixtures -- **not** for
+confidential or private customer code. The free tier's own daily request
+quota is also small (20 requests/day per project/model was observed live
+for `gemini-3.6-flash`) -- expect it to exhaust quickly even for modest
+dogfood use; a paid tier is required for any real usage volume.
+
 ### Provider startup/health behavior
 
-A missing `ANTHROPIC_API_KEY` deliberately does **not** fail `/health/ready`
+A missing `ANTHROPIC_API_KEY`/`GEMINI_API_KEY` deliberately does **not** fail `/health/ready`
 or block the process from starting -- confirmed and preserved as-is
 (spec section 5). `/health/ready` fails closed only for what makes the
 API itself unable to accept a webhook: database reachability, migration
@@ -187,23 +252,19 @@ layer.
 
 ## Live model support
 
-`ANTHROPIC_API_KEY` has never been available in this project's own
-development environment, so live-provider behavior is validated only up
-to the credential boundary (`patchfrog.review.provider_factory` raises a
-clear `MissingProviderCredentialsError`, never silently falls back to a
-fake provider). This is an explicit, documented stopping point --
-productionization was never blocked on it, and a hosted deployment
-simply needs to inject a real key through its own secret manager.
+Before real credentials were ever available in this project's development
+environment, live-provider behavior was validated only up to the
+credential boundary (`patchfrog.review.provider_factory` raises a clear
+`MissingProviderCredentialsError`, never silently falls back to a fake
+provider) -- `.env`/`.env.example`/`docker-compose.yml` wiring, secret
+redaction, `/health/ready` behavior, and the webhook-to-scheduling path
+were all audited end-to-end regardless (`chore/live-runtime-enablement`).
 
-Everything up to that boundary has been audited end-to-end (chore/
-live-runtime-enablement): `.env`/`.env.example`/`docker-compose.yml`
-wiring, secret redaction (structured logs, `Settings.__repr__`, provider
-exceptions), `/health/ready` behavior, and the webhook-to-scheduling path
-for arbitrary branches -- see [Required runtime
-secrets](#required-runtime-secrets), [Provider startup/health
-behavior](#provider-startuphealth-behavior), and `docs/onboarding.md`'s
-"Branch scope" section. The only remaining gap to actually prove a live
-review end-to-end is a real key in this environment; once one is
-injected, `patchfrog.cli review --provider anthropic` (or a real webhook
-delivery) exercises the exact same code path validated here with
-`FakeLLMProvider`.
+Both providers have since been live-validated with real credentials
+(`chore/live-anthropic-validation`, `feat/gemini-provider`): real auth,
+real structured-output/schema validation, real token usage, and real
+findings against both a direct provider smoke test and a small quality
+sample -- see `validation/live_provider/` (Anthropic) and
+`validation/gemini_provider/` (Gemini) for full results, including
+limitations found and left open (see each summary's own "Remaining
+limitations" section).

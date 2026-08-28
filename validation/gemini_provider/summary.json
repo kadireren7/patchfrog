@@ -1,0 +1,92 @@
+{
+  "branch": "feat/gemini-provider",
+  "baseline_main_sha": "f31f445b78fd0b21fc502ed6e478e8662a14bf4c",
+  "model_choice": {
+    "requested": "gemini-2.5-flash",
+    "verified_dead_live": true,
+    "error": "404 NOT_FOUND: model retired, Google recommends gemini-3.6-flash",
+    "configured_default": "gemini-3.6-flash",
+    "user_approved_substitution": true
+  },
+  "provider_identity": {
+    "provider": "gemini",
+    "model": "gemini-3.6-flash",
+    "sdk": "google-genai",
+    "sdk_version": "2.20.0"
+  },
+  "bug_found_and_fixed": {
+    "description": "Gemini thinking tokens share the max_output_tokens budget with the visible answer; unbounded (AUTOMATIC) thinking intermittently truncated the JSON response",
+    "reproduced_live": true,
+    "fix": "explicit thinking_budget cap reserving _MIN_RESERVED_OUTPUT_TOKENS=1024 for the answer, never disabling thinking",
+    "verified_fixed": true,
+    "regression_tests_added": 2
+  },
+  "provider_factory": {
+    "anthropic_routes_correctly": true,
+    "gemini_routes_correctly": true,
+    "unknown_provider_raises_clear_error": true,
+    "missing_gemini_key_raises_clear_error": true,
+    "never_falls_back_silently": true
+  },
+  "docker_wiring": {
+    "worker_receives_key": true,
+    "api_key_blanked": true,
+    "no_key_in_image_or_history": true
+  },
+  "redaction": {
+    "key_name_redaction_already_covered_no_code_change": true,
+    "value_shape_pattern_added": false,
+    "value_shape_reason_skipped": "real key doesn't match the stable AIzaSy... convention; no safe pattern to add",
+    "token_usage_fields_remain_visible": true
+  },
+  "direct_live_smoke_test": {"status": "PASSED_AFTER_MODEL_SWAP_AND_FIX"},
+  "live_quality_sample": {
+    "status": "PARTIAL",
+    "label": "LIVE_GEMINI_QUALITY_SAMPLE",
+    "planned_cases": 9,
+    "cases_with_reviewer_coverage": 4,
+    "blocked_reason": "gemini_free_tier_daily_quota_exhausted",
+    "target_bugs_found": 2,
+    "target_bugs_missed": 0,
+    "clean_pass_cases": 2,
+    "unsupported_repository_claims": 0,
+    "hallucinated_false_positives": 0,
+    "critic_data_available": false,
+    "critic_unavailable_reason": "test .patchfrog.yml omitted critic_model, defaulted to claude-opus-5, every critic call 404'd and gracefully degraded",
+    "historical_note": "This result is preserved as-is, not rewritten. The config gap it exposed is fixed as of config_semantics_fix below (same PR), but this specific sample genuinely ran before that fix existed and remains reviewer-only data."
+  },
+  "config_semantics_fix": {
+    "root_cause": "ReviewConfig.critic_model defaulted to the class-level Anthropic default (claude-opus-5) regardless of provider, so an omitted critic_model produced an impossible provider/model pair for the critic call",
+    "fix_location": "config normalization boundary (ReviewConfig.model_validator, not provider_factory)",
+    "mechanism": "pydantic model_fields_set distinguishes omitted vs explicitly-set fields; omitted critic_model defaults to the same value as model; omitted request_timeout_seconds defaults to 120.0 for provider=gemini (30.0 unchanged elsewhere)",
+    "config_schema_version_before": 1,
+    "config_schema_version_after": 2,
+    "minimal_gemini_config_after_fix": {"provider": "gemini", "model": "gemini-3.6-flash"},
+    "regression_tests_added": 11,
+    "live_call_made_to_verify": false,
+    "live_call_reason_skipped": "unit/integration tests sufficient; free-tier daily quota from live_quality_sample had not reset"
+  },
+  "extern_case11": {"status": "NOT_RUN", "reason": "quota exhausted before reaching it"},
+  "natural_pr_dry_run": {"status": "NOT_RUN", "reason": "quota exhausted before reaching it"},
+  "failure_safety": {
+    "unit_tests": 24,
+    "covers": ["401", "403", "429_quota_or_rate_limit", "400", "404_unknown_model", "5xx", "timeout", "connection_error", "safety_refusal_finish_reasons"],
+    "429_classification_validated_against_real_response": true
+  },
+  "tests_added": {
+    "gemini_provider_contract": 24,
+    "provider_factory": 7,
+    "redaction": 1,
+    "settings_repr": 1,
+    "total": 33
+  },
+  "secret_incident": {
+    "occurred": true,
+    "description": "a docker compose config check printed the real resolved GEMINI_API_KEY value into tool output (session transcript only, never committed)",
+    "disclosed_immediately": true,
+    "user_action": "rotated the key before work continued"
+  },
+  "readiness_classification": "READY_FOR_INTERNAL_DOGFOOD_ONLY",
+  "readiness_reason": "Provider implementation is correct and live-verified (auth, structured output, error classification, one real bug found and fixed). Not ready for a broader quality verdict: quality sample is 4/9 planned cases with no critic-path data, and the free tier's 20-request daily quota makes it unsuitable beyond light internal dogfood without a paid tier.",
+  "pr_merged": false
+}

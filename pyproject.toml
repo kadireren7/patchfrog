@@ -34,6 +34,9 @@ dependencies = [
     # AI Reviewer (Phase 5): official Anthropic SDK for the Claude API
     # provider adapter (patchfrog.review.providers.anthropic_provider).
     "anthropic>=0.68,<1.0",
+    # AI Reviewer, second provider: official Google GenAI SDK for the
+    # Gemini API provider adapter (patchfrog.review.providers.gemini_provider).
+    "google-genai>=2.0,<3.0",
     # Public beta readiness: Prometheus-compatible /metrics exposition
     # (patchfrog.ops.metrics) -- the standard client library, never a
     # hand-rolled text-format exporter.

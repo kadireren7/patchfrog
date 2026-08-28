@@ -1,0 +1,13 @@
+{
+  "note": "Real, observed per-call latency. Gemini 3.6-flash's default (AUTOMATIC) thinking behavior is markedly slower and more variable than Anthropic's claude-opus-5 observed in this project's prior live validation (validation/live_provider/latency.json, median ~15-20s).",
+  "review_run_durations_ms": {
+    "py-off-by-one-loop": 65342.2,
+    "clean-py-defensive-check": 59192.6,
+    "c-memory-leak": 53106.5,
+    "clean-c-correct-realloc-pattern": 11156.6
+  },
+  "single_call_latencies_ms": [11728.25, 51638.28, 29208.92, 144313, 90997],
+  "range_ms": {"min": 11157, "max": 144313},
+  "median_approx_ms": 53107,
+  "note_on_variance": "One single call took 144.3s even with the thinking_budget cap applied and a 180s configured timeout -- comfortably within budget but far above Anthropic's typical latency. Deployments selecting Gemini should configure a generous review.request_timeout_seconds (this session used 90-180s) rather than the 30s default, which was observed to cause spurious 504s."
+}
