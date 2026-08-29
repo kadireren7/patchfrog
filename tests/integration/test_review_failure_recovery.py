@@ -101,7 +101,10 @@ async def test_all_candidates_failing_yields_failed_status(
     repository_id, commit_sha, root_path = await _setup(session_factory, full_name="test/review-fail-2")
     diff_files = [_diff_marking_lines("src/billing.py", [14])]
 
-    provider = FakeLLMProvider([ProviderFatalError("always fails")])
+    # response_factory (not a finite queue) -- Agent Orchestration v1
+    # makes two concurrent specialist calls per candidate (Correctness,
+    # Security), both of which must fail for "always fails" to hold.
+    provider = FakeLLMProvider(response_factory=lambda req: ProviderFatalError("always fails"))
     service = PullRequestReviewService(session_factory=session_factory, reviewer_provider=provider)
 
     summary = await service.review_local(
@@ -143,8 +146,13 @@ async def test_critic_schema_failure_falls_back_to_no_critic_aggregation(
     repository_id, commit_sha, root_path = await _setup(session_factory, full_name="test/review-fail-3")
     diff_files = [_diff_marking_lines("src/billing.py", [14])]
 
+    # response_factory (not a finite queue) -- both specialist roles call
+    # the reviewer; both returning the identical finding is intentional:
+    # cross-role dedup (patchfrog.review.agents.cross_role) deterministically
+    # collapses them to one proposal *before* critique, so exactly one
+    # critic call happens, matching the critic's single scripted response.
     reviewer = FakeLLMProvider(
-        [ScriptedResponse(raw_json=json.dumps({"findings": [_backwards_comparison_finding()]}))]
+        response_factory=lambda req: ScriptedResponse(raw_json=json.dumps({"findings": [_backwards_comparison_finding()]}))
     )
     critic = FakeLLMProvider([ScriptedResponse(raw_json="this is not valid json at all")])
 
@@ -172,8 +180,11 @@ async def test_untyped_critic_exception_is_not_gracefully_degraded(
     repository_id, commit_sha, root_path = await _setup(session_factory, full_name="test/review-fail-4")
     diff_files = [_diff_marking_lines("src/billing.py", [14])]
 
+    # See test_critic_schema_failure_falls_back_to_no_critic_aggregation
+    # above for why both specialist roles returning the identical finding
+    # (via response_factory) still results in exactly one critic call.
     reviewer = FakeLLMProvider(
-        [ScriptedResponse(raw_json=json.dumps({"findings": [_backwards_comparison_finding()]}))]
+        response_factory=lambda req: ScriptedResponse(raw_json=json.dumps({"findings": [_backwards_comparison_finding()]}))
     )
     critic = FakeLLMProvider([RuntimeError("critic backend unavailable")])
 

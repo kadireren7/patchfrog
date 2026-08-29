@@ -47,6 +47,7 @@ class AIFindingRepository:
                 impact=f.finding.impact,
                 corroborated_by_static=f.corroborated_by_static,
                 static_finding_ids=json.dumps([str(i) for i in f.static_finding_ids]),
+                agent_role=f.agent_role,
             )
             models.append(model)
         session.add_all(models)

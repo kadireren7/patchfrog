@@ -18,7 +18,7 @@ PatchFrog installs as a GitHub App and reviews pull requests. It combines:
 
 - **Static Analysis Engine** — ruff, semgrep, cppcheck, and clang-tidy adapters over Python, C, and C++, with toolchain-aware result identity.
 - **Context Engine** — deterministic, non-LLM selection of the surrounding code a finding needs (symbol graph, cross-file `extern` resolution), so the reviewer sees exactly the relevant context and nothing more.
-- **AI Reviewer** — a Claude-based review layer that validates and explains candidate findings (identification, root cause, impact, fix) with calibrated confidence, never raw scores.
+- **AI Reviewer** — two cooperating specialist agents (Correctness, Security — see [`docs/agent-orchestration.md`](docs/agent-orchestration.md)) reviewing the same shared, deterministic evidence, plus an independent critic; validates and explains candidate findings (identification, root cause, impact, fix) with calibrated confidence, never raw scores, with cross-agent duplicate/contradiction handling before anything reaches a PR.
 - **Incremental Review + Review Memory** — re-reviews only what changed; unrelated files, unchanged symbols, and already-carried findings are never re-sent to the provider. Renames, moves, and ambiguous matches are handled explicitly, never guessed.
 - **Publishing** — findings are posted as a real GitHub PR review: one summary comment plus inline comments on the diff, safe-by-default (dry-run unless explicitly enabled), idempotent against retries.
 - **Feedback Loop** — polls reactions, replies, `/patchfrog` commands, and thread state to measure usefulness and correctness signals over time, without ever webhook-driving off endpoints the App isn't granted.

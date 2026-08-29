@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
+from patchfrog.review.agents.roles import AgentRole
 
 #: Bumped whenever the benchmark corpus (fixtures/ground truth) changes
 #: materially -- a case added, removed, or re-labeled.
@@ -272,6 +273,13 @@ class PredictedFinding:
     reasoning_summary: str = ""
     impact: str | None = None
     suggested_fix: str | None = None
+    #: The specialist role (see :mod:`patchfrog.review.agents.roles`)
+    #: that produced this finding -- ``None`` for a static finding
+    #: (``source is PredictionSource.STATIC``) or an AI finding
+    #: predating Agent Orchestration v1. Never used by the core matcher
+    #: (which must stay ground-truth/role agnostic) -- purely for
+    #: provenance reporting (spec section 17).
+    agent_role: AgentRole | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -330,6 +338,13 @@ class CaseResult:
     provider_calls: int = 0
     reviewer_input_tokens: int = 0
     reviewer_output_tokens: int = 0
+    #: Per-specialist-role call counts and token usage (see
+    #: :mod:`patchfrog.review.orchestration`) -- lets Agent Orchestration
+    #: be measured later (spec section 17) without re-deriving it from
+    #: raw persisted proposals. Empty for STATIC_ONLY/no-AI runs.
+    calls_by_role: dict[AgentRole, int] = field(default_factory=dict)
+    reviewer_input_tokens_by_role: dict[AgentRole, int] = field(default_factory=dict)
+    reviewer_output_tokens_by_role: dict[AgentRole, int] = field(default_factory=dict)
     #: Populated whenever static analysis actually ran for this case
     #: (STATIC_ONLY/FULL_PIPELINE) -- see :mod:`patchfrog.evaluation.metrics`'s
     #: per-analyzer coverage computation.

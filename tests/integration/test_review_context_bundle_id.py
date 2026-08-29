@@ -65,7 +65,9 @@ async def test_context_bundle_id_populated_for_reviewed_candidates(
     repository_id, commit_sha, root_path = await _setup(session_factory, full_name="test/bundle-id-1")
     diff_files = [_diff_marking_lines("src/billing.py", [14])]
 
-    provider = FakeLLMProvider([ScriptedResponse(raw_json=json.dumps({"findings": []}))])
+    provider = FakeLLMProvider(
+        response_factory=lambda req: ScriptedResponse(raw_json=json.dumps({"findings": []}))
+    )
     service = PullRequestReviewService(session_factory=session_factory, reviewer_provider=provider)
     await service.review_local(
         repository_id=repository_id, root_path=root_path, repository_full_name="test/bundle-id-1",

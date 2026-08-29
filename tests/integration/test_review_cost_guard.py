@@ -92,7 +92,10 @@ async def test_huge_pr_respects_max_candidates(session_factory: async_sessionmak
     )
 
     assert summary.candidate_count <= 20
-    assert len(provider.calls) <= 20
+    # Agent Orchestration v1: two specialist roles (Correctness, Security)
+    # call the reviewer provider per candidate by default -- still a
+    # bounded multiple of max_candidates, never unbounded.
+    assert len(provider.calls) <= 20 * 2
 
 
 async def test_tight_total_token_budget_skips_candidates_without_calling_the_provider(
@@ -119,5 +122,9 @@ async def test_tight_total_token_budget_skips_candidates_without_calling_the_pro
     )
 
     assert summary.candidates_skipped_budget > 0
-    assert len(provider.calls) == summary.candidates_reviewed  # skipped candidates never call the provider
+    # Agent Orchestration v1: both specialist roles' combined estimated
+    # input is reserved together per candidate (see
+    # patchfrog.review.orchestration.AgentOrchestrator) -- a candidate is
+    # either fully reviewed by both roles or fully skipped, never partial.
+    assert len(provider.calls) == summary.candidates_reviewed * 2
     assert summary.candidate_count == summary.candidates_reviewed + summary.candidates_skipped_budget

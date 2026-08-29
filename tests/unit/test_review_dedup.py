@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
+from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.dedup import deduplicate
 from patchfrog.review.domain import (
     AIReviewFinding,
@@ -56,6 +57,7 @@ def _final(
         final_confidence=confidence,
         corroborated_by_static=False,
         static_finding_ids=(),
+        agent_role=AgentRole.CORRECTNESS,
     )
 
 

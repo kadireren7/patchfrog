@@ -14,7 +14,13 @@ from __future__ import annotations
 import json
 
 from patchfrog.analysis.domain import Confidence, Severity
-from patchfrog.review.domain import CriticDecision, CriticVerdict, ReviewCandidate, ValidatedFinding
+from patchfrog.review.domain import (
+    AIReviewFinding,
+    CriticDecision,
+    CriticVerdict,
+    ReviewCandidate,
+    ValidatedFinding,
+)
 from patchfrog.review.prompt import build_critic_prompt
 from patchfrog.review.provider import LLMProvider, ProviderRequest
 from patchfrog.review.schemas import CRITIC_RESPONSE_SCHEMA
@@ -27,10 +33,18 @@ class CriticService:
         self._max_output_tokens = max_output_tokens
 
     async def critique(
-        self, validated: ValidatedFinding, *, candidate: ReviewCandidate, context_text: str
+        self,
+        validated: ValidatedFinding,
+        *,
+        candidate: ReviewCandidate,
+        context_text: str,
+        conflicting_finding: AIReviewFinding | None = None,
     ) -> CriticVerdict:
         system_prompt, user_prompt = build_critic_prompt(
-            candidate=candidate, context_text=context_text, finding=validated.finding
+            candidate=candidate,
+            context_text=context_text,
+            finding=validated.finding,
+            conflicting_finding=conflicting_finding,
         )
         request = ProviderRequest(
             system_prompt=system_prompt,

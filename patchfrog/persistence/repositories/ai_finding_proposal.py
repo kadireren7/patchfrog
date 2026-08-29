@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from patchfrog.persistence.models.review import AIFindingProposalModel
+from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import AIReviewFinding, ProposalStatus
 
 
@@ -23,10 +24,12 @@ class AIFindingProposalRepository:
         finding: AIReviewFinding,
         status: ProposalStatus,
         validation_detail: str | None,
+        agent_role: AgentRole | None = None,
     ) -> AIFindingProposalModel:
         model = AIFindingProposalModel(
             review_run_id=review_run_id,
             candidate_id=candidate_id,
+            agent_role=agent_role,
             title=finding.title,
             message=finding.message,
             category=finding.category,

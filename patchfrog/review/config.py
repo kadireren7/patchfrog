@@ -52,17 +52,35 @@ CONFIG_SCHEMA_VERSION = 3
 
 #: Bumped whenever patchfrog.review.prompt's system/user prompt templates
 #: change materially enough that a prior run's proposals can no longer be
-#: considered equivalent to what re-running now would produce.
-REVIEW_PROMPT_VERSION = 2
+#: considered equivalent to what re-running now would produce. Bumped to
+#: 3 for Agent Orchestration v1: the single general-purpose reviewer
+#: system prompt was replaced by two role-scoped specialist prompts
+#: (Correctness, Security -- see patchfrog.review.prompt.build_agent_prompt)
+#: with materially different scope instructions each.
+REVIEW_PROMPT_VERSION = 3
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final
-#: finding change materially.
-REVIEW_POLICY_VERSION = 2
+#: finding change materially. Bumped to 3 for Agent Orchestration v1:
+#: new acceptance-affecting policies were introduced -- selective critic
+#: verification (patchfrog.review.critic_selection.CriticSelectionPolicy,
+#: replacing "critic every valid proposal") and cross-role duplicate
+#: merge / contradiction suppression
+#: (patchfrog.review.agents.cross_role) -- both of which can change
+#: whether a given proposal survives to a final finding.
+REVIEW_POLICY_VERSION = 3
 
-#: Bumped whenever candidate generation/selection (patchfrog.review.candidates)
-#: changes materially.
-REVIEW_ENGINE_VERSION = 1
+#: Bumped whenever the review *execution engine* changes materially --
+#: originally scoped to candidate generation/selection
+#: (patchfrog.review.candidates) alone, broadened here because Agent
+#: Orchestration v1 is exactly this kind of change: one general-purpose
+#: reviewer call per candidate became deterministic role selection ->
+#: concurrent specialist calls -> cross-role dedup/contradiction
+#: handling -> selective critic verification (see
+#: patchfrog.review.orchestration.AgentOrchestrator). A run canonicalized
+#: under the old single-reviewer engine must never be silently reused as
+#: if it went through orchestration.
+REVIEW_ENGINE_VERSION = 2
 
 DEFAULT_MAX_CANDIDATES = 40
 DEFAULT_MAX_INPUT_TOKENS_PER_CANDIDATE = 12_000

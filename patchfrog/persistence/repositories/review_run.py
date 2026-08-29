@@ -188,6 +188,10 @@ class ReviewRunRepository:
         critic_input_tokens: int,
         critic_output_tokens: int,
         duration_ms: float,
+        correctness_input_tokens: int = 0,
+        correctness_output_tokens: int = 0,
+        security_input_tokens: int = 0,
+        security_output_tokens: int = 0,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -234,6 +238,10 @@ class ReviewRunRepository:
         model.reviewer_output_tokens = reviewer_output_tokens
         model.critic_input_tokens = critic_input_tokens
         model.critic_output_tokens = critic_output_tokens
+        model.correctness_input_tokens = correctness_input_tokens
+        model.correctness_output_tokens = correctness_output_tokens
+        model.security_input_tokens = security_input_tokens
+        model.security_output_tokens = security_output_tokens
         model.duration_ms = duration_ms
         model.completed_at = datetime.now(UTC)
         await session.flush()

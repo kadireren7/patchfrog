@@ -9,6 +9,7 @@ import uuid
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.domain.code import Language, SymbolKind
 from patchfrog.indexing.models import ChangeSet, FileChange, FileChangeType
+from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import (
     AIReviewFinding,
     FinalAIFinding,
@@ -195,7 +196,7 @@ def _final_finding(
     return FinalAIFinding(
         proposal_id=uuid.uuid4(), candidate_id=uuid.uuid4(), candidate=candidate, finding=finding,
         critic_verdict=None, final_severity=severity, final_confidence=Confidence.HIGH,
-        corroborated_by_static=False, static_finding_ids=(),
+        corroborated_by_static=False, static_finding_ids=(), agent_role=AgentRole.CORRECTNESS,
     )
 
 
