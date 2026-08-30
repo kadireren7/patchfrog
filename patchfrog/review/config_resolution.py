@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from patchfrog.config.settings import Settings
 from patchfrog.repository.snapshot import RepositorySnapshotProvider
 from patchfrog.review.config import ReviewConfig, load_review_config
 
@@ -72,3 +73,41 @@ async def resolve_repository_review_config(
         token=token,
     ) as snapshot:
         return load_review_config(snapshot.root_path, on_malformed="raise")
+
+
+def apply_operator_hard_caps(repo_config: ReviewConfig, *, settings: Settings) -> ReviewConfig:
+    """Quality + Cost Guard trust boundary: a repository may *reduce*
+    its own review cost/candidate ceilings below the operator's hard
+    caps, but may never exceed them -- ``effective = min(repo_intent,
+    operator_hard_cap)`` for each capped field, independently.
+
+    Milestone C protected provider/model selection from repository
+    control; this closes a related trust/cost gap it explicitly did not
+    cover -- a repository's own ``.patchfrog.yml`` could otherwise still
+    request an arbitrarily large ``max_candidates``/
+    ``max_total_input_tokens``/etc. and force the operator to spend
+    accordingly. Operator hard caps are environment-only (never
+    ``.patchfrog.yml``-controlled -- see :mod:`patchfrog.config.settings`),
+    exactly like provider/model credentials.
+
+    The returned :class:`ReviewConfig` is what canonical run identity
+    (:meth:`ReviewConfig.fingerprint`) is computed from downstream -- a
+    repository asking for more than the operator allows is never
+    silently reused as if it got what it asked for; the *effective*
+    (possibly capped) behavior is what participates in identity.
+    """
+
+    return ReviewConfig(
+        critic_enabled=repo_config.critic_enabled,
+        max_candidates=min(repo_config.max_candidates, settings.review_max_candidates),
+        max_input_tokens_per_candidate=repo_config.max_input_tokens_per_candidate,
+        max_output_tokens_per_candidate=min(
+            repo_config.max_output_tokens_per_candidate, settings.review_max_output_tokens_per_candidate
+        ),
+        max_total_input_tokens=min(repo_config.max_total_input_tokens, settings.review_max_total_input_tokens),
+        max_concurrent_requests=min(
+            repo_config.max_concurrent_requests, settings.review_max_concurrent_requests
+        ),
+        min_final_confidence=repo_config.min_final_confidence,
+        max_retries=min(repo_config.max_retries, settings.review_max_retries),
+    )

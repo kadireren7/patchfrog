@@ -28,6 +28,7 @@ from patchfrog.evaluation.domain import (
     severity_level,
 )
 from patchfrog.evaluation.matcher import unsupported_reason
+from patchfrog.review.effort_types import ReviewEffortTier
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +120,17 @@ class CandidateEfficiencyMetrics:
     input_tokens_per_tp: float
     output_tokens_per_tp: float
     provider_calls_per_tp: float
+    #: Quality + Cost Guard (patchfrog.review.effort, Milestone F)
+    #: suite-level aggregates -- lets an evaluation report compare
+    #: "current/uniform effort" against "quality-cost guard" runs (spec
+    #: sections 23/24) without duplicating any production tiering logic.
+    #: Empty/zero for a suite with no AI-review cases at all.
+    candidates_by_tier: dict[ReviewEffortTier, int]
+    candidates_escalated: int
+    critic_calls: int
+    reviewer_thinking_tokens: int
+    critic_thinking_tokens: int
+    retries_consumed: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,12 +387,24 @@ def compute_efficiency_metrics(results: Sequence[CaseResult]) -> CandidateEffici
     input_tokens = sum(r.reviewer_input_tokens for r in valid)
     output_tokens = sum(r.reviewer_output_tokens for r in valid)
     tp = sum(1 for r in valid for p in r.predictions if p.outcome is MatchOutcome.TRUE_POSITIVE)
+
+    candidates_by_tier: dict[ReviewEffortTier, int] = {}
+    for r in valid:
+        for tier, count in r.candidates_by_tier.items():
+            candidates_by_tier[tier] = candidates_by_tier.get(tier, 0) + count
+
     return CandidateEfficiencyMetrics(
         candidates_generated=generated, candidates_reviewed=reviewed, candidates_skipped=skipped,
         provider_calls=calls, reviewer_input_tokens=input_tokens, reviewer_output_tokens=output_tokens,
         input_tokens_per_tp=(input_tokens / tp) if tp else 0.0,
         output_tokens_per_tp=(output_tokens / tp) if tp else 0.0,
         provider_calls_per_tp=(calls / tp) if tp else 0.0,
+        candidates_by_tier=candidates_by_tier,
+        candidates_escalated=sum(r.candidates_escalated for r in valid),
+        critic_calls=sum(r.critic_calls for r in valid),
+        reviewer_thinking_tokens=sum(r.reviewer_thinking_tokens for r in valid),
+        critic_thinking_tokens=sum(r.critic_thinking_tokens for r in valid),
+        retries_consumed=sum(r.retries_consumed for r in valid),
     )
 
 

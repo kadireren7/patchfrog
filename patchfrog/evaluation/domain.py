@@ -22,6 +22,7 @@ from enum import IntEnum, StrEnum
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.review.agents.roles import AgentRole
+from patchfrog.review.effort_types import ReviewEffortTier
 
 #: Bumped whenever the benchmark corpus (fixtures/ground truth) changes
 #: materially -- a case added, removed, or re-labeled.
@@ -349,6 +350,18 @@ class CaseResult:
     #: (STATIC_ONLY/FULL_PIPELINE) -- see :mod:`patchfrog.evaluation.metrics`'s
     #: per-analyzer coverage computation.
     analyzer_executions: tuple[AnalyzerExecutionSummary, ...] = field(default_factory=tuple)
+    #: Quality + Cost Guard (:mod:`patchfrog.review.effort`, Milestone F)
+    #: aggregates -- lets the evaluation harness compare "current/uniform
+    #: effort" against "quality-cost guard" runs (spec sections 23/24)
+    #: without duplicating any production tiering logic. Empty/zero for
+    #: STATIC_ONLY/no-AI runs, exactly like the role-provenance fields
+    #: above.
+    candidates_by_tier: dict[ReviewEffortTier, int] = field(default_factory=dict)
+    candidates_escalated: int = 0
+    critic_calls: int = 0
+    reviewer_thinking_tokens: int = 0
+    critic_thinking_tokens: int = 0
+    retries_consumed: int = 0
 
     @property
     def is_error(self) -> bool:

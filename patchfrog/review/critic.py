@@ -73,5 +73,6 @@ class CriticService:
             model=self._provider.identity.model,
             input_tokens=result.usage.input_tokens,
             output_tokens=result.usage.output_tokens,
+            thinking_tokens=result.usage.thinking_tokens,
             latency_ms=result.latency_ms,
         )

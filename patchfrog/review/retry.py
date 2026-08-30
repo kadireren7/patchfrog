@@ -16,16 +16,23 @@ from patchfrog.review.provider import ProviderTransientError
 
 async def call_with_retry[T](
     coro_factory: Callable[[], Awaitable[T]], *, max_retries: int, base_delay: float = 0.5
-) -> T:
+) -> tuple[T, int]:
     """Bounded retry, transient failures only. ``ProviderFatalError`` and
     :class:`~patchfrog.review.validation.ResponseSchemaError` propagate
     immediately -- retrying a schema-invalid or auth/400 response would
-    just reproduce the identical failure."""
+    just reproduce the identical failure. A fatal error therefore never
+    consumes any of the caller's retry allowance.
+
+    Returns ``(result, retries_used)`` -- the Quality + Cost Guard
+    (:mod:`patchfrog.review.effort`) needs the actual retry count
+    consumed by each candidate for cost/audit accounting, not just the
+    final outcome.
+    """
 
     attempt = 0
     while True:
         try:
-            return await coro_factory()
+            return await coro_factory(), attempt
         except ProviderTransientError:
             if attempt >= max_retries:
                 raise

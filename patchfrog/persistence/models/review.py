@@ -47,6 +47,7 @@ from patchfrog.review.domain import (
     ReviewCandidateReason,
     ReviewRunStatus,
 )
+from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 
 
 class ReviewCandidateStatus(StrEnum):
@@ -128,6 +129,26 @@ class ReviewRunModel(Base):
     correctness_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     security_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     security_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    correctness_thinking_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    security_thinking_tokens: Mapped[int] = mapped_column(Integer, default=0)
+
+    #: Quality + Cost Guard (:mod:`patchfrog.review.effort`) run-level
+    #: aggregates. ``candidates_by_tier`` is a JSON object mapping tier
+    #: value -> count (e.g. ``{"light": 3, "standard": 2}``), the same
+    #: JSON-text-column pattern already used for
+    #: ``ReviewCandidateModel.static_finding_ids``. All default to
+    #: 0/``"{}"`` -- nullable-safe for historical rows that predate this
+    #: milestone and never tiered anything.
+    candidates_by_tier: Mapped[str] = mapped_column(Text, default="{}")
+    candidates_escalated: Mapped[int] = mapped_column(Integer, default=0)
+    critic_calls: Mapped[int] = mapped_column(Integer, default=0)
+    retries_consumed: Mapped[int] = mapped_column(Integer, default=0)
+    #: Thinking/reasoning token totals (see
+    #: :attr:`patchfrog.review.domain.TokenUsage.thinking_tokens`),
+    #: broken out for providers/models that report them. 0 for a run
+    #: where nothing reported them -- never fabricated.
+    reviewer_thinking_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    critic_thinking_tokens: Mapped[int] = mapped_column(Integer, default=0)
 
     duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -164,6 +185,20 @@ class ReviewCandidateModel(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_bundle_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("context_bundles.id"), nullable=True
+    )
+    #: Quality + Cost Guard (:mod:`patchfrog.review.effort`) per-candidate
+    #: audit fields. ``effort_tier``/``effort_reasons`` nullable: a
+    #: candidate skipped for budget or one from a run that predates this
+    #: milestone never had a tier decided at all. ``effort_reasons`` is a
+    #: JSON array of reason values, mirroring ``static_finding_ids``'s
+    #: JSON-text-column pattern.
+    effort_tier: Mapped[ReviewEffortTier | None] = mapped_column(
+        enum_column(ReviewEffortTier, length=16), nullable=True
+    )
+    effort_reasons: Mapped[str] = mapped_column(Text, default="[]")
+    escalated: Mapped[bool] = mapped_column(Boolean, default=False)
+    escalation_reason: Mapped[ReviewEffortReason | None] = mapped_column(
+        enum_column(ReviewEffortReason, length=32), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -237,6 +272,8 @@ class CriticVerdictModel(Base):
     model: Mapped[str] = mapped_column(String(128))
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    #: See :attr:`patchfrog.review.domain.CriticVerdict.thinking_tokens`.
+    thinking_tokens: Mapped[int] = mapped_column(Integer, default=0)
     latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

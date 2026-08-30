@@ -89,7 +89,19 @@ class CriticSelectionPolicy:
         *,
         peers: Sequence[CriticSelectionInput],
         min_final_confidence: Confidence,
+        relaxed: bool = False,
     ) -> bool:
+        """``relaxed`` (Quality + Cost Guard, ``ReviewEffortTier.LIGHT``
+        -- see :mod:`patchfrog.review.effort`): only rules 1-3 above
+        apply -- an objectively serious proposal (HIGH/CRITICAL severity
+        or security category) still always gets critiqued, but the
+        cost-saving-adjacent catch-all rules (low/medium confidence,
+        cross-role overlap, not statically corroborated) are relaxed
+        away for a candidate this unremarkable, so LIGHT genuinely
+        spends fewer critic calls than ``SELECTIVE`` -- never the
+        reverse, and never at the cost of an objectively serious
+        proposal skipping verification."""
+
         best_case_rank = min(_CONFIDENCE_RANK[target.confidence] + (1 if target.corroborated_by_static else 0), 2)
         if best_case_rank < _CONFIDENCE_RANK[min_final_confidence]:
             return False
@@ -98,6 +110,9 @@ class CriticSelectionPolicy:
             return True
         if target.category is FindingCategory.SECURITY:
             return True
+        if relaxed:
+            return False
+
         if target.confidence is not Confidence.HIGH:
             return True
         if any(_overlaps(target, peer) for peer in peers):

@@ -225,7 +225,11 @@ def test_two_different_malformed_contents_have_different_error_raw_text(tmp_path
 
 
 def test_config_schema_version_bumped_for_operator_boundary_change() -> None:
-    assert CONFIG_SCHEMA_VERSION == 3
+    # Milestone C bumped 2 -> 3 (provider/model fields removed from
+    # repository config); Milestone F (Quality + Cost Guard) bumped
+    # 3 -> 4 (max_output_tokens_per_candidate's effective repo-facing
+    # meaning changed -- see patchfrog.review.config's module comment).
+    assert CONFIG_SCHEMA_VERSION == 4
 
 
 # -- Trust boundary: provider/model/critic_model/request_timeout_seconds

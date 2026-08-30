@@ -27,6 +27,7 @@ from uuid import UUID
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.review.agents.roles import AgentRole
+from patchfrog.review.effort_types import ReviewEffortTier
 
 
 class ReviewCandidateReason(StrEnum):
@@ -216,6 +217,7 @@ class CriticVerdict:
     model: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    thinking_tokens: int = 0
     latency_ms: float = 0.0
 
 
@@ -235,6 +237,13 @@ class ProposalStatus(StrEnum):
     #: PatchFrog prefers suppressing both over publishing contradictory
     #: comments about the same code.
     SUPPRESSED_CONTRADICTION = "suppressed_contradiction"
+    #: A proposal whose required critic verification
+    #: (:class:`~patchfrog.review.effort_types.CriticExpectation`) could
+    #: not be reserved against the run's remaining
+    #: ``max_total_input_tokens`` -- see
+    #: :data:`patchfrog.review.orchestration.CRITIC_BUDGET_EXHAUSTED`.
+    #: Suppressed rather than published unverified.
+    SUPPRESSED_BUDGET = "suppressed_budget"
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,11 +287,17 @@ class ReviewRunStatus(StrEnum):
 class TokenUsage:
     input_tokens: int = 0
     output_tokens: int = 0
+    #: Extended "thinking"/reasoning tokens, mirroring
+    #: :attr:`~patchfrog.review.provider.ProviderUsage.thinking_tokens`.
+    #: Zero for providers/responses that don't report it -- never
+    #: fabricated.
+    thinking_tokens: int = 0
 
     def __add__(self, other: TokenUsage) -> TokenUsage:
         return TokenUsage(
             input_tokens=self.input_tokens + other.input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
+            thinking_tokens=self.thinking_tokens + other.thinking_tokens,
         )
 
 
@@ -314,3 +329,13 @@ class ReviewRunSummary:
     #: Correctness/Security calls did this run make" without re-deriving
     #: it from raw provider call logs.
     calls_by_role: dict[AgentRole, int] = field(default_factory=dict)
+    #: Quality + Cost Guard (:mod:`patchfrog.review.effort`) aggregates --
+    #: how many reviewed candidates landed at each tier, how many
+    #: escalated, how many critic calls were made, retries actually
+    #: consumed, and thinking-token totals broken out from
+    #: ``reviewer_usage``/``critic_usage`` (which already include them via
+    #: :attr:`TokenUsage.thinking_tokens`) for convenience.
+    candidates_by_tier: dict[ReviewEffortTier, int] = field(default_factory=dict)
+    candidates_escalated: int = 0
+    critic_calls: int = 0
+    retries_consumed: int = 0

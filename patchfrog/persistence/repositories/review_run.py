@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import UTC, datetime
 
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.review.domain import ReviewRunStatus
+from patchfrog.review.effort_types import ReviewEffortTier
 from patchfrog.review_memory.config import NO_MEMORY_CONTEXT_FINGERPRINT
 
 
@@ -192,6 +194,14 @@ class ReviewRunRepository:
         correctness_output_tokens: int = 0,
         security_input_tokens: int = 0,
         security_output_tokens: int = 0,
+        correctness_thinking_tokens: int = 0,
+        security_thinking_tokens: int = 0,
+        reviewer_thinking_tokens: int = 0,
+        critic_thinking_tokens: int = 0,
+        candidates_by_tier: dict[ReviewEffortTier, int] | None = None,
+        candidates_escalated: int = 0,
+        critic_calls: int = 0,
+        retries_consumed: int = 0,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -242,6 +252,14 @@ class ReviewRunRepository:
         model.correctness_output_tokens = correctness_output_tokens
         model.security_input_tokens = security_input_tokens
         model.security_output_tokens = security_output_tokens
+        model.correctness_thinking_tokens = correctness_thinking_tokens
+        model.security_thinking_tokens = security_thinking_tokens
+        model.reviewer_thinking_tokens = reviewer_thinking_tokens
+        model.critic_thinking_tokens = critic_thinking_tokens
+        model.candidates_by_tier = json.dumps({tier.value: count for tier, count in (candidates_by_tier or {}).items()})
+        model.candidates_escalated = candidates_escalated
+        model.critic_calls = critic_calls
+        model.retries_consumed = retries_consumed
         model.duration_ms = duration_ms
         model.completed_at = datetime.now(UTC)
         await session.flush()

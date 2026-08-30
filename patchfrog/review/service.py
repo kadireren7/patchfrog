@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import time
 import uuid
 from collections.abc import Callable
@@ -68,7 +69,9 @@ from patchfrog.review.domain import (
     TokenUsage,
     ValidationOutcome,
 )
-from patchfrog.review.orchestration import AgentOrchestrator
+from patchfrog.review.effort import ReviewEffortDecision, ReviewEffortPolicy
+from patchfrog.review.effort_types import ReviewEffortTier
+from patchfrog.review.orchestration import CRITIC_BUDGET_EXHAUSTED, AgentOrchestrator
 from patchfrog.review.provider import LLMProvider
 from patchfrog.review.redaction import redact_secrets
 
@@ -193,12 +196,15 @@ class _CandidateOutcome:
         "candidate",
         "context_bundle_id",
         "context_text",
+        "critic_calls",
         "critic_usage",
         "diff_excerpt",
+        "effort_decision",
         "error",
         "failed",
         "final",
         "proposals",
+        "retries_consumed",
         "reviewer_usage",
         "skipped_budget",
         "usage_by_role",
@@ -218,6 +224,13 @@ class _CandidateOutcome:
         self.critic_usage = TokenUsage()
         self.usage_by_role: dict[AgentRole, TokenUsage] = {}
         self.calls_by_role: dict[AgentRole, int] = {}
+        #: Quality + Cost Guard (see :mod:`patchfrog.review.effort`):
+        #: ``None`` only if the candidate's context could never be built
+        #: (context-build failure short-circuits before any decision is
+        #: even provisionally made).
+        self.effort_decision: ReviewEffortDecision | None = None
+        self.critic_calls = 0
+        self.retries_consumed = 0
 
 
 class PullRequestReviewService:
@@ -230,14 +243,27 @@ class PullRequestReviewService:
         query_service: RepositoryQueryService | None = None,
         candidate_generator: ReviewCandidateGenerator | None = None,
         context_service: ContextService | None = None,
+        effort_decision_override: ReviewEffortDecision | None = None,
     ) -> None:
+        """``effort_decision_override``: the Phase 8/evaluation-harness
+        "uniform baseline" ablation hook (spec sections 24/25) --
+        see :func:`patchfrog.review.effort.uniform_baseline_decision`.
+        When given, used verbatim for every candidate in place of this
+        service's own two-stage :class:`~patchfrog.review.effort.ReviewEffortPolicy`
+        decision -- lets the evaluation harness compare "current/uniform
+        effort" against "quality-cost guard" runs without duplicating
+        any production tiering logic. ``None`` (the default) is real
+        Quality + Cost Guard behavior, used by every real review."""
+
         self._session_factory = session_factory
         self._reviewer_provider = reviewer_provider
         self._critic_provider = critic_provider
+        self._effort_decision_override = effort_decision_override
         self._queries = query_service or RepositoryQueryService()
         self._candidates = candidate_generator or ReviewCandidateGenerator(query_service=self._queries)
         self._context_service = context_service or ContextService(session_factory=session_factory)
         self._critic = CriticService(provider=critic_provider) if critic_provider is not None else None
+        self._effort_policy = ReviewEffortPolicy()
         self._run_repo = ReviewRunRepository()
         self._candidate_repo = ReviewCandidateRepository()
         self._proposal_repo = AIFindingProposalRepository()
@@ -533,6 +559,10 @@ class PullRequestReviewService:
         critic_usage = TokenUsage()
         usage_by_role: dict[AgentRole, TokenUsage] = {}
         calls_by_role: dict[AgentRole, int] = {}
+        candidates_by_tier: dict[ReviewEffortTier, int] = {}
+        candidates_escalated = 0
+        critic_calls_total = 0
+        retries_total = 0
         for o in outcomes:
             reviewer_usage = reviewer_usage + o.reviewer_usage
             critic_usage = critic_usage + o.critic_usage
@@ -540,6 +570,13 @@ class PullRequestReviewService:
                 usage_by_role[role] = usage_by_role.get(role, TokenUsage()) + usage
             for role, count in o.calls_by_role.items():
                 calls_by_role[role] = calls_by_role.get(role, 0) + count
+            if o.effort_decision is not None:
+                tier = o.effort_decision.tier
+                candidates_by_tier[tier] = candidates_by_tier.get(tier, 0) + 1
+                if o.effort_decision.escalated:
+                    candidates_escalated += 1
+            critic_calls_total += o.critic_calls
+            retries_total += o.retries_consumed
 
         duration_ms = (time.monotonic() - start) * 1000
 
@@ -563,8 +600,15 @@ class PullRequestReviewService:
 
             persisted_final: list[FinalAIFinding] = []
             for outcome in outcomes:
+                decision = outcome.effort_decision
                 candidate_model = await self._candidate_repo.create(
-                    session, review_run_id=run_id, candidate=outcome.candidate
+                    session,
+                    review_run_id=run_id,
+                    candidate=outcome.candidate,
+                    effort_tier=decision.tier if decision is not None else None,
+                    effort_reasons=decision.reasons if decision is not None else (),
+                    escalated=decision.escalated if decision is not None else False,
+                    escalation_reason=decision.escalation_reason if decision is not None else None,
                 )
                 if outcome.skipped_budget:
                     await self._candidate_repo.mark_skipped_budget(session, candidate_id=candidate_model.id)
@@ -620,6 +664,18 @@ class PullRequestReviewService:
                         )
                         if verdict is not None:
                             await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
+                        continue
+
+                    if agent_proposal.suppressed_reason == CRITIC_BUDGET_EXHAUSTED:
+                        await self._proposal_repo.create(
+                            session,
+                            review_run_id=run_id,
+                            candidate_id=candidate_model.id,
+                            finding=validated.finding,
+                            status=ProposalStatus.SUPPRESSED_BUDGET,
+                            validation_detail="required critic verification could not be reserved against the run budget",
+                            agent_role=agent_proposal.role,
+                        )
                         continue
 
                     final = next(
@@ -705,6 +761,14 @@ class PullRequestReviewService:
                 correctness_output_tokens=correctness_usage.output_tokens,
                 security_input_tokens=security_usage.input_tokens,
                 security_output_tokens=security_usage.output_tokens,
+                correctness_thinking_tokens=correctness_usage.thinking_tokens,
+                security_thinking_tokens=security_usage.thinking_tokens,
+                reviewer_thinking_tokens=reviewer_usage.thinking_tokens,
+                critic_thinking_tokens=critic_usage.thinking_tokens,
+                candidates_by_tier=candidates_by_tier,
+                candidates_escalated=candidates_escalated,
+                critic_calls=critic_calls_total,
+                retries_consumed=retries_total,
                 duration_ms=duration_ms,
             )
             await session.commit()
@@ -737,6 +801,10 @@ class PullRequestReviewService:
             reused_existing_run=(final_run.id != run_id),
             usage_by_role=usage_by_role,
             calls_by_role=calls_by_role,
+            candidates_by_tier=candidates_by_tier,
+            candidates_escalated=candidates_escalated,
+            critic_calls=critic_calls_total,
+            retries_consumed=retries_total,
         )
 
     async def _review_candidate(
@@ -758,18 +826,46 @@ class PullRequestReviewService:
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
+
+        static_summaries = tuple(
+            summarize_static_finding(static_by_id[fid])
+            for fid in candidate.static_finding_ids
+            if fid in static_by_id
+        )
+
+        # Quality + Cost Guard (patchfrog.review.effort), stage 1: decided
+        # from only the candidate + static findings, *before* context is
+        # built -- this is what determines the context budget/adaptive
+        # policy below. Stage 2 (finalize, after the bundle exists) may
+        # escalate by exactly one step; see the module docstring of
+        # patchfrog.review.effort for why tiering is necessarily two-stage.
+        provisional_decision = self._effort_decision_override or self._effort_policy.decide_provisional(
+            candidate, static_findings=static_summaries, max_retries=config.max_retries
+        )
+
         try:
             context_config = context_config_override or ContextConfig(
-                max_tokens=max(500, int(config.max_input_tokens_per_candidate * 0.6)),
+                max_tokens=max(
+                    500,
+                    int(
+                        config.max_input_tokens_per_candidate
+                        * 0.6
+                        * provisional_decision.context_token_fraction
+                    ),
+                ),
                 # Milestone E: real reviews adopt adaptive multi-hop
                 # context by default -- 1-hop first, deterministic
                 # expansion to depth 2 only when a structural signal
-                # justifies it (see patchfrog.context.adaptive). Explicit
-                # fixed-depth-1/fixed-depth-2 configs (via
-                # context_config_override, used by evaluation ablation
-                # and by tests) are unaffected -- ContextConfig's own
-                # bare default keeps adaptive off.
-                adaptive=AdaptiveContextConfig(enabled=True),
+                # justifies it (see patchfrog.context.adaptive). Milestone
+                # F: whether adaptive mode is even considered for this
+                # candidate is now itself tier-controlled (LIGHT disables
+                # it; STANDARD/DEEP keep it on) -- never exceeding the
+                # operator/repository-configured ceiling above, only
+                # ever narrowing it. Explicit fixed-depth-1/fixed-depth-2
+                # configs (via context_config_override, used by
+                # evaluation ablation and by tests) are unaffected --
+                # ContextConfig's own bare default keeps adaptive off.
+                adaptive=AdaptiveContextConfig(enabled=provisional_decision.context_adaptive_enabled),
             )
             target_type = ContextTargetType.SYMBOL if candidate.symbol_id else ContextTargetType.LINE
             build_kwargs: dict[str, object] = {
@@ -811,12 +907,6 @@ class PullRequestReviewService:
         outcome.context_text = context_text
         outcome.diff_excerpt = diff_excerpt
 
-        static_summaries = tuple(
-            summarize_static_finding(static_by_id[fid])
-            for fid in candidate.static_finding_ids
-            if fid in static_by_id
-        )
-
         evidence = CandidateEvidencePackage(
             candidate=candidate,
             context_text=context_text,
@@ -826,8 +916,30 @@ class PullRequestReviewService:
             context_bundle_id=outcome.context_bundle_id,
         )
 
+        # Stage 2: finalize the effort decision now that the context
+        # bundle exists -- may escalate (never de-escalate) by exactly
+        # one step if adaptive expansion actually occurred. This is the
+        # decision that governs role selection, critic strictness, and
+        # retry allowance for this candidate's actual provider calls
+        # below -- determined before any of them, never after.
+        # A fixed override (evaluation "uniform baseline" ablation) never
+        # escalates -- it stays exactly what it was constructed as.
+        if self._effort_decision_override is not None:
+            effort_decision = self._effort_decision_override
+        else:
+            adaptive_expansion_occurred = (
+                bundle.adaptive_metrics is not None and bundle.adaptive_metrics.occurred
+            )
+            effort_decision = self._effort_policy.finalize(
+                provisional_decision,
+                adaptive_expansion_occurred=adaptive_expansion_occurred,
+                max_retries=config.max_retries,
+            )
+        outcome.effort_decision = effort_decision
+
         result = await orchestrator.review_candidate(
             evidence,
+            effort_decision=effort_decision,
             min_final_confidence=config.min_final_confidence,
             max_total_input_tokens=config.max_total_input_tokens,
             budget_lock=budget_lock,
@@ -842,6 +954,7 @@ class PullRequestReviewService:
             outcome.failed = True
             outcome.error = result.error
             outcome.calls_by_role = result.calls_by_role
+            outcome.retries_consumed = result.retries_consumed
             return
 
         outcome.proposals = list(result.proposals)
@@ -849,6 +962,8 @@ class PullRequestReviewService:
         outcome.critic_usage = result.critic_usage
         outcome.usage_by_role = result.usage_by_role
         outcome.calls_by_role = result.calls_by_role
+        outcome.critic_calls = result.critic_calls
+        outcome.retries_consumed = result.retries_consumed
 
         for agent_proposal in outcome.proposals:
             v = agent_proposal.validated
@@ -923,6 +1038,11 @@ def _hunk_lines_in_range(hunk: DiffHunk, start_line: int, end_line: int) -> list
 
 
 def _summary_from_model(run: ReviewRunModel, *, reused: bool) -> ReviewRunSummary:
+    try:
+        tier_counts = {ReviewEffortTier(k): v for k, v in json.loads(run.candidates_by_tier).items()}
+    except (json.JSONDecodeError, ValueError):
+        tier_counts = {}
+
     return ReviewRunSummary(
         run_id=run.id,
         status=run.status,
@@ -935,17 +1055,31 @@ def _summary_from_model(run: ReviewRunModel, *, reused: bool) -> ReviewRunSummar
         rejected_count=run.rejected_count,
         suppressed_duplicate_count=run.suppressed_duplicate_count,
         reviewer_usage=TokenUsage(
-            input_tokens=run.reviewer_input_tokens, output_tokens=run.reviewer_output_tokens
+            input_tokens=run.reviewer_input_tokens,
+            output_tokens=run.reviewer_output_tokens,
+            thinking_tokens=run.reviewer_thinking_tokens,
         ),
-        critic_usage=TokenUsage(input_tokens=run.critic_input_tokens, output_tokens=run.critic_output_tokens),
+        critic_usage=TokenUsage(
+            input_tokens=run.critic_input_tokens,
+            output_tokens=run.critic_output_tokens,
+            thinking_tokens=run.critic_thinking_tokens,
+        ),
         duration_ms=run.duration_ms or 0.0,
         reused_existing_run=reused,
         usage_by_role={
             AgentRole.CORRECTNESS: TokenUsage(
-                input_tokens=run.correctness_input_tokens, output_tokens=run.correctness_output_tokens
+                input_tokens=run.correctness_input_tokens,
+                output_tokens=run.correctness_output_tokens,
+                thinking_tokens=run.correctness_thinking_tokens,
             ),
             AgentRole.SECURITY: TokenUsage(
-                input_tokens=run.security_input_tokens, output_tokens=run.security_output_tokens
+                input_tokens=run.security_input_tokens,
+                output_tokens=run.security_output_tokens,
+                thinking_tokens=run.security_thinking_tokens,
             ),
         },
+        candidates_by_tier=tier_counts,
+        candidates_escalated=run.candidates_escalated,
+        critic_calls=run.critic_calls,
+        retries_consumed=run.retries_consumed,
     )

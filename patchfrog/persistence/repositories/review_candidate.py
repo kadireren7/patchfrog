@@ -8,12 +8,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from patchfrog.persistence.models.review import ReviewCandidateModel, ReviewCandidateStatus
 from patchfrog.review.domain import ReviewCandidate
+from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 
 
 class ReviewCandidateRepository:
     async def create(
-        self, session: AsyncSession, *, review_run_id: uuid.UUID, candidate: ReviewCandidate
+        self,
+        session: AsyncSession,
+        *,
+        review_run_id: uuid.UUID,
+        candidate: ReviewCandidate,
+        effort_tier: ReviewEffortTier | None = None,
+        effort_reasons: tuple[ReviewEffortReason, ...] = (),
+        escalated: bool = False,
+        escalation_reason: ReviewEffortReason | None = None,
     ) -> ReviewCandidateModel:
+        """``effort_tier``/``effort_reasons``/``escalated``/``escalation_reason``
+        (Quality + Cost Guard, see :mod:`patchfrog.review.effort`) default
+        to "no decision recorded" -- a candidate skipped for budget before
+        any :class:`~patchfrog.review.effort.ReviewEffortDecision` could
+        even be computed, or a caller predating this milestone."""
+
         model = ReviewCandidateModel(
             review_run_id=review_run_id,
             file_path=candidate.file_path,
@@ -26,6 +41,10 @@ class ReviewCandidateRepository:
             reason=candidate.reason,
             static_finding_ids=json.dumps([str(i) for i in candidate.static_finding_ids]),
             status=ReviewCandidateStatus.PENDING,
+            effort_tier=effort_tier,
+            effort_reasons=json.dumps([r.value for r in effort_reasons]),
+            escalated=escalated,
+            escalation_reason=escalation_reason,
         )
         session.add(model)
         await session.flush()

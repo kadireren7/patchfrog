@@ -96,8 +96,23 @@ def _diff_marking_lines(file_path: str, lines: list[int]) -> DiffFile:
 
 
 async def _setup(
-    session_factory: async_sessionmaker[AsyncSession], *, full_name: str
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    full_name: str,
+    force_security_signal: bool = False,
 ) -> tuple[uuid.UUID, str, Path]:
+    """``force_security_signal``: rename ``can_withdraw`` to
+    ``authorize_withdraw`` in this test's own isolated fixture copy only
+    (never the shared ``ai_review_python`` fixture) -- gives the
+    Quality + Cost Guard (patchfrog.review.effort) a real, non-fallback
+    security-naming signal (see
+    patchfrog.review.agents.selection.AgentSelectionReason.SECURITY_SENSITIVE_NAMING),
+    tiering the candidate DEEP so Security is guaranteed to run. Used
+    only by tests whose actual purpose is orchestration mechanics
+    (critic behavior, contradiction handling, cross-agent validation)
+    unrelated to tiering itself -- tiering-selection tests exercise the
+    plain, unmodified fixture."""
+
     async with session_factory() as session:
         row = await RepositoryRepository().upsert(
             session, github_repository_id=abs(hash(full_name)) % (2**62),
@@ -109,10 +124,17 @@ async def _setup(
 
     root = Path("/tmp") / f"pf-ai-orch-{uuid.uuid4().hex[:8]}"
     snapshot = materialize_fixture_repo(root, "ai_review_python", full_name=full_name)
+    commit_sha = snapshot.commit_sha
+    if force_security_signal:
+        billing_path = snapshot.root_path / "src" / "billing.py"
+        billing_path.write_text(billing_path.read_text().replace("can_withdraw", "authorize_withdraw"))
+        from tests.support.git_repo import commit_all
+
+        commit_sha = commit_all(snapshot.root_path, "rename for security naming signal")
     await RepositoryIndexingService(session_factory=session_factory).index_local_repository(
         repository_id=repository_id, root_path=snapshot.root_path, repository_full_name=full_name
     )
-    return repository_id, snapshot.commit_sha, snapshot.root_path
+    return repository_id, commit_sha, snapshot.root_path
 
 
 async def _run_run_ids(session_factory: async_sessionmaker[AsyncSession], repository_id: uuid.UUID) -> uuid.UUID:
@@ -148,7 +170,9 @@ async def test_correctness_only_finding_survives(session_factory: async_sessionm
 async def test_security_only_finding_survives(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Required scenario 2."""
 
-    repository_id, commit_sha, root_path = await _setup(session_factory, full_name="test/orch-security-only")
+    repository_id, commit_sha, root_path = await _setup(
+        session_factory, full_name="test/orch-security-only", force_security_signal=True
+    )
     diff_files = [_diff_marking_lines("src/billing.py", [14])]
 
     reviewer = FakeLLMProvider(
@@ -193,7 +217,9 @@ async def test_both_agents_return_no_findings(session_factory: async_sessionmake
 async def test_hallucinated_security_evidence_rejected(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Required scenario 10."""
 
-    repository_id, commit_sha, root_path = await _setup(session_factory, full_name="test/orch-halluc-security")
+    repository_id, commit_sha, root_path = await _setup(
+        session_factory, full_name="test/orch-halluc-security", force_security_signal=True
+    )
     diff_files = [_diff_marking_lines("src/billing.py", [14])]
 
     reviewer = FakeLLMProvider(
@@ -260,7 +286,9 @@ async def test_deterministic_evidence_validation_runs_independently_per_agent(
     """Required scenario 9: one role hallucinates, the other is valid --
     each is judged solely on its own evidence."""
 
-    repository_id, commit_sha, root_path = await _setup(session_factory, full_name="test/orch-mixed-validity")
+    repository_id, commit_sha, root_path = await _setup(
+        session_factory, full_name="test/orch-mixed-validity", force_security_signal=True
+    )
     diff_files = [_diff_marking_lines("src/billing.py", [14])]
 
     reviewer = FakeLLMProvider(
@@ -295,7 +323,9 @@ async def test_deterministic_evidence_validation_runs_independently_per_agent(
 async def test_critic_rejection_works_for_security_role(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Required scenario 13 (security side)."""
 
-    repository_id, commit_sha, root_path = await _setup(session_factory, full_name="test/orch-critic-reject-sec")
+    repository_id, commit_sha, root_path = await _setup(
+        session_factory, full_name="test/orch-critic-reject-sec", force_security_signal=True
+    )
     diff_files = [_diff_marking_lines("src/billing.py", [14])]
 
     reviewer = FakeLLMProvider(
@@ -355,7 +385,9 @@ async def test_critic_rejection_works_for_correctness_role(
 async def test_critic_downgrade_works(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Required scenario 14."""
 
-    repository_id, commit_sha, root_path = await _setup(session_factory, full_name="test/orch-critic-downgrade")
+    repository_id, commit_sha, root_path = await _setup(
+        session_factory, full_name="test/orch-critic-downgrade", force_security_signal=True
+    )
     diff_files = [_diff_marking_lines("src/billing.py", [14])]
 
     downgrade_verdict = ScriptedResponse(
@@ -461,7 +493,9 @@ async def test_contradictory_proposals_are_suppressed_when_critic_cannot_resolve
     accepts both (cannot confidently resolve which is correct), both are
     suppressed rather than published."""
 
-    repository_id, commit_sha, root_path = await _setup(session_factory, full_name="test/orch-contradiction")
+    repository_id, commit_sha, root_path = await _setup(
+        session_factory, full_name="test/orch-contradiction", force_security_signal=True
+    )
     diff_files = [_diff_marking_lines("src/billing.py", [14])]
 
     reviewer = FakeLLMProvider(

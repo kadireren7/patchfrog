@@ -190,3 +190,11 @@ protects context identity.
 
 - `docs/agent-orchestration.md` -- how specialist agents consume the
   shared evidence package this engine produces.
+- `docs/quality-cost-guard.md` -- a later milestone's per-candidate
+  effort tier controls the budget/adaptive-mode `ContextConfig` passed
+  into this engine (LIGHT: smaller budget, adaptive disabled;
+  STANDARD/DEEP: today's adaptive default, up to the full configured
+  ceiling). This engine's own ranking/scoring/budgeting/cycle-bound
+  logic described above is completely unaffected -- tiering only
+  changes what budget/mode it is invoked with, never how it behaves
+  once invoked.
