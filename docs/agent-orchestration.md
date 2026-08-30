@@ -233,6 +233,22 @@ each could be evaluated independently before the other existed.
   `"critic_verdict"`) rather than depending on call order -- required
   once two specialist calls for one candidate can be in flight at once.
 
+## Quality + Cost Guard (superseded default execution shape)
+
+At the time Agent Orchestration v1 shipped, every candidate got
+identical treatment: both roles, the same context/output budget
+fraction, the same critic selectivity, the same retry allowance. A
+later milestone (see `docs/quality-cost-guard.md`) introduced
+deterministic per-candidate effort tiering (LIGHT/STANDARD/DEEP) on top
+of this architecture -- tier can reduce which roles run, the context/
+output budget, critic strictness, and retry allowance for a candidate,
+but never changes anything documented above about *how* a role's
+proposal is validated, deduplicated, or resolved against a contradiction,
+and never touches provider/model selection. Role selection
+(`AgentSelectionPolicy`) and selective critic verification
+(`CriticSelectionPolicy`) described above are composed by, not replaced
+by, that later tiering layer.
+
 ## Versioning
 
 `REVIEW_ENGINE_VERSION`, `REVIEW_PROMPT_VERSION`, and

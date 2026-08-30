@@ -23,6 +23,7 @@ class CriticVerdictRepository:
             model=verdict.model,
             input_tokens=verdict.input_tokens,
             output_tokens=verdict.output_tokens,
+            thinking_tokens=verdict.thinking_tokens,
             latency_ms=verdict.latency_ms,
         )
         session.add(model)

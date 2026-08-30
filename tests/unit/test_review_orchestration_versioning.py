@@ -9,7 +9,6 @@ revert of any of them is caught immediately."""
 from __future__ import annotations
 
 from patchfrog.review.config import (
-    CONFIG_SCHEMA_VERSION,
     REVIEW_ENGINE_VERSION,
     REVIEW_POLICY_VERSION,
     REVIEW_PROMPT_VERSION,
@@ -37,13 +36,15 @@ def test_review_engine_version_bumped_for_orchestration_architecture() -> None:
     assert REVIEW_ENGINE_VERSION > _PRE_ORCHESTRATION_ENGINE_VERSION
 
 
-def test_config_schema_version_unchanged_by_this_milestone() -> None:
-    """Agent Orchestration v1 introduces no new/changed repository-
-    controlled `.patchfrog.yml` fields -- CONFIG_SCHEMA_VERSION must not
-    be bumped for it (spec section 14: "Do not bump CONFIG_SCHEMA_VERSION
-    unless repository config semantics actually change")."""
-
-    assert CONFIG_SCHEMA_VERSION == 3
+# Agent Orchestration v1 itself introduced no new/changed repository-
+# controlled `.patchfrog.yml` fields, so CONFIG_SCHEMA_VERSION was NOT
+# bumped for it (spec section 14: "Do not bump CONFIG_SCHEMA_VERSION
+# unless repository config semantics actually change") -- it stayed at
+# the Milestone C value (3) through the end of this milestone. A later
+# milestone (Quality + Cost Guard) legitimately bumped it again for an
+# unrelated reason; see tests/unit/test_review_quality_cost_guard_versioning.py
+# for that pin. The historical "still 3" pin that used to live here is
+# retired rather than kept permanently false.
 
 
 def test_pre_orchestration_model_identity_never_reused_post_orchestration() -> None:

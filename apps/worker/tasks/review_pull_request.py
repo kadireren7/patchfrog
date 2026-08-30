@@ -48,7 +48,10 @@ from patchfrog.persistence.repositories import (
     RepositoryRepository,
 )
 from patchfrog.review.config import MalformedReviewConfigError
-from patchfrog.review.config_resolution import resolve_repository_review_config
+from patchfrog.review.config_resolution import (
+    apply_operator_hard_caps,
+    resolve_repository_review_config,
+)
 from patchfrog.review.domain import ReviewRunStatus, ReviewRunSummary
 from patchfrog.review.provider_factory import build_critic_provider, build_reviewer_provider
 from patchfrog.review.runtime_config import resolve_review_runtime_config
@@ -150,6 +153,7 @@ async def _review_pull_request(
                 clone_url=clone_url,
                 token=token,
             )
+            review_config = apply_operator_hard_caps(review_config, settings=settings)
         except MalformedReviewConfigError as exc:
             await persist_malformed_config_failure(
                 session_factory,

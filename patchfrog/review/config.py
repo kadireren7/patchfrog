@@ -41,14 +41,20 @@ _CONFIG_FILENAMES = (".patchfrog.yml", ".patchfrog.yaml")
 
 #: Bumped whenever ReviewConfig's own shape/semantics change -- including a
 #: change to how an *omitted* field's effective value is computed, even
-#: when the field list itself doesn't change. Bumped to 3 because
-#: `provider`/`model`/`critic_model`/`request_timeout_seconds` were removed
-#: from repository-controlled config entirely (see module docstring) --
-#: a `.patchfrog.yml` that used to set those fields now behaves
-#: differently (they're rejected/ignored, never applied), so any prior
+#: when the field list itself doesn't change. Bumped to 4 for the Quality
+#: + Cost Guard (Milestone F): `max_output_tokens_per_candidate`'s
+#: *effective* repo-facing meaning changes materially -- previously each
+#: selected role independently received the full configured value;
+#: now it is a shared candidate-level ceiling deterministically split
+#: across whichever roles the effort tier selects (see
+#: patchfrog.review.orchestration.AgentOrchestrator). A repository that
+#: set this field under the old semantics would silently get a
+#: different effective per-role budget under the new one, so any prior
 #: canonical run must never be silently reused across this version
-#: boundary.
-CONFIG_SCHEMA_VERSION = 3
+#: boundary. (Previously bumped to 3 because `provider`/`model`/
+#: `critic_model`/`request_timeout_seconds` were removed from
+#: repository-controlled config entirely -- see module docstring.)
+CONFIG_SCHEMA_VERSION = 4
 
 #: Bumped whenever patchfrog.review.prompt's system/user prompt templates
 #: change materially enough that a prior run's proposals can no longer be
@@ -56,31 +62,46 @@ CONFIG_SCHEMA_VERSION = 3
 #: 3 for Agent Orchestration v1: the single general-purpose reviewer
 #: system prompt was replaced by two role-scoped specialist prompts
 #: (Correctness, Security -- see patchfrog.review.prompt.build_agent_prompt)
-#: with materially different scope instructions each.
+#: with materially different scope instructions each. NOT bumped for the
+#: Quality + Cost Guard (Milestone F) -- no prompt text changed; tiering
+#: only changes which roles run and how strictly the critic verifies,
+#: never the prompt templates themselves.
 REVIEW_PROMPT_VERSION = 3
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final
-#: finding change materially. Bumped to 3 for Agent Orchestration v1:
-#: new acceptance-affecting policies were introduced -- selective critic
-#: verification (patchfrog.review.critic_selection.CriticSelectionPolicy,
-#: replacing "critic every valid proposal") and cross-role duplicate
-#: merge / contradiction suppression
-#: (patchfrog.review.agents.cross_role) -- both of which can change
-#: whether a given proposal survives to a final finding.
-REVIEW_POLICY_VERSION = 3
+#: finding change materially. Bumped to 4 for the Quality + Cost Guard
+#: (Milestone F): tier-driven bounded escalation and `CriticExpectation`
+#: (patchfrog.review.effort) change what can survive to a final finding
+#: -- a LIGHT-tier candidate now critiques even less than today's
+#: selective policy for otherwise-unremarkable proposals, while a
+#: DEEP/escalated candidate now makes critic verification mandatory,
+#: bypassing that selective policy entirely. (Previously bumped to 3 for
+#: Agent Orchestration v1: selective critic verification and cross-role
+#: duplicate merge / contradiction suppression.)
+REVIEW_POLICY_VERSION = 4
 
 #: Bumped whenever the review *execution engine* changes materially --
 #: originally scoped to candidate generation/selection
-#: (patchfrog.review.candidates) alone, broadened here because Agent
-#: Orchestration v1 is exactly this kind of change: one general-purpose
-#: reviewer call per candidate became deterministic role selection ->
-#: concurrent specialist calls -> cross-role dedup/contradiction
-#: handling -> selective critic verification (see
-#: patchfrog.review.orchestration.AgentOrchestrator). A run canonicalized
-#: under the old single-reviewer engine must never be silently reused as
-#: if it went through orchestration.
-REVIEW_ENGINE_VERSION = 2
+#: (patchfrog.review.candidates) alone, broadened for Agent Orchestration
+#: v1 (one general-purpose reviewer call per candidate became
+#: deterministic role selection -> concurrent specialist calls ->
+#: cross-role dedup/contradiction handling -> selective critic
+#: verification). Bumped to 3 for the Quality + Cost Guard (Milestone F):
+#: every candidate's role selection, context budget, output-token
+#: budget, and retry allowance are now tier-driven
+#: (patchfrog.review.effort.ReviewEffortPolicy) rather than uniform --
+#: a materially different call shape per candidate than the prior
+#: engine version ever produced.
+REVIEW_ENGINE_VERSION = 3
+
+#: Independent version for the Quality + Cost Guard's own tiering policy
+#: (patchfrog.review.effort) -- deliberately separate from
+#: REVIEW_ENGINE_VERSION/REVIEW_POLICY_VERSION so a future change to only
+#: the tiering thresholds/signals themselves (e.g. adjusting
+#: `_LARGE_CHANGED_SYMBOL_LINES`) can invalidate canonical-run reuse
+#: without needing a broader engine- or policy-version bump.
+QUALITY_COST_POLICY_VERSION = 1
 
 DEFAULT_MAX_CANDIDATES = 40
 DEFAULT_MAX_INPUT_TOKENS_PER_CANDIDATE = 12_000
@@ -167,6 +188,8 @@ class ReviewModelIdentity(BaseModel):
     prompt_version: int = REVIEW_PROMPT_VERSION
     policy_version: int = REVIEW_POLICY_VERSION
     engine_version: int = REVIEW_ENGINE_VERSION
+    #: See :data:`QUALITY_COST_POLICY_VERSION`.
+    quality_cost_policy_version: int = QUALITY_COST_POLICY_VERSION
 
     def fingerprint(self) -> str:
         payload = {
@@ -177,6 +200,7 @@ class ReviewModelIdentity(BaseModel):
             "prompt_version": self.prompt_version,
             "policy_version": self.policy_version,
             "engine_version": self.engine_version,
+            "quality_cost_policy_version": self.quality_cost_policy_version,
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()

@@ -82,6 +82,8 @@ from patchfrog.review.config import (
     ReviewConfig,
 )
 from patchfrog.review.domain import ReviewRunSummary
+from patchfrog.review.effort import uniform_baseline_decision
+from patchfrog.review.effort_types import ReviewEffortTier
 from patchfrog.review.provider import LLMProvider, ProviderError
 from patchfrog.review.provider_factory import MissingProviderCredentialsError
 from patchfrog.review.providers.fake import FakeLLMProvider, ScriptedResponse
@@ -257,7 +259,17 @@ class EvaluationRunner:
         critic_enabled: bool = True,
         context_config_override: ContextConfig | None = None,
         timeout_seconds: float = 120.0,
+        use_quality_cost_guard: bool = True,
     ) -> CaseResult:
+        """``use_quality_cost_guard=False`` (spec sections 24/25): run
+        this case against the fixed "uniform baseline" effort decision
+        (:func:`patchfrog.review.effort.uniform_baseline_decision`)
+        instead of the real, tiered :class:`~patchfrog.review.effort.ReviewEffortPolicy`
+        -- lets a suite compare "current/uniform effort" against
+        "quality-cost guard" runs for the same fixtures without
+        duplicating any production tiering logic. The default (``True``)
+        is what every real review uses."""
+
         start = time.monotonic()
         try:
             return await asyncio.wait_for(
@@ -265,6 +277,7 @@ class EvaluationRunner:
                     case=case, cases_root=cases_root, mode=mode, reviewer_provider=reviewer_provider,
                     critic_provider=critic_provider, critic_enabled=critic_enabled,
                     context_config_override=context_config_override, start=start,
+                    use_quality_cost_guard=use_quality_cost_guard,
                 ),
                 timeout=timeout_seconds,
             )
@@ -307,6 +320,7 @@ class EvaluationRunner:
         critic_enabled: bool,
         context_config_override: ContextConfig | None,
         start: float,
+        use_quality_cost_guard: bool = True,
     ) -> CaseResult:
         errors = validate_case(case, cases_root=cases_root)
         if errors:
@@ -362,6 +376,9 @@ class EvaluationRunner:
             calls_by_role: dict[AgentRole, int] = {}
             reviewer_input_tokens_by_role: dict[AgentRole, int] = {}
             reviewer_output_tokens_by_role: dict[AgentRole, int] = {}
+            candidates_by_tier: dict[ReviewEffortTier, int] = {}
+            candidates_escalated = critic_calls = retries_consumed = 0
+            reviewer_thinking_tokens = critic_thinking_tokens = 0
 
             if mode in (EvaluationMode.AI_ONLY, EvaluationMode.FULL_PIPELINE):
                 provider = reviewer_provider or _default_reviewer_provider()
@@ -376,9 +393,14 @@ class EvaluationRunner:
                     critic_enabled=effective_critic is not None,
                     max_concurrent_requests=1,
                 )
+                effort_decision_override = (
+                    None if use_quality_cost_guard
+                    else uniform_baseline_decision(max_retries=review_config.max_retries)
+                )
                 service = PullRequestReviewService(
                     session_factory=self._session_factory, reviewer_provider=provider,
                     critic_provider=effective_critic,
+                    effort_decision_override=effort_decision_override,
                 )
                 summary: ReviewRunSummary = await service.review_local(
                     repository_id=repository_id, root_path=repo_root, repository_full_name=full_name,
@@ -405,6 +427,12 @@ class EvaluationRunner:
                 reviewer_output_tokens_by_role = {
                     role: usage.output_tokens for role, usage in summary.usage_by_role.items()
                 }
+                candidates_by_tier = dict(summary.candidates_by_tier)
+                candidates_escalated = summary.candidates_escalated
+                critic_calls = summary.critic_calls
+                retries_consumed = summary.retries_consumed
+                reviewer_thinking_tokens = summary.reviewer_usage.thinking_tokens
+                critic_thinking_tokens = summary.critic_usage.thinking_tokens
 
                 ai_predictions = [_ai_to_predicted(f, candidate_by_id.get(f.candidate_id)) for f in ai_findings]
                 proposals_predicted = [
@@ -429,6 +457,12 @@ class EvaluationRunner:
                 reviewer_input_tokens_by_role=reviewer_input_tokens_by_role,
                 reviewer_output_tokens_by_role=reviewer_output_tokens_by_role,
                 analyzer_executions=tuple(analyzer_executions),
+                candidates_by_tier=candidates_by_tier,
+                candidates_escalated=candidates_escalated,
+                critic_calls=critic_calls,
+                reviewer_thinking_tokens=reviewer_thinking_tokens,
+                critic_thinking_tokens=critic_thinking_tokens,
+                retries_consumed=retries_consumed,
             )
         finally:
             shutil.rmtree(repo_root, ignore_errors=True)

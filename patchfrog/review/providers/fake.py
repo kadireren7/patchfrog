@@ -37,6 +37,11 @@ class ScriptedResponse:
     raw_json: str
     input_tokens: int = 100
     output_tokens: int = 50
+    #: See :attr:`~patchfrog.review.provider.ProviderUsage.thinking_tokens`
+    #: -- 0 by default, matching most scripted-response tests that don't
+    #: care about it; set explicitly to exercise thinking-token
+    #: accounting (Quality + Cost Guard, spec section 10).
+    thinking_tokens: int = 0
     latency_ms: float = 5.0
     stop_reason: str | None = "end_turn"
 
@@ -77,7 +82,11 @@ class FakeLLMProvider:
 
         return ProviderResult(
             raw_json=outcome.raw_json,
-            usage=ProviderUsage(input_tokens=outcome.input_tokens, output_tokens=outcome.output_tokens),
+            usage=ProviderUsage(
+                input_tokens=outcome.input_tokens,
+                output_tokens=outcome.output_tokens,
+                thinking_tokens=outcome.thinking_tokens,
+            ),
             latency_ms=outcome.latency_ms,
             stop_reason=outcome.stop_reason,
         )

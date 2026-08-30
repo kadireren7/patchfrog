@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -74,6 +74,23 @@ class Settings(BaseSettings):
         default=None, alias="PATCHFROG_REVIEW_REQUEST_TIMEOUT_SECONDS"
     )
 
+    # Operator hard cost/candidate ceilings for the Quality + Cost Guard
+    # (patchfrog.review.config_resolution.apply_operator_hard_caps).
+    # Deliberately NOT read from .patchfrog.yml -- a repository may
+    # request *less* than these (see ReviewConfig's own, smaller
+    # defaults) but never more; effective = min(repo_intent,
+    # operator_hard_cap) per field. Defaults set generously above
+    # ReviewConfig's own defaults so an unconfigured self-hosted install
+    # behaves exactly as before this milestone -- these only bite when a
+    # repository's own .patchfrog.yml asks for something unusually large.
+    review_max_candidates: int = Field(default=100, alias="PATCHFROG_MAX_REVIEW_CANDIDATES")
+    review_max_total_input_tokens: int = Field(default=1_000_000, alias="PATCHFROG_MAX_TOTAL_INPUT_TOKENS")
+    review_max_output_tokens_per_candidate: int = Field(
+        default=16_000, alias="PATCHFROG_MAX_OUTPUT_TOKENS_PER_CANDIDATE"
+    )
+    review_max_concurrent_requests: int = Field(default=16, alias="PATCHFROG_MAX_CONCURRENT_REVIEW_REQUESTS")
+    review_max_retries: int = Field(default=5, alias="PATCHFROG_MAX_REVIEW_RETRIES")
+
     # -- Public beta operational limits (patchfrog.ops) --
     # All optional with conservative defaults; never required for
     # startup, never a source of secrets. See docs/operations.md.
@@ -135,6 +152,19 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"PATCHFROG_REVIEW_REQUEST_TIMEOUT_SECONDS must be positive, got {value!r}"
             )
+        return value
+
+    @field_validator(
+        "review_max_candidates",
+        "review_max_total_input_tokens",
+        "review_max_output_tokens_per_candidate",
+        "review_max_concurrent_requests",
+        "review_max_retries",
+    )
+    @classmethod
+    def _validate_review_hard_caps_positive(cls, value: int, info: ValidationInfo) -> int:
+        if value <= 0:
+            raise ValueError(f"{info.field_name} must be positive, got {value!r}")
         return value
 
     @model_validator(mode="after")

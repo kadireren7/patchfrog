@@ -177,6 +177,35 @@ quota is also small (20 requests/day per project/model was observed live
 for `gemini-3.6-flash`) -- expect it to exhaust quickly even for modest
 dogfood use; a paid tier is required for any real usage volume.
 
+### Operator review cost/candidate hard caps (Quality + Cost Guard)
+
+A related but distinct trust boundary from provider/model selection
+above: a repository's own `.patchfrog.yml` may still request an
+arbitrarily large review-cost/candidate-count budget (`max_candidates`,
+`max_total_input_tokens`, `max_output_tokens_per_candidate`,
+`max_concurrent_requests`, `max_retries`) unless the operator sets a
+hard ceiling. These are environment-only, exactly like provider/model
+credentials -- **never** `.patchfrog.yml`-controlled:
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `PATCHFROG_MAX_REVIEW_CANDIDATES` | Hard ceiling on `ReviewConfig.max_candidates` | `100` |
+| `PATCHFROG_MAX_TOTAL_INPUT_TOKENS` | Hard ceiling on `ReviewConfig.max_total_input_tokens` | `1000000` |
+| `PATCHFROG_MAX_OUTPUT_TOKENS_PER_CANDIDATE` | Hard ceiling on `ReviewConfig.max_output_tokens_per_candidate` | `16000` |
+| `PATCHFROG_MAX_CONCURRENT_REVIEW_REQUESTS` | Hard ceiling on `ReviewConfig.max_concurrent_requests` | `16` |
+| `PATCHFROG_MAX_REVIEW_RETRIES` | Hard ceiling on `ReviewConfig.max_retries` | `5` |
+
+`patchfrog.review.config_resolution.apply_operator_hard_caps` computes
+`effective = min(repo_intent, operator_hard_cap)` per field, applied by
+both the CLI and the production Celery task immediately after
+resolving the repository's own config -- a repository may voluntarily
+request *less* than these, never more. Defaults are set above
+`ReviewConfig`'s own (smaller) defaults, so an unconfigured self-hosted
+install behaves exactly as before this feature existed; these only bite
+when a repository's own `.patchfrog.yml` asks for something unusually
+large. See `docs/quality-cost-guard.md` for the full Quality + Cost
+Guard design this trust boundary supports.
+
 ### Provider startup/health behavior
 
 A missing `ANTHROPIC_API_KEY`/`GEMINI_API_KEY` deliberately does **not** fail `/health/ready`

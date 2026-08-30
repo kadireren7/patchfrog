@@ -122,7 +122,10 @@ from patchfrog.publishing.service import (
 from patchfrog.repository.git import GitError, run_git
 from patchfrog.review.candidates import ReviewCandidateGenerator
 from patchfrog.review.config import MalformedReviewConfigError, ReviewConfig
-from patchfrog.review.config_resolution import resolve_repository_review_config
+from patchfrog.review.config_resolution import (
+    apply_operator_hard_caps,
+    resolve_repository_review_config,
+)
 from patchfrog.review.domain import ReviewCandidate, ReviewRunSummary
 from patchfrog.review.local_diff import diff_against_base
 from patchfrog.review.provider import LLMProvider
@@ -324,6 +327,7 @@ async def _review_dry_run(
         config = await resolve_repository_review_config(
             local=True, commit_sha=commit_sha, repository_full_name=full_name, root_path=repository_path
         )
+        config = apply_operator_hard_caps(config, settings=settings)
         runtime_config = resolve_review_runtime_config(settings)
         diff_files = diff_against_base(repository_path, base_ref)
 
@@ -383,6 +387,7 @@ async def _review_local(
             config = await resolve_repository_review_config(
                 local=True, commit_sha=commit_sha, repository_full_name=full_name, root_path=repository_path
             )
+            config = apply_operator_hard_caps(config, settings=settings)
         except MalformedReviewConfigError as exc:
             await persist_malformed_config_failure(
                 session_factory,

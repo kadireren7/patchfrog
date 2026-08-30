@@ -31,6 +31,7 @@ from patchfrog.evaluation.matcher import unsupported_reason
 from patchfrog.evaluation.metrics import compute_critic_comparison, compute_static_ai_overlap
 from patchfrog.evaluation.runner import EvaluationRunner
 from patchfrog.review.agents.roles import AgentRole
+from patchfrog.review.effort_types import ReviewEffortTier
 from patchfrog.review.provider import ProviderRequest
 from patchfrog.review.providers.fake import FakeLLMProvider, ScriptedResponse
 
@@ -55,6 +56,14 @@ def _write_case(tmp_path: Path, case_id: str, files: dict[str, str], **case_kwar
 
 
 _BILLING_SOURCE = "class Account:\n    def can_withdraw(self, balance, amount):\n        return amount >= balance\n"
+#: Same shape as _BILLING_SOURCE, but the enclosing class name matches
+#: patchfrog.review.agents.selection's security-sensitive naming
+#: heuristic ("auth" -- see AgentSelectionReason.SECURITY_SENSITIVE_NAMING).
+#: This is a real (non-fallback) security signal, so the Quality + Cost
+#: Guard (patchfrog.review.effort) tiers this candidate DEEP rather than
+#: LIGHT -- used by tests that specifically need the Security role to
+#: always run, independent of tiering itself.
+_SECURITY_SIGNAL_SOURCE = "class AuthAccount:\n    def can_withdraw(self, balance, amount):\n        return amount >= balance\n"
 
 
 def _finding(*, file_path: str = "billing.py", line: int = 3, title: str = "bug", quoted: str = "return amount >= balance") -> dict[str, object]:
@@ -133,7 +142,12 @@ async def test_miss_end_to_end(session_factory: async_sessionmaker[AsyncSession]
 async def test_hallucinated_finding_is_rejected_by_validation_and_marked_unsupported(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
-    case, cases_root = _write_case(tmp_path, "hallu-case", {"billing.py": _BILLING_SOURCE}, expected=())
+    # Quality + Cost Guard: uses _SECURITY_SIGNAL_SOURCE (not the plain
+    # _BILLING_SOURCE) so this candidate has a real security-naming
+    # signal and tiers DEEP -- both specialist roles are guaranteed to
+    # run, which is what this test needs to exercise (independent of
+    # tiering itself, see patchfrog.review.effort).
+    case, cases_root = _write_case(tmp_path, "hallu-case", {"billing.py": _SECURITY_SIGNAL_SOURCE}, expected=())
     # Cites evidence text that never appears anywhere in billing.py --
     # Phase 5 validation must reject this before it ever becomes an
     # accepted finding.
@@ -284,8 +298,11 @@ async def test_evaluation_records_role_provenance_and_call_counts(
     this test's provider is scripted purely on candidate/schema_name,
     never on the case's expected findings."""
 
+    # Quality + Cost Guard: uses _SECURITY_SIGNAL_SOURCE so this candidate
+    # has a real security-naming signal and tiers DEEP -- both specialist
+    # roles (whose provenance this test checks) are guaranteed to run.
     case, cases_root = _write_case(
-        tmp_path, "role-provenance-case", {"billing.py": _BILLING_SOURCE},
+        tmp_path, "role-provenance-case", {"billing.py": _SECURITY_SIGNAL_SOURCE},
         expected=(ExpectedFinding(id="ef1", category=FindingCategory.CORRECTNESS, file="billing.py", issue_family="fam", symbol="can_withdraw", line=3, ground_truth_source=GroundTruthSource.AI_EXPECTED),),
     )
     findings_response = ScriptedResponse(raw_json=json.dumps({"findings": [_finding()]}))
@@ -306,6 +323,74 @@ async def test_evaluation_records_role_provenance_and_call_counts(
 
     assert len(result.predictions) == 1
     assert result.predictions[0].prediction.agent_role == AgentRole.CORRECTNESS
+
+
+async def test_quality_cost_guard_ablation_changes_call_shape_for_identical_fixture(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Required scenario: the evaluation harness must be able to compare
+    the real Quality + Cost Guard (tiered) against a fixed "uniform
+    baseline" (spec sections 24/25) for the *same* fixture. This is a
+    pipeline-preservation / cost-behavior comparison, not a claim about
+    real-model quality: with FakeLLMProvider, the plain (no security-
+    naming signal) fixture tiers LIGHT under the guard -- dropping the
+    Security role -- but the uniform baseline always calls both roles,
+    exactly like the pre-Milestone-F engine did."""
+
+    case, cases_root = _write_case(tmp_path, "ablation-guard-case", {"billing.py": _BILLING_SOURCE}, expected=())
+    reviewer_factory: Callable[[ProviderRequest], ScriptedResponse] = _factory_for_target(
+        "can_withdraw", _NO_FINDINGS
+    )
+    runner = EvaluationRunner(session_factory=session_factory)
+
+    guard_result = await runner.run_case(
+        case, cases_root=cases_root, mode=EvaluationMode.FULL_PIPELINE,
+        reviewer_provider=FakeLLMProvider(response_factory=reviewer_factory),
+        use_quality_cost_guard=True,
+    )
+    baseline_result = await runner.run_case(
+        case, cases_root=cases_root, mode=EvaluationMode.FULL_PIPELINE,
+        reviewer_provider=FakeLLMProvider(response_factory=reviewer_factory),
+        use_quality_cost_guard=False,
+    )
+    assert not guard_result.is_error, guard_result.error
+    assert not baseline_result.is_error, baseline_result.error
+
+    assert guard_result.candidates_by_tier.get(ReviewEffortTier.LIGHT) == guard_result.candidates_reviewed
+    # Fixed override -- every candidate records the same constant
+    # STANDARD-equivalent tier, never LIGHT's role reduction.
+    assert baseline_result.candidates_by_tier.get(ReviewEffortTier.STANDARD) == baseline_result.candidates_reviewed
+    assert baseline_result.calls_by_role.get(AgentRole.SECURITY, 0) > guard_result.calls_by_role.get(
+        AgentRole.SECURITY, 0
+    )
+
+
+async def test_uniform_baseline_ablation_never_escalates_even_for_high_risk_proposal(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """A genuinely *fixed* comparison baseline must never escalate --
+    not via adaptive context (already the case) and not via the
+    post-proposal high-risk-proposal path either, even when the
+    reviewer's response would trigger it under the real guard."""
+
+    case, cases_root = _write_case(tmp_path, "ablation-no-escalation-case", {"billing.py": _BILLING_SOURCE}, expected=())
+    high_severity = ScriptedResponse(raw_json=json.dumps({"findings": [_finding(title="bug", quoted="return amount >= balance")]}))
+    reviewer_factory: Callable[[ProviderRequest], ScriptedResponse] = _factory_for_target("can_withdraw", high_severity)
+    runner = EvaluationRunner(session_factory=session_factory)
+
+    guard_result = await runner.run_case(
+        case, cases_root=cases_root, mode=EvaluationMode.FULL_PIPELINE,
+        reviewer_provider=FakeLLMProvider(response_factory=reviewer_factory), use_quality_cost_guard=True,
+    )
+    baseline_result = await runner.run_case(
+        case, cases_root=cases_root, mode=EvaluationMode.FULL_PIPELINE,
+        reviewer_provider=FakeLLMProvider(response_factory=reviewer_factory), use_quality_cost_guard=False,
+    )
+    assert not guard_result.is_error, guard_result.error
+    assert not baseline_result.is_error, baseline_result.error
+
+    assert guard_result.candidates_escalated > 0
+    assert baseline_result.candidates_escalated == 0
 
 
 async def test_evaluation_supports_fixed_and_adaptive_context_ablation(

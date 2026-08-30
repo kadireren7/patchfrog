@@ -122,9 +122,14 @@ async def test_tight_total_token_budget_skips_candidates_without_calling_the_pro
     )
 
     assert summary.candidates_skipped_budget > 0
-    # Agent Orchestration v1: both specialist roles' combined estimated
+    # Agent Orchestration v1: every selected role's combined estimated
     # input is reserved together per candidate (see
     # patchfrog.review.orchestration.AgentOrchestrator) -- a candidate is
-    # either fully reviewed by both roles or fully skipped, never partial.
-    assert len(provider.calls) == summary.candidates_reviewed * 2
+    # either fully reviewed by every role its effort tier selected, or
+    # fully skipped, never partial. Quality + Cost Guard (Milestone F):
+    # a LIGHT-tier candidate with no real security signal only selects
+    # Correctness, so the per-candidate call count is now 1 or 2 (never
+    # more), not a fixed 2 -- these synthetic module-region candidates
+    # have no static findings/naming signal, so they are all LIGHT.
+    assert summary.candidates_reviewed <= len(provider.calls) <= summary.candidates_reviewed * 2
     assert summary.candidate_count == summary.candidates_reviewed + summary.candidates_skipped_budget
