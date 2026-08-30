@@ -365,6 +365,34 @@ async def test_quality_cost_guard_ablation_changes_call_shape_for_identical_fixt
     )
 
 
+async def test_uniform_baseline_ablation_never_escalates_even_for_high_risk_proposal(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """A genuinely *fixed* comparison baseline must never escalate --
+    not via adaptive context (already the case) and not via the
+    post-proposal high-risk-proposal path either, even when the
+    reviewer's response would trigger it under the real guard."""
+
+    case, cases_root = _write_case(tmp_path, "ablation-no-escalation-case", {"billing.py": _BILLING_SOURCE}, expected=())
+    high_severity = ScriptedResponse(raw_json=json.dumps({"findings": [_finding(title="bug", quoted="return amount >= balance")]}))
+    reviewer_factory: Callable[[ProviderRequest], ScriptedResponse] = _factory_for_target("can_withdraw", high_severity)
+    runner = EvaluationRunner(session_factory=session_factory)
+
+    guard_result = await runner.run_case(
+        case, cases_root=cases_root, mode=EvaluationMode.FULL_PIPELINE,
+        reviewer_provider=FakeLLMProvider(response_factory=reviewer_factory), use_quality_cost_guard=True,
+    )
+    baseline_result = await runner.run_case(
+        case, cases_root=cases_root, mode=EvaluationMode.FULL_PIPELINE,
+        reviewer_provider=FakeLLMProvider(response_factory=reviewer_factory), use_quality_cost_guard=False,
+    )
+    assert not guard_result.is_error, guard_result.error
+    assert not baseline_result.is_error, baseline_result.error
+
+    assert guard_result.candidates_escalated > 0
+    assert baseline_result.candidates_escalated == 0
+
+
 async def test_evaluation_supports_fixed_and_adaptive_context_ablation(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:

@@ -8,6 +8,8 @@ Wires together, for one candidate and its single, already-built
         -> concurrent, budget-guarded specialist calls (Correctness, Security)
         -> independent deterministic validation per proposal
         -> cross-role duplicate merge / contradiction detection
+        -> post-proposal escalation (a surviving proposal's own risk profile
+           may raise the decision to DEEP -- see _detect_high_risk_proposal)
         -> tier-aware critic verification (CriticSelectionPolicy + CriticExpectation)
         -> contradiction resolution (suppress if the critic can't resolve it)
 
@@ -61,7 +63,7 @@ from dataclasses import dataclass, field
 
 import structlog
 
-from patchfrog.analysis.domain import Confidence
+from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.context.tokens import estimate_tokens
 from patchfrog.review.agents.cross_role import (
     group_cross_role,
@@ -73,7 +75,7 @@ from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.critic import CriticService
 from patchfrog.review.critic_selection import CriticSelectionInput, CriticSelectionPolicy
 from patchfrog.review.domain import AIReviewFinding, CriticVerdict, TokenUsage, ValidationOutcome
-from patchfrog.review.effort import ReviewEffortDecision
+from patchfrog.review.effort import ReviewEffortDecision, ReviewEffortPolicy
 from patchfrog.review.effort_types import CriticExpectation
 from patchfrog.review.prompt import build_agent_prompt, build_critic_prompt
 from patchfrog.review.provider import (
@@ -132,6 +134,47 @@ class CandidateOrchestrationResult:
     #: this one candidate -- see :mod:`patchfrog.review.effort`.
     critic_calls: int = 0
     retries_consumed: int = 0
+    #: The *effective* effort decision after this candidate's own
+    #: post-proposal escalation check
+    #: (:meth:`~patchfrog.review.effort.ReviewEffortPolicy.escalate_for_high_risk_proposal`)
+    #: -- ``None`` only on the ``skipped_budget``/``failed`` early-return
+    #: paths, where no proposal ever existed to escalate on and the
+    #: caller's own pre-call decision remains authoritative. The caller
+    #: (:mod:`patchfrog.review.service`) persists *this* decision, not
+    #: the one it passed in, so a candidate that escalated here is never
+    #: persisted under its stale pre-escalation tier.
+    effort_decision: ReviewEffortDecision | None = None
+
+
+def _detect_high_risk_proposal(
+    proposals: tuple[AgentProposal, ...], *, contradiction_indices: frozenset[int]
+) -> bool:
+    """The post-proposal escalation trigger (spec: bounded escalation
+    from a validated proposal's own risk profile, the only escalation
+    path a LIGHT candidate can actually reach -- see
+    :mod:`patchfrog.review.effort`'s module docstring for why LIGHT can
+    never reach :meth:`~patchfrog.review.effort.ReviewEffortPolicy.finalize`'s
+    adaptive-expansion path instead).
+
+    Deterministic, fixed rule -- checked against every proposal that
+    passed validation and was not already suppressed by cross-role
+    dedup, regardless of which *role* produced it: nothing in the
+    response schema prevents a Correctness-role response from returning
+    a security-categorized finding, so this never assumes
+    ``proposal.role`` determines ``finding.category``.
+    """
+
+    for i, proposal in enumerate(proposals):
+        if proposal.validated.outcome != ValidationOutcome.VALID or proposal.suppressed_reason is not None:
+            continue
+        if i in contradiction_indices:
+            return True
+        finding = proposal.validated.finding
+        if finding.severity in (Severity.HIGH, Severity.CRITICAL):
+            return True
+        if finding.category is FindingCategory.SECURITY:
+            return True
+    return False
 
 
 def _find_conflicting(
@@ -174,6 +217,7 @@ class AgentOrchestrator:
         max_output_tokens_per_candidate: int,
         max_retries: int,
         critic_selection_policy: CriticSelectionPolicy | None = None,
+        effort_policy: ReviewEffortPolicy | None = None,
     ) -> None:
         self._reviewer_providers = reviewer_providers
         self._critic = critic
@@ -181,6 +225,12 @@ class AgentOrchestrator:
         self._max_output_tokens_per_candidate = max_output_tokens_per_candidate
         self._max_retries = max_retries
         self._critic_selection_policy = critic_selection_policy or CriticSelectionPolicy()
+        #: Used only for the post-proposal escalation check (spec:
+        #: bounded escalation from a validated proposal's own risk
+        #: profile) -- role/context/output-budget decisions still come
+        #: entirely from the ``effort_decision`` the caller passes into
+        #: :meth:`review_candidate`, never re-derived here.
+        self._effort_policy = effort_policy or ReviewEffortPolicy()
 
     async def review_candidate(
         self,
@@ -192,7 +242,16 @@ class AgentOrchestrator:
         budget_lock: asyncio.Lock,
         budget_state: dict[str, int],
         log: structlog.stdlib.BoundLogger,
+        allow_post_proposal_escalation: bool = True,
     ) -> CandidateOrchestrationResult:
+        """``allow_post_proposal_escalation=False`` is the evaluation
+        harness's "uniform baseline" ablation hook
+        (:mod:`patchfrog.review.effort`'s ``uniform_baseline_decision``,
+        threaded through :class:`~patchfrog.review.service.PullRequestReviewService`) --
+        a genuinely *fixed* comparison baseline must never escalate,
+        exactly like :meth:`~patchfrog.review.effort.ReviewEffortPolicy.finalize`
+        is already skipped for it. Every real review leaves this at the
+        default ``True``."""
         # Fixed canonical order, not set iteration order, so zip()/log
         # output/tests are deterministic regardless of frozenset hashing.
         selected_roles = tuple(
@@ -301,13 +360,31 @@ class AgentOrchestrator:
         grouping = group_cross_role(proposals_t)
         proposals_t = grouping.proposals
 
+        # Post-proposal escalation (spec: bounded escalation from a
+        # validated proposal's own risk profile) -- the only escalation
+        # path a LIGHT candidate can actually reach, since LIGHT disables
+        # adaptive context and so can never trigger
+        # ReviewEffortPolicy.finalize's stage-2 path. Never reruns a
+        # specialist role and never rebuilds context (both already
+        # happened above) -- this only strengthens critic verification
+        # for whatever proposals already exist. At most one escalation
+        # total (escalate_for_high_risk_proposal guards on tier is DEEP,
+        # which also catches a candidate already escalated by finalize).
+        high_risk_detected = allow_post_proposal_escalation and _detect_high_risk_proposal(
+            proposals_t, contradiction_indices=grouping.contradiction_indices
+        )
+        effort_decision = self._effort_policy.escalate_for_high_risk_proposal(
+            effort_decision, high_risk_proposal_detected=high_risk_detected, max_retries=self._max_retries
+        )
+        critic_max_retries = min(self._max_retries, effort_decision.retry_limit)
+
         proposals_t, critic_calls, critic_retries = await self._critique(
             proposals_t,
             candidate_evidence=evidence,
             contradiction_indices=grouping.contradiction_indices,
             min_final_confidence=min_final_confidence,
             critic_expectation=effort_decision.critic_expectation,
-            max_retries=role_max_retries,
+            max_retries=critic_max_retries,
             max_total_input_tokens=max_total_input_tokens,
             budget_lock=budget_lock,
             budget_state=budget_state,
@@ -333,6 +410,7 @@ class AgentOrchestrator:
             calls_by_role=calls_by_role,
             critic_calls=critic_calls,
             retries_consumed=retries_consumed,
+            effort_decision=effort_decision,
         )
 
     async def _call_role(

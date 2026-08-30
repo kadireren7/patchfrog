@@ -152,31 +152,66 @@ independently received the *full* configured ceiling -- a real bug this
 milestone fixes: two roles could together spend up to 2x the configured
 per-candidate output budget.
 
-## Two-stage decision, and bounded escalation
+## Three-stage decision, and bounded escalation
 
-Tiering is necessarily two-stage, because one tier signal (adaptive
-context expansion) only exists *after* context is built, while tier
-itself controls the context budget used to build it:
+Tiering is decided in three stages, because two tier signals only exist
+*after* something the tier itself must already have controlled has
+happened: adaptive context expansion only exists after context is
+built (which tier's context policy controls), and a proposal's own risk
+profile only exists after specialist calls return (which tier's role
+selection controls):
 
 1. **`decide_provisional`** -- before context is built, from only the
    candidate and its static findings. Determines the context
    budget/adaptive-mode policy used for context generation.
 2. **`finalize`** -- after context is built, before any specialist
    provider call. May escalate (never de-escalate) the provisional tier
-   by exactly one step, to DEEP, if and only if adaptive context
-   expansion actually occurred (`ContextBundle.adaptive_metrics.occurred`)
-   -- concrete depth-2 evidence, not a guess. Bounded to exactly one
-   escalation per candidate, can never exceed the run's configured
-   budget any more than DEEP itself already can, never recursive, never
-   an LLM-based router. `ReviewEffortDecision.escalated`/
-   `escalation_reason` record it for audit.
+   to DEEP if and only if adaptive context expansion actually occurred
+   (`ContextBundle.adaptive_metrics.occurred`) -- concrete depth-2
+   evidence, not a guess.
+3. **`escalate_for_high_risk_proposal`** -- after specialist proposals
+   are validated and cross-role-grouped, before critic verification.
+   May escalate (never de-escalate) to DEEP if a surviving (valid,
+   not-yet-suppressed) proposal carries a deterministic high-risk signal:
+   HIGH/CRITICAL severity, security category, or membership in an
+   unresolved cross-role contradiction group -- checked regardless of
+   which role produced the proposal, since nothing in the response
+   schema ties a role to a category. This is the escalation path a
+   LIGHT candidate actually reaches in practice: LIGHT disables adaptive
+   context outright, so stage 2 is structurally unreachable for it.
 
-A **severity/security-triggered "escalation"** (e.g. a LIGHT candidate's
-Correctness role happens to produce a HIGH-severity or security-category
-proposal) is *not* a second escalation mechanism -- it is already
-handled by `CriticSelectionPolicy`'s existing mandatory-critique rules
-(which apply regardless of `relaxed`), so a LIGHT candidate's risky
-finding still always gets verified before it can be accepted.
+Both stages are bounded identically: at most one escalation per
+candidate total across stages 2 and 3 combined (each guards on
+`tier is DEEP`, which also catches a candidate that started DEEP from
+`decide_provisional` itself), can never exceed the run's configured
+budget any more than DEEP itself already can, never recursive, never an
+LLM-based router. `ReviewEffortDecision.escalated`/`escalation_reason`
+(`ADAPTIVE_EXPANSION_OCCURRED` or `HIGH_RISK_PROPOSAL`) record which
+path fired, for audit -- both are deterministic and bounded, just
+triggered at different points in the pipeline.
+
+Escalation at stage 3 **never reruns a specialist role and never
+rebuilds context** -- both already happened by the time it runs; it
+only strengthens verification for whatever proposals already exist:
+`critic_expectation` becomes `MANDATORY` (bypassing
+`CriticSelectionPolicy`'s selective skip rule entirely for this
+candidate's remaining proposals) and the critic's own retry ceiling
+rises to whatever DEEP would already allow. If that now-mandatory
+critic call can't get its budget reservation, the proposal is
+suppressed (`SUPPRESSED_BUDGET`), exactly as "Global run budget and
+reservation" below describes -- escalating never bypasses that safety
+net, it feeds directly into it.
+
+Note that `CriticSelectionPolicy`'s own existing mandatory-critique
+rules (HIGH/CRITICAL severity, security category -- unaffected by
+`relaxed`) already forced critique of a risky LIGHT-tier proposal even
+before stage 3 existed, so stage 3's addition does not change whether
+that specific proposal gets verified. What stage 3 adds is making the
+escalation **explicit and persisted** (the candidate's recorded tier
+becomes DEEP, `escalated=True`, with an audited reason) rather than an
+implicit side-effect of the critic-selection rules alone, and it
+strengthens verification for *every* remaining proposal on that
+candidate, not just the one that triggered it.
 
 ## Global run budget and reservation
 
@@ -343,11 +378,12 @@ per-role call/token breakdowns from Agent Orchestration v1.
 - Run budget exhausted before a candidate's reviewer reservation can be
   made: the whole candidate is skipped (`skipped_budget`), never
   partially started.
-- An escalation that would require more budget than remains: the
-  candidate proceeds at its (lower) provisional tier rather than
-  blocking or retrying context generation -- escalation is opportunistic
-  evidence-driven strengthening, never a hard requirement that can
-  itself fail a candidate.
+- Escalation itself never consumes budget or blocks -- it is a pure
+  decision-state change (stage 2: never retries/rebuilds context; stage
+  3: never reruns a specialist). The only budget-constrained consequence
+  of escalating is the resulting mandatory critic call, covered by the
+  "Mandatory critic unavailable" bullet above -- escalating never fails
+  a candidate by itself.
 - Fatal provider errors are never retried, at any tier. Transient
   retries are bounded by the tier's `retry_limit`, itself bounded by the
   configured `max_retries`.

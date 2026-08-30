@@ -945,6 +945,10 @@ class PullRequestReviewService:
             budget_lock=budget_lock,
             budget_state=budget_state,
             log=log,
+            # A fixed override (evaluation "uniform baseline" ablation)
+            # must never escalate -- same reasoning as skipping finalize()
+            # above.
+            allow_post_proposal_escalation=self._effort_decision_override is None,
         )
 
         if result.skipped_budget:
@@ -956,6 +960,14 @@ class PullRequestReviewService:
             outcome.calls_by_role = result.calls_by_role
             outcome.retries_consumed = result.retries_consumed
             return
+
+        # The orchestrator may have escalated this candidate post-proposal
+        # (a surviving proposal's own risk profile -- see
+        # patchfrog.review.orchestration._detect_high_risk_proposal);
+        # persist the *effective* decision, never the stale pre-escalation
+        # one this outcome was seeded with above.
+        if result.effort_decision is not None:
+            outcome.effort_decision = result.effort_decision
 
         outcome.proposals = list(result.proposals)
         outcome.reviewer_usage = result.reviewer_usage

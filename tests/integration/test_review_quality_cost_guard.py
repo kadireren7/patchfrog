@@ -25,7 +25,7 @@ from patchfrog.persistence.models.review import ReviewCandidateModel, ReviewRunM
 from patchfrog.persistence.repositories import AIFindingProposalRepository, RepositoryRepository
 from patchfrog.review.config import ReviewConfig
 from patchfrog.review.domain import ProposalStatus
-from patchfrog.review.effort_types import ReviewEffortTier
+from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 from patchfrog.review.provider import ProviderTransientError
 from patchfrog.review.providers.fake import FakeLLMProvider, ScriptedResponse
 from patchfrog.review.service import PullRequestReviewService
@@ -253,6 +253,119 @@ async def test_mandatory_critic_verification_unavailable_suppresses_risky_findin
     assert len(proposals) == 1
     assert proposals[0].status == ProposalStatus.SUPPRESSED_BUDGET
 
+    # The candidate started LIGHT (no static findings, no security-naming
+    # signal) but the HIGH-severity surviving proposal triggers the
+    # post-proposal escalation (patchfrog.review.orchestration._detect_high_risk_proposal)
+    # -- the *persisted* tier must reflect that effective DEEP state, not
+    # the stale pre-escalation LIGHT one.
+    by_symbol = await _candidate_tiers(session_factory, repository_id=repository_id)
+    candidate_row = by_symbol["can_withdraw"]
+    assert candidate_row.effort_tier == ReviewEffortTier.DEEP
+    assert candidate_row.escalated is True
+    assert candidate_row.escalation_reason == ReviewEffortReason.HIGH_RISK_PROPOSAL
+    assert ReviewEffortReason.HIGH_RISK_PROPOSAL.value in json.loads(candidate_row.effort_reasons)
+
+
+async def test_high_risk_proposal_escalates_and_survives_with_sufficient_critic_budget(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Scenario 6: same LIGHT + HIGH-severity setup as above, but with
+    ample budget -- the escalation still happens (persisted as DEEP), the
+    now-mandatory critic call actually runs, and an accepted verdict lets
+    the finding survive normally. Escalation strengthens verification; it
+    does not itself block publication."""
+
+    repository_id, commit_sha, root_path = await _setup_light_and_deep_candidates(
+        session_factory, full_name="test/qcg-critic-budget-ok"
+    )
+    diff_files = [_diff_marking_lines("src/billing.py", [14])]  # LIGHT candidate
+
+    high_severity_finding = {
+        "title": "Inverted comparison", "message": "m", "category": "correctness",
+        "severity": "high", "confidence": "high", "file_path": "src/billing.py", "start_line": 14, "end_line": 14,
+        "evidence": [{"file_path": "src/billing.py", "start_line": 14, "end_line": 14, "quoted_text": "return amount >= balance"}],
+        "reasoning_summary": "r", "suggested_fix": None,
+    }
+    reviewer = FakeLLMProvider(
+        response_factory=lambda req: ScriptedResponse(raw_json=json.dumps({"findings": [high_severity_finding]}))
+    )
+    critic = FakeLLMProvider(response_factory=lambda req: ScriptedResponse(raw_json=json.dumps(
+        {"decision": "accept", "reasoning_summary": "ok", "downgraded_severity": None, "downgraded_confidence": None}
+    )))
+    service = PullRequestReviewService(
+        session_factory=session_factory, reviewer_provider=reviewer, critic_provider=critic
+    )
+
+    summary = await service.review_local(
+        repository_id=repository_id, root_path=root_path, repository_full_name="test/qcg-critic-budget-ok",
+        commit_sha=commit_sha, diff_files=diff_files,
+    )
+    assert summary.accepted_count == 1
+    assert len(critic.calls) == 1  # mandatory verification actually ran this time
+
+    by_symbol = await _candidate_tiers(session_factory, repository_id=repository_id)
+    candidate_row = by_symbol["can_withdraw"]
+    assert candidate_row.effort_tier == ReviewEffortTier.DEEP
+    assert candidate_row.escalated is True
+
+
+async def test_contradiction_forces_bounded_deterministic_escalation(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Scenario 5: two roles disagreeing about the same code (a
+    contradiction) is itself a deterministic post-proposal escalation
+    signal -- bounded to the same single-escalation guarantee as any
+    other high-risk trigger. Uses the DEEP-naming candidate so both
+    roles run and can actually disagree (LIGHT would have dropped
+    Security before any contradiction could even arise)."""
+
+    repository_id, commit_sha, root_path = await _setup_light_and_deep_candidates(
+        session_factory, full_name="test/qcg-contradiction-escalation"
+    )
+    diff_files = [_diff_marking_lines("src/billing.py", [22])]  # DEEP (authorize_payment_result) candidate
+
+    reviewer = FakeLLMProvider(
+        response_factory=lambda req: (
+            ScriptedResponse(raw_json=json.dumps({"findings": [{
+                "title": "Unsafe SQL string interpolation", "message": "input is unsanitized before reaching the query",
+                "category": "security", "severity": "medium", "confidence": "high",
+                "file_path": "src/billing.py", "start_line": 22, "end_line": 22,
+                "evidence": [{"file_path": "src/billing.py", "start_line": 22, "end_line": 22, "quoted_text": 'order.status = "paid"'}],
+                "reasoning_summary": "untrusted value flows to the sink unsanitized", "suggested_fix": None,
+            }]}))
+            if req.schema_name == "review_response:security"
+            else ScriptedResponse(raw_json=json.dumps({"findings": [{
+                "title": "State-transition bug", "message": "the sanitizer guarantees this value is already safe",
+                "category": "correctness", "severity": "medium", "confidence": "high",
+                "file_path": "src/billing.py", "start_line": 22, "end_line": 22,
+                "evidence": [{"file_path": "src/billing.py", "start_line": 22, "end_line": 22, "quoted_text": 'order.status = "paid"'}],
+                "reasoning_summary": "input is validated and sanitized upstream", "suggested_fix": None,
+            }]}))
+        )
+    )
+    critic = FakeLLMProvider(response_factory=lambda req: ScriptedResponse(raw_json=json.dumps(
+        {"decision": "accept", "reasoning_summary": "ok", "downgraded_severity": None, "downgraded_confidence": None}
+    )))
+    service = PullRequestReviewService(
+        session_factory=session_factory, reviewer_provider=reviewer, critic_provider=critic
+    )
+
+    summary = await service.review_local(
+        repository_id=repository_id, root_path=root_path, repository_full_name="test/qcg-contradiction-escalation",
+        commit_sha=commit_sha, diff_files=diff_files,
+    )
+    # This candidate is already DEEP from the security-naming signal --
+    # the contradiction is still bounded to at most one escalation total
+    # (it was never LIGHT to begin with, so nothing new to escalate).
+    by_symbol = await _candidate_tiers(session_factory, repository_id=repository_id)
+    candidate_row = by_symbol["authorize_payment_result"]
+    assert candidate_row.effort_tier == ReviewEffortTier.DEEP
+    # Both sides were critiqued (contradiction forces critique regardless
+    # of CriticExpectation) and the critic accepted both -- unresolved,
+    # so both suppress rather than publish contradictory comments.
+    assert summary.accepted_count == 0
+    assert len(critic.calls) == 2
+
 
 async def test_effort_tier_and_cost_metrics_are_persisted(
     session_factory: async_sessionmaker[AsyncSession],
@@ -359,7 +472,25 @@ def max_theoretical_reviewer_calls(config: ReviewConfig) -> int:
     calls for one review run under a given :class:`ReviewConfig`: every
     candidate reviewed by both possible roles (tiering can only reduce
     this, never increase it -- see patchfrog.review.effort), each
-    retried up to the configured ceiling."""
+    retried up to the configured ceiling. Unaffected by post-proposal
+    escalation (patchfrog.review.orchestration._detect_high_risk_proposal)
+    -- escalation never triggers an additional reviewer call, only a
+    stricter critic policy for calls that already happened."""
+
+    roles = 2
+    return config.max_candidates * roles * (1 + config.max_retries)
+
+
+def max_theoretical_critic_calls(config: ReviewConfig) -> int:
+    """Companion bound for critic calls: at most one critique attempt
+    (with retries) per surviving reviewer-produced proposal, and at most
+    ``max_candidates * roles`` proposals can ever exist (one per
+    selected-role call, since a role is only ever called once per
+    candidate). Post-proposal escalation to mandatory critic
+    (``CriticExpectation.MANDATORY``) can only add candidates to this
+    ceiling's *reachable* set -- it can never raise the ceiling itself,
+    since escalation's own retry_limit is capped at the same configured
+    ``max_retries`` DEEP already uses."""
 
     roles = 2
     return config.max_candidates * roles * (1 + config.max_retries)
@@ -383,3 +514,39 @@ async def test_max_theoretical_reviewer_calls_bounds_actual_calls(
     )
 
     assert len(reviewer.calls) <= max_theoretical_reviewer_calls(config)
+
+
+async def test_max_theoretical_critic_calls_bounds_actual_calls_after_escalation(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Scenario 12: the call-count upper bound still holds once
+    post-proposal escalation is in play -- every proposal escalates its
+    candidate to mandatory critique (HIGH severity), and every critic
+    call transiently fails so every retry is actually exhausted."""
+
+    repository_id, commit_sha, root_path = await _setup_light_and_deep_candidates(
+        session_factory, full_name="test/qcg-critic-call-bound"
+    )
+    diff_files = [_diff_marking_lines("src/billing.py", [14, 22])]
+
+    high_severity_finding = {
+        "title": "bug", "message": "m", "category": "correctness", "severity": "high", "confidence": "high",
+        "file_path": "src/billing.py", "start_line": 14, "end_line": 14,
+        "evidence": [{"file_path": "src/billing.py", "start_line": 14, "end_line": 14, "quoted_text": "return amount >= balance"}],
+        "reasoning_summary": "r", "suggested_fix": None,
+    }
+    reviewer = FakeLLMProvider(
+        response_factory=lambda req: ScriptedResponse(raw_json=json.dumps({"findings": [high_severity_finding]}))
+    )
+    critic = FakeLLMProvider(response_factory=lambda req: ProviderTransientError("always transiently fails"))
+    config = ReviewConfig(max_candidates=5, max_retries=2, max_concurrent_requests=1)
+    service = PullRequestReviewService(
+        session_factory=session_factory, reviewer_provider=reviewer, critic_provider=critic
+    )
+
+    await service.review_local(
+        repository_id=repository_id, root_path=root_path, repository_full_name="test/qcg-critic-call-bound",
+        commit_sha=commit_sha, diff_files=diff_files, config=config,
+    )
+
+    assert len(critic.calls) <= max_theoretical_critic_calls(config)

@@ -35,11 +35,24 @@ class ReviewEffortReason(StrEnum):
     LARGE_CHANGED_SYMBOL = "large_changed_symbol"
     MANY_CHANGED_LINES = "many_changed_lines"
     MULTIPLE_STRUCTURAL_SIGNALS = "multiple_structural_signals"
-    #: Escalation-only: the provisional tier was raised because adaptive
-    #: context expansion actually occurred (see
+    #: Escalation-only: the provisional tier was raised *before* any
+    #: specialist provider call because adaptive context expansion
+    #: actually occurred (see
     #: :meth:`~patchfrog.review.effort.ReviewEffortPolicy.finalize`) --
     #: concrete depth-2 evidence, not a guess.
     ADAPTIVE_EXPANSION_OCCURRED = "adaptive_expansion_occurred"
+    #: Escalation-only: the tier was raised *after* specialist proposals
+    #: were validated and cross-role-grouped, because a surviving
+    #: proposal carries a deterministic high-risk signal (HIGH/CRITICAL
+    #: severity, security category, or membership in an unresolved
+    #: contradiction group) that was never accounted for at
+    #: decision-time (see
+    #: :meth:`~patchfrog.review.effort.ReviewEffortPolicy.escalate_for_high_risk_proposal`).
+    #: A distinct, later escalation point from
+    #: ``ADAPTIVE_EXPANSION_OCCURRED`` above -- this one exists precisely
+    #: because LIGHT disables adaptive context, so a LIGHT candidate can
+    #: never reach that escalation path at all.
+    HIGH_RISK_PROPOSAL = "high_risk_proposal"
 
 
 class CriticExpectation(StrEnum):

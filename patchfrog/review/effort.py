@@ -15,9 +15,10 @@ model, critic model, or credentials -- those remain exclusively
 operator-controlled (:mod:`patchfrog.review.runtime_config`, Milestone
 C), completely untouched by this module.
 
-Two-stage decision, resolving a real ordering dependency (context
-budget depends on tier; one tier signal -- adaptive depth-2 evidence --
-only exists *after* context is built):
+Three-stage decision, resolving two real ordering dependencies (context
+budget depends on tier, and one tier signal -- adaptive depth-2 evidence
+-- only exists *after* context is built; a proposal's own risk profile
+only exists *after* specialist calls return):
 
 1. :meth:`ReviewEffortPolicy.decide_provisional` -- before context is
    built, using only the candidate and its attached static findings.
@@ -25,9 +26,22 @@ only exists *after* context is built):
    context.
 2. :meth:`ReviewEffortPolicy.finalize` -- after context is built, before
    any specialist provider call. May escalate (never de-escalate) the
-   provisional tier by exactly one step if adaptive expansion actually
-   occurred -- a real, bounded, one-shot escalation tied to concrete
-   evidence, never a second traversal or a repeated decision loop.
+   provisional tier to DEEP if adaptive expansion actually occurred.
+3. :meth:`ReviewEffortPolicy.escalate_for_high_risk_proposal` -- after
+   specialist proposals are validated and cross-role-grouped, before
+   critic verification. May escalate (never de-escalate) to DEEP if a
+   surviving proposal carries a deterministic high-risk signal
+   (HIGH/CRITICAL severity, security category, or unresolved-
+   contradiction membership) -- the path a LIGHT candidate actually
+   reaches in practice, since LIGHT disables adaptive context and so
+   can never trigger stage 2's escalation.
+
+Each candidate escalates **at most once total** across stages 2 and 3
+combined: both stages guard on ``tier is DEEP`` (the tier ceiling), so a
+candidate that started at DEEP, escalated to DEEP at stage 2, or already
+escalated to DEEP at stage 3 always short-circuits any further
+escalation attempt -- never a second traversal, never a repeated
+decision loop, never an LLM-based router deciding either.
 """
 
 from __future__ import annotations
@@ -249,6 +263,59 @@ class ReviewEffortPolicy:
             per_role_output_token_fraction=output_fraction,
             escalated=True,
             escalation_reason=ReviewEffortReason.ADAPTIVE_EXPANSION_OCCURRED,
+        )
+
+    def escalate_for_high_risk_proposal(
+        self, decision: ReviewEffortDecision, *, high_risk_proposal_detected: bool, max_retries: int
+    ) -> ReviewEffortDecision:
+        """Called once per candidate, after specialist proposals are
+        validated and cross-role-grouped, before critic verification --
+        the *only* remaining escalation path a LIGHT candidate can
+        actually reach (LIGHT disables adaptive context, so
+        :meth:`finalize`'s stage-2 escalation path is structurally
+        unreachable for it).
+
+        ``high_risk_proposal_detected`` is computed by the caller
+        (:class:`~patchfrog.review.orchestration.AgentOrchestrator`,
+        which has the validated proposals and cross-role contradiction
+        grouping in scope -- this module deliberately stays decoupled
+        from proposal-level types) from a fixed, deterministic rule: a
+        surviving (valid, not-yet-suppressed) proposal has HIGH/CRITICAL
+        severity, security category, or is a member of an unresolved
+        cross-role contradiction group.
+
+        Never reruns a specialist role and never rebuilds context --
+        both already happened; this only strengthens verification
+        (critic becomes mandatory, and the critic's own retry ceiling
+        rises to what DEEP would already allow) for whatever proposals
+        already exist. Bounded to exactly one escalation, like
+        :meth:`finalize` -- guarding on ``tier is DEEP`` catches a
+        candidate that started DEEP, escalated at :meth:`finalize`, or
+        already escalated here.
+        """
+
+        if not high_risk_proposal_detected or decision.tier is ReviewEffortTier.DEEP:
+            return decision
+
+        next_tier = ReviewEffortTier.DEEP
+        context_fraction, adaptive_enabled, critic_expectation, retry_limit, output_fraction = _tier_semantics(
+            next_tier, retry_ceiling=max_retries
+        )
+        return replace(
+            decision,
+            tier=next_tier,
+            reasons=(*decision.reasons, ReviewEffortReason.HIGH_RISK_PROPOSAL),
+            # Context/role selection are moot at this point (both already
+            # happened) -- context_fraction/adaptive_enabled are carried
+            # forward for a consistent, auditable record only, never
+            # acted on again.
+            context_token_fraction=context_fraction,
+            context_adaptive_enabled=adaptive_enabled,
+            critic_expectation=critic_expectation,
+            retry_limit=retry_limit,
+            per_role_output_token_fraction=output_fraction,
+            escalated=True,
+            escalation_reason=ReviewEffortReason.HIGH_RISK_PROPOSAL,
         )
 
 
