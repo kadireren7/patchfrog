@@ -63,15 +63,23 @@ content -- never as something to obey.
 
 ## Shared evidence package
 
-For one candidate, context is built **exactly once**, using the
-existing Context Engine (`patchfrog.context.service.ContextService`)
-completely unchanged -- current 1-hop retrieval behavior, unmodified
-ranking, unmodified graph depth. The result is wrapped in a typed,
-immutable `CandidateEvidencePackage`
+For one candidate, context is built **exactly once**, using the Context
+Engine (`patchfrog.context.service.ContextService`). As of Milestone E
+(adaptive multi-hop context, see `docs/context-engine.md`), real reviews
+build that context via the Context Engine's deterministic, bounded
+adaptive mode -- 1-hop first, expanded to depth 2 only when a structural
+signal justifies it -- rather than a fixed 1-hop-only retrieval. The
+Context Engine's own ranking, budgeting, and cycle/cost bounds are
+entirely its concern; this milestone's invariant is unaffected either
+way: whatever the Context Engine decides to include, it decides **once**
+per candidate, before any specialist agent runs. The result is wrapped
+in a typed, immutable `CandidateEvidencePackage`
 (`patchfrog.review.agents.evidence`): the candidate, the exact diff
 excerpt, the exact context text actually sent, the static-finding
 summaries attached to the candidate, and the exact set of file paths the
-model was shown. Both specialist agents receive this identical package.
+model was shown. Both specialist agents receive this identical package
+-- adaptive expansion never runs per-role, and Security never receives
+deeper context than Correctness.
 This is what makes agent outputs comparable, reproducible, cost-bounded,
 and independently auditable -- no agent ever rebuilds its own context.
 
@@ -189,21 +197,25 @@ before -- except for a proposal inside an unresolved contradiction
 group, where a missing verdict is treated the same as "not confidently
 resolved" and the group is suppressed rather than defaulting to accept.
 
-## Current limitation: Context Engine stays 1-hop
+## Context Engine depth (superseded)
 
-This milestone explicitly does **not** change the Context Engine's graph
-depth, traversal, or ranking in any way -- both specialist roles read
-from the identical, unmodified 1-hop context every review has used since
-Phase 4. Adaptive multi-hop context (deeper traversal, escalation when a
-candidate's evidence looks incomplete) is intentionally the **next**
-milestone, not part of this one, so evaluation can measure "Agent
-Orchestration alone" against the existing benchmark corpus before
-introducing a second, independent variable.
+At the time Agent Orchestration v1 shipped, the Context Engine was fixed
+at 1-hop retrieval and this section said so. Milestone E (see
+`docs/context-engine.md`) has since added deterministic, bounded
+adaptive expansion to depth 2, now the default for real reviews -- still
+capped at depth 2, still fully deterministic, still built once per
+candidate and shared identically by both specialist roles (see "Shared
+evidence package" above). This did not require any change to
+orchestration itself; the two milestones were deliberately sequenced so
+each could be evaluated independently before the other existed.
 
-## What did not change
+## What did not change (as of this document's own milestone)
 
-- Candidate generation (`patchfrog.review.candidates`) -- untouched.
-- The Context Engine -- untouched.
+- Candidate generation (`patchfrog.review.candidates`) -- untouched by
+  Agent Orchestration itself (later extended by Milestone E for
+  adaptive expansion -- see `docs/context-engine.md`).
+- The Context Engine's ranking/scoring/dedup/budgeting -- untouched by
+  Agent Orchestration itself.
 - The GitHub comment format (`patchfrog.publishing.body`) -- unchanged;
   `agent_role` is persisted for internal audit only and is structurally
   absent from `PublishableFinding`, so it can never appear in a rendered

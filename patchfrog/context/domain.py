@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Literal
 from uuid import UUID
 
 
@@ -153,6 +154,71 @@ class ContextItem:
     truncated: bool = False
 
 
+class ExpansionReason(StrEnum):
+    """Why deterministic adaptive expansion (see
+    :mod:`patchfrog.context.adaptive`) decided a candidate's depth-1
+    context plausibly needs a second hop -- always a structural,
+    pre-provider-call signal, never an LLM judgment or an NLP heuristic
+    over comments/prose."""
+
+    #: A. A depth-1 caller/callee itself has resolvable call edges
+    #: outward -- a meaningful second hop exists to follow.
+    CALL_CHAIN_CONTINUATION = "call_chain_continuation"
+    #: B. A depth-1 caller/callee is itself on a changed line in this
+    #: diff -- it's not just adjacent, it's part of what's actually
+    #: being reviewed.
+    CHANGED_NEIGHBOR = "changed_neighbor"
+    #: C. The associated finding/candidate category is one where a
+    #: direct call relationship is already known to matter (memory
+    #: safety, resource management, concurrency, API misuse, security)
+    #: -- see :mod:`patchfrog.context.scoring`'s existing category
+    #: preference table, which this mirrors.
+    STATIC_CATEGORY_RELEVANCE = "static_category_relevance"
+    #: E. The target itself is structurally a thin wrapper/delegator --
+    #: small span, exactly one direct callee -- so the *real* logic a
+    #: reviewer needs is one hop further out.
+    THIN_WRAPPER = "thin_wrapper"
+
+
+#: Which direction(s) adaptive expansion selected -- deliberately a
+#: closed, explicit set rather than a boolean pair, so "no signal
+#: confidently pointed one way" (-> ``"both"``, bounded) is a distinct,
+#: nameable outcome from "callers only" / "callees only".
+ExpansionDirection = Literal["callers", "callees", "both"]
+
+
+@dataclass(frozen=True, slots=True)
+class ExpansionDecision:
+    """The deterministic outcome of evaluating adaptive expansion
+    signals for one target -- always produced, even when
+    ``expand=False``, so "expansion was considered and declined" is
+    distinguishable from "expansion was never attempted at all"
+    (:attr:`AdaptiveContextMetrics.attempted`)."""
+
+    expand: bool
+    reasons: tuple[ExpansionReason, ...] = ()
+    direction: ExpansionDirection | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AdaptiveContextMetrics:
+    """Bundle-level adaptive provenance -- everything needed to answer
+    "was expansion attempted, did it occur, why, and at what cost"
+    without re-deriving it from raw item rows. ``None`` on
+    :attr:`ContextBundle.adaptive_metrics` means adaptive mode was not
+    requested for this bundle at all (fixed depth 1 or fixed depth 2)."""
+
+    attempted: bool
+    occurred: bool
+    reasons: tuple[ExpansionReason, ...]
+    direction: ExpansionDirection | None
+    requested_max_depth: int
+    effective_max_depth: int
+    depth_2_candidate_count: int
+    depth_2_selected_count: int
+    depth_2_tokens: int
+
+
 @dataclass(frozen=True, slots=True)
 class ContextQualityMetrics:
     """Recorded for every generation run -- not exposed to end users, but
@@ -191,3 +257,7 @@ class ContextBundle:
     generation_version: int
     metrics: ContextQualityMetrics
     reused_existing_bundle: bool = field(default=False)
+    #: ``None`` unless adaptive expansion was requested for this bundle
+    #: (see :mod:`patchfrog.context.adaptive`) -- fixed depth-1/depth-2
+    #: bundles never have this populated.
+    adaptive_metrics: AdaptiveContextMetrics | None = field(default=None)

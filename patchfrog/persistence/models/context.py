@@ -92,6 +92,24 @@ class ContextBundleModel(Base):
     total_lines: Mapped[int] = mapped_column(Integer, default=0)
     generation_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    #: Adaptive multi-hop context provenance (see
+    #: :mod:`patchfrog.context.adaptive`, :class:`patchfrog.context.domain.AdaptiveContextMetrics`).
+    #: All default-safe for historical rows predating this milestone,
+    #: which never attempted adaptive expansion at all --
+    #: ``adaptive_expansion_attempted=False`` on those rows is how
+    #: :func:`patchfrog.context.service._adaptive_metrics_from_model`
+    #: tells "not applicable" apart from "attempted, didn't expand".
+    adaptive_expansion_attempted: Mapped[bool] = mapped_column(Boolean, default=False)
+    adaptive_expansion_occurred: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: JSON list of :class:`patchfrog.context.domain.ExpansionReason` values.
+    adaptive_expansion_reasons: Mapped[str] = mapped_column(Text, default="[]")
+    adaptive_expansion_direction: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    adaptive_requested_max_depth: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    adaptive_effective_max_depth: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    depth_2_candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    depth_2_selected_count: Mapped[int] = mapped_column(Integer, default=0)
+    depth_2_tokens: Mapped[int] = mapped_column(Integer, default=0)
+
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

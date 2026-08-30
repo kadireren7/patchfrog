@@ -33,7 +33,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patchfrog.analysis.queries import AnalysisQueryService
-from patchfrog.context.config import ContextConfig
+from patchfrog.context.config import AdaptiveContextConfig, ContextConfig
 from patchfrog.context.domain import ContextTargetType
 from patchfrog.context.service import ContextService
 from patchfrog.diff.models import DiffFile, DiffHunk
@@ -761,6 +761,15 @@ class PullRequestReviewService:
         try:
             context_config = context_config_override or ContextConfig(
                 max_tokens=max(500, int(config.max_input_tokens_per_candidate * 0.6)),
+                # Milestone E: real reviews adopt adaptive multi-hop
+                # context by default -- 1-hop first, deterministic
+                # expansion to depth 2 only when a structural signal
+                # justifies it (see patchfrog.context.adaptive). Explicit
+                # fixed-depth-1/fixed-depth-2 configs (via
+                # context_config_override, used by evaluation ablation
+                # and by tests) are unaffected -- ContextConfig's own
+                # bare default keeps adaptive off.
+                adaptive=AdaptiveContextConfig(enabled=True),
             )
             target_type = ContextTargetType.SYMBOL if candidate.symbol_id else ContextTargetType.LINE
             build_kwargs: dict[str, object] = {

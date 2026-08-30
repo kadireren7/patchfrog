@@ -51,10 +51,12 @@ def test_compatibility_fingerprint_deterministic() -> None:
     fp1 = compute_memory_compatibility_fingerprint(
         review_engine_version=1, review_prompt_version=1, review_policy_version=1,
         reviewer_provider="anthropic", reviewer_model="claude-opus-5", toolchain_fingerprint=None,
+        context_engine_version=1,
     )
     fp2 = compute_memory_compatibility_fingerprint(
         review_engine_version=1, review_prompt_version=1, review_policy_version=1,
         reviewer_provider="anthropic", reviewer_model="claude-opus-5", toolchain_fingerprint=None,
+        context_engine_version=1,
     )
     assert fp1 == fp2
 
@@ -63,10 +65,31 @@ def test_compatibility_fingerprint_changes_with_model() -> None:
     fp1 = compute_memory_compatibility_fingerprint(
         review_engine_version=1, review_prompt_version=1, review_policy_version=1,
         reviewer_provider="anthropic", reviewer_model="claude-opus-5", toolchain_fingerprint=None,
+        context_engine_version=1,
     )
     fp2 = compute_memory_compatibility_fingerprint(
         review_engine_version=1, review_prompt_version=1, review_policy_version=1,
         reviewer_provider="anthropic", reviewer_model="claude-sonnet-5", toolchain_fingerprint=None,
+        context_engine_version=1,
+    )
+    assert fp1 != fp2
+
+
+def test_compatibility_fingerprint_changes_with_context_engine_version() -> None:
+    """Milestone E audit fix: a context-engine change (e.g. adaptive
+    multi-hop expansion) must invalidate incremental-review candidate
+    skipping -- a skipped candidate's memory could have been built from
+    an entirely different context under the new engine."""
+
+    fp1 = compute_memory_compatibility_fingerprint(
+        review_engine_version=1, review_prompt_version=1, review_policy_version=1,
+        reviewer_provider="anthropic", reviewer_model="claude-opus-5", toolchain_fingerprint=None,
+        context_engine_version=1,
+    )
+    fp2 = compute_memory_compatibility_fingerprint(
+        review_engine_version=1, review_prompt_version=1, review_policy_version=1,
+        reviewer_provider="anthropic", reviewer_model="claude-opus-5", toolchain_fingerprint=None,
+        context_engine_version=2,
     )
     assert fp1 != fp2
 

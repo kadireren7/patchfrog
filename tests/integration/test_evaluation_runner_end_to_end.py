@@ -306,3 +306,42 @@ async def test_evaluation_records_role_provenance_and_call_counts(
 
     assert len(result.predictions) == 1
     assert result.predictions[0].prediction.agent_role == AgentRole.CORRECTNESS
+
+
+async def test_evaluation_supports_fixed_and_adaptive_context_ablation(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Required scenario 29: the evaluation harness must be able to
+    compare fixed depth-1, fixed depth-2, and adaptive context modes via
+    the existing ``context_config_override`` plumbing, without any
+    production review/context logic being duplicated for evaluation's
+    sake. This fixture has no depth-2-eligible call chain, so all three
+    variants are expected to agree -- the point is that all three run
+    successfully end-to-end (no live LLM, oracle/Fake only)."""
+
+    from patchfrog.context.config import AdaptiveContextConfig, ContextConfig
+
+    case, cases_root = _write_case(
+        tmp_path, "ablation-case", {"billing.py": _BILLING_SOURCE},
+        expected=(ExpectedFinding(id="ef1", category=FindingCategory.CORRECTNESS, file="billing.py", issue_family="fam", symbol="can_withdraw", line=3, ground_truth_source=GroundTruthSource.AI_EXPECTED),),
+    )
+    findings_response = ScriptedResponse(raw_json=json.dumps({"findings": [_finding()]}))
+    reviewer = FakeLLMProvider(response_factory=_factory_for_target("can_withdraw", findings_response))
+    critic = FakeLLMProvider(response_factory=_factory_for_target("can_withdraw", findings_response))
+    runner = EvaluationRunner(session_factory=session_factory)
+
+    variants = {
+        "fixed_depth_1": ContextConfig(),
+        "fixed_depth_2": ContextConfig(graph_depth=2),
+        "adaptive": ContextConfig(adaptive=AdaptiveContextConfig(enabled=True)),
+    }
+    outcomes = {}
+    for label, context_config in variants.items():
+        result = await runner.run_case(
+            case, cases_root=cases_root, mode=EvaluationMode.FULL_PIPELINE, reviewer_provider=reviewer,
+            critic_provider=critic, context_config_override=context_config,
+        )
+        assert not result.is_error, (label, result.error)
+        outcomes[label] = [p.outcome for p in result.predictions]
+
+    assert outcomes["fixed_depth_1"] == outcomes["fixed_depth_2"] == outcomes["adaptive"]
