@@ -59,6 +59,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patchfrog.analysis.queries import AnalysisQueryService
+from patchfrog.context.config import CONTEXT_ENGINE_VERSION
 from patchfrog.diff.models import DiffFile
 from patchfrog.persistence.repositories import (
     AIFindingRepository,
@@ -235,6 +236,7 @@ class IncrementalReviewMemoryService:
             reviewer_provider=reviewer_provider,
             reviewer_model=reviewer_model,
             toolchain_fingerprint=None,
+            context_engine_version=CONTEXT_ENGINE_VERSION,
         )
 
         async with self._session_factory() as session:

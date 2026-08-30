@@ -107,6 +107,7 @@ def compute_memory_compatibility_fingerprint(
     reviewer_provider: str,
     reviewer_model: str,
     toolchain_fingerprint: str | None,
+    context_engine_version: int,
 ) -> str:
     """Identity of the *effective* toolchain a review generation's memory
     is only safely comparable across -- see
@@ -115,6 +116,18 @@ def compute_memory_compatibility_fingerprint(
     unchanged candidates again" (candidate-skipping disabled), even
     though finding-lifecycle memory can still be retained for historical
     comparison.
+
+    ``context_engine_version`` (see
+    :data:`patchfrog.context.config.CONTEXT_ENGINE_VERSION`) closes a
+    real gap found auditing Milestone E (adaptive multi-hop context):
+    before this field existed, a context-engine change (candidate
+    generation, scoring, budgeting, dedup, or -- as of this milestone --
+    adaptive expansion) never invalidated incremental-review candidate
+    skipping, even though the *context* a skipped candidate's memory was
+    built from could be entirely different under the new engine. A
+    change here forces "review unchanged candidates again," the same
+    safe fallback any other compatibility-affecting change already
+    triggers.
     """
 
     payload = {
@@ -126,6 +139,7 @@ def compute_memory_compatibility_fingerprint(
         "reviewer_provider": reviewer_provider,
         "reviewer_model": reviewer_model,
         "toolchain_fingerprint": toolchain_fingerprint,
+        "context_engine_version": context_engine_version,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()

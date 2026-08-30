@@ -52,9 +52,22 @@ class ContextBudgeter:
         max_lines_per_item: int,
         target_reservation_fraction: float,
         max_items_per_relationship: int,
+        max_expansion_tokens: int | None = None,
+        max_expansion_lines: int | None = None,
     ) -> BudgetResult:
+        """``max_expansion_tokens``/``max_expansion_lines``, when given,
+        additionally cap how much distance-2 ("expansion") candidates may
+        consume *within* the existing ``max_tokens``/``max_lines``
+        ceiling -- adaptive mode's bounded reservation for depth-2
+        additions (see :class:`patchfrog.context.config.AdaptiveContextConfig`).
+        ``None`` (the default -- fixed depth-1/depth-2 modes) means no
+        separate cap: distance-2 candidates compete for the shared budget
+        exactly as before this milestone existed."""
+
         remaining_tokens = max_tokens
         remaining_lines = max_lines
+        expansion_tokens_remaining = max_expansion_tokens
+        expansion_lines_remaining = max_expansion_lines
         target_line_cap = max(max_lines_per_item, int(max_lines * target_reservation_fraction))
         target_token_cap = max(max_tokens_per_item, int(max_tokens * target_reservation_fraction))
 
@@ -65,6 +78,7 @@ class ContextBudgeter:
         for scored in kept:
             candidate = scored.candidate
             is_target = candidate.kind in _TARGET_KINDS
+            is_expansion = candidate.distance >= 2
 
             if not is_target:
                 count = relationship_counts.get(candidate.relationship, 0)
@@ -75,9 +89,20 @@ class ContextBudgeter:
             if remaining_lines < _MIN_USEFUL_LINES or remaining_tokens < 1:
                 dropped_budget += 1
                 continue
+            if is_expansion and (
+                (expansion_tokens_remaining is not None and expansion_tokens_remaining < 1)
+                or (expansion_lines_remaining is not None and expansion_lines_remaining < _MIN_USEFUL_LINES)
+            ):
+                dropped_budget += 1
+                continue
 
             line_cap = min(target_line_cap if is_target else max_lines_per_item, remaining_lines)
             token_cap = min(target_token_cap if is_target else max_tokens_per_item, remaining_tokens)
+            if is_expansion:
+                if expansion_lines_remaining is not None:
+                    line_cap = min(line_cap, expansion_lines_remaining)
+                if expansion_tokens_remaining is not None:
+                    token_cap = min(token_cap, expansion_tokens_remaining)
             if line_cap < _MIN_USEFUL_LINES or token_cap < 1:
                 dropped_budget += 1
                 continue
@@ -143,6 +168,11 @@ class ContextBudgeter:
             )
             remaining_tokens -= tokens
             remaining_lines -= line_count
+            if is_expansion:
+                if expansion_tokens_remaining is not None:
+                    expansion_tokens_remaining -= tokens
+                if expansion_lines_remaining is not None:
+                    expansion_lines_remaining -= line_count
             relationship_counts[candidate.relationship] = relationship_counts.get(candidate.relationship, 0) + 1
 
         total_tokens = sum(i.estimated_tokens for i in items)

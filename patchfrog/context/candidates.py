@@ -15,23 +15,40 @@ whole graph.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from patchfrog.analysis.domain import FindingCategory
+from patchfrog.context.adaptive import AdaptiveExpansionPolicy
 from patchfrog.context.config import ContextConfig
-from patchfrog.context.domain import ContextCandidate, ContextItemKind, ContextRelationship
+from patchfrog.context.domain import (
+    ContextCandidate,
+    ContextItemKind,
+    ContextRelationship,
+    ExpansionDecision,
+)
 from patchfrog.intelligence.queries import RepositoryQueryService
 from patchfrog.persistence.models.code_index import IndexedFileModel, SymbolModel
 
-#: Bound on how many depth-1 caller/callee nodes are expanded to depth 2 --
-#: without this, a highly-connected symbol could trigger an expansion
-#: proportional to the whole call graph.
-_MAX_DEPTH_2_EXPANSION_ROOTS = 5
 #: Bound on same-file sibling candidates considered (previous/next symbol
 #: only) -- deliberately not "every sibling in the file".
 _MAX_SIBLINGS = 2
+
+
+@dataclass(frozen=True, slots=True)
+class AdaptiveGenerationResult:
+    """The result of :meth:`ContextCandidateGenerator.generate_adaptive`
+    -- candidates already filtered down to whatever the deterministic
+    expansion decision kept, plus the decision itself and the raw
+    depth-2 counts needed for bundle-level provenance (see
+    :class:`patchfrog.context.domain.AdaptiveContextMetrics`)."""
+
+    candidates: list[ContextCandidate]
+    decision: ExpansionDecision
+    depth_2_candidate_count: int
+    depth_2_selected_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +72,136 @@ class ContextCandidateGenerator:
         config: ContextConfig,
         changed_lines_by_file: dict[str, frozenset[int]],
     ) -> list[ContextCandidate]:
+        candidates = await self._non_call_edge_candidates(
+            session,
+            target_file=target_file,
+            target_symbol=target_symbol,
+            target_line=target_line,
+            config=config,
+            changed_lines_by_file=changed_lines_by_file,
+        )
+
+        if target_symbol is not None:
+            if config.wants(ContextItemKind.CALLER):
+                candidates.extend(
+                    await self._caller_candidates(session, target_symbol, config, changed_lines_by_file)
+                )
+            if config.wants(ContextItemKind.CALLEE):
+                candidates.extend(
+                    await self._callee_candidates(session, target_symbol, config, changed_lines_by_file)
+                )
+
+        return candidates
+
+    async def generate_adaptive(
+        self,
+        session: AsyncSession,
+        *,
+        repository_index_id: UUID,
+        target_file: IndexedFileModel,
+        target_symbol: SymbolModel | None,
+        target_line: int | None,
+        config: ContextConfig,
+        changed_lines_by_file: dict[str, frozenset[int]],
+        finding_category: FindingCategory | None,
+    ) -> AdaptiveGenerationResult:
+        """1-hop-first, deterministic expand-to-2-when-justified
+        generation (see :mod:`patchfrog.context.adaptive`). Requires
+        ``config.adaptive is not None and config.adaptive.enabled``.
+
+        Reuses the exact same call-edge traversal
+        (:meth:`_call_edge_candidates`) fixed ``graph_depth=2`` mode
+        uses -- depth-2 candidates for both directions are always
+        computed (bounded by ``config.max_expansion_roots``, same as
+        fixed mode), never a second traversal stack. The deterministic
+        policy then decides which of them -- if any -- survive into the
+        final candidate list; non-call-edge candidates (target, parent,
+        sibling, tests, imports) are never affected by this decision.
+        """
+
+        assert config.adaptive is not None and config.adaptive.enabled
+
+        base_candidates = await self._non_call_edge_candidates(
+            session,
+            target_file=target_file,
+            target_symbol=target_symbol,
+            target_line=target_line,
+            config=config,
+            changed_lines_by_file=changed_lines_by_file,
+        )
+
+        depth_1_callers: list[ContextCandidate] = []
+        depth_2_callers: list[ContextCandidate] = []
+        depth_1_callees: list[ContextCandidate] = []
+        depth_2_callees: list[ContextCandidate] = []
+
+        if target_symbol is not None:
+            expansion_config = replace(config, graph_depth=config.adaptive.max_depth)
+            if config.wants(ContextItemKind.CALLER):
+                depth_1_callers, depth_2_callers, _ = await self._call_edge_candidates(
+                    session,
+                    symbol_ids=[target_symbol.id],
+                    direction="callers",
+                    relationship=ContextRelationship.DIRECT_CALLER,
+                    transitive_relationship=ContextRelationship.TRANSITIVE_CALLER,
+                    kind=ContextItemKind.CALLER,
+                    config=expansion_config,
+                    changed_lines_by_file=changed_lines_by_file,
+                )
+            if config.wants(ContextItemKind.CALLEE):
+                depth_1_callees, depth_2_callees, _ = await self._call_edge_candidates(
+                    session,
+                    symbol_ids=[target_symbol.id],
+                    direction="callees",
+                    relationship=ContextRelationship.DIRECT_CALLEE,
+                    transitive_relationship=ContextRelationship.TRANSITIVE_CALLEE,
+                    kind=ContextItemKind.CALLEE,
+                    config=expansion_config,
+                    changed_lines_by_file=changed_lines_by_file,
+                )
+
+        depth_1_all = depth_1_callers + depth_1_callees
+        depth_2_all = depth_2_callers + depth_2_callees
+
+        decision = AdaptiveExpansionPolicy().decide(
+            target_symbol=target_symbol,
+            depth1_candidates=depth_1_all,
+            depth2_candidates=depth_2_all,
+            finding_category=finding_category,
+        )
+
+        if not decision.expand:
+            selected_depth_2: list[ContextCandidate] = []
+        elif decision.direction == "both":
+            selected_depth_2 = depth_2_all
+        elif decision.direction == "callers":
+            selected_depth_2 = depth_2_callers
+        else:
+            selected_depth_2 = depth_2_callees
+
+        return AdaptiveGenerationResult(
+            candidates=base_candidates + depth_1_all + selected_depth_2,
+            decision=decision,
+            depth_2_candidate_count=len(depth_2_all),
+            depth_2_selected_count=len(selected_depth_2),
+        )
+
+    async def _non_call_edge_candidates(
+        self,
+        session: AsyncSession,
+        *,
+        target_file: IndexedFileModel,
+        target_symbol: SymbolModel | None,
+        target_line: int | None,
+        config: ContextConfig,
+        changed_lines_by_file: dict[str, frozenset[int]],
+    ) -> list[ContextCandidate]:
+        """Everything except caller/callee call-edge candidates -- the
+        target itself, its parent/sibling symbols, related tests, and
+        file-level imports. Always depth <= 1 and entirely unaffected by
+        adaptive expansion decisions; shared by both :meth:`generate`
+        (fixed depth 1/2) and :meth:`generate_adaptive`."""
+
         candidates: list[ContextCandidate] = []
         target = _TargetContext(symbol=target_symbol, file=target_file)
 
@@ -81,15 +228,6 @@ class ContextCandidateGenerator:
             if config.wants(ContextItemKind.SIBLING_SYMBOL):
                 candidates.extend(
                     await self._sibling_candidates(session, target_symbol, target_file, changed_lines_by_file)
-                )
-
-            if config.wants(ContextItemKind.CALLER):
-                candidates.extend(
-                    await self._caller_candidates(session, target_symbol, config, changed_lines_by_file)
-                )
-            if config.wants(ContextItemKind.CALLEE):
-                candidates.extend(
-                    await self._callee_candidates(session, target_symbol, config, changed_lines_by_file)
                 )
 
         if config.wants(ContextItemKind.RELATED_TEST):
@@ -214,7 +352,7 @@ class ContextCandidateGenerator:
         config: ContextConfig,
         changed_lines_by_file: dict[str, frozenset[int]],
     ) -> list[ContextCandidate]:
-        return await self._call_edge_candidates(
+        depth_1, depth_2, _ = await self._call_edge_candidates(
             session,
             symbol_ids=[target_symbol.id],
             direction="callers",
@@ -224,6 +362,7 @@ class ContextCandidateGenerator:
             config=config,
             changed_lines_by_file=changed_lines_by_file,
         )
+        return depth_1 + depth_2
 
     async def _callee_candidates(
         self,
@@ -232,7 +371,7 @@ class ContextCandidateGenerator:
         config: ContextConfig,
         changed_lines_by_file: dict[str, frozenset[int]],
     ) -> list[ContextCandidate]:
-        return await self._call_edge_candidates(
+        depth_1, depth_2, _ = await self._call_edge_candidates(
             session,
             symbol_ids=[target_symbol.id],
             direction="callees",
@@ -242,6 +381,7 @@ class ContextCandidateGenerator:
             config=config,
             changed_lines_by_file=changed_lines_by_file,
         )
+        return depth_1 + depth_2
 
     async def _related_symbol_ids(
         self, session: AsyncSession, *, symbol_id: UUID, direction: str
@@ -292,14 +432,34 @@ class ContextCandidateGenerator:
         kind: ContextItemKind,
         config: ContextConfig,
         changed_lines_by_file: dict[str, frozenset[int]],
-    ) -> list[ContextCandidate]:
+    ) -> tuple[list[ContextCandidate], list[ContextCandidate], set[UUID]]:
+        """Returns ``(depth_1_candidates, depth_2_candidates, depth_1_symbol_ids)``.
+
+        ``depth_2_candidates`` is always computed when ``config.graph_depth
+        >= 2`` (fixed depth-2 mode: every depth-2 candidate is included in
+        the final bundle) -- adaptive mode instead calls this with
+        ``graph_depth`` forced to 2 internally and then selectively keeps
+        only what :class:`~patchfrog.context.adaptive.AdaptiveExpansionPolicy`
+        decided (see :meth:`generate_adaptive`), so this method itself
+        never needs to know which caller it's serving.
+
+        The root symbol(s) (``symbol_ids``, i.e. the target) are excluded
+        from both depth-1 and depth-2 results -- a self-recursive symbol
+        (``A`` calls ``A``) must never re-add the target itself as its
+        own "direct callee"/"transitive callee", and a 2-cycle (``A -> B
+        -> A``) must never re-add the target as a "transitive" neighbor
+        of its own direct neighbor.
+        """
+
+        roots = set(symbol_ids)
         depth_1_symbol_ids: set[UUID] = set()
         for symbol_id in symbol_ids:
             depth_1_symbol_ids |= await self._related_symbol_ids(session, symbol_id=symbol_id, direction=direction)
+        depth_1_symbol_ids -= roots
 
-        candidates: list[ContextCandidate] = []
+        depth_1_candidates: list[ContextCandidate] = []
         for symbol, file in await self._resolve_symbols_and_files(session, symbol_ids=depth_1_symbol_ids):
-            candidates.append(
+            depth_1_candidates.append(
                 self._symbol_candidate(
                     symbol,
                     file,
@@ -311,15 +471,17 @@ class ContextCandidateGenerator:
                 )
             )
 
+        depth_2_candidates: list[ContextCandidate] = []
         if config.graph_depth >= 2 and depth_1_symbol_ids:
-            roots = sorted(depth_1_symbol_ids, key=str)[:_MAX_DEPTH_2_EXPANSION_ROOTS]
+            expansion_roots = sorted(depth_1_symbol_ids, key=str)[: config.max_expansion_roots]
             depth_2_symbol_ids: set[UUID] = set()
-            for root_id in roots:
+            for root_id in expansion_roots:
                 depth_2_symbol_ids |= await self._related_symbol_ids(session, symbol_id=root_id, direction=direction)
             depth_2_symbol_ids -= depth_1_symbol_ids
+            depth_2_symbol_ids -= roots
 
             for symbol, file in await self._resolve_symbols_and_files(session, symbol_ids=depth_2_symbol_ids):
-                candidates.append(
+                depth_2_candidates.append(
                     self._symbol_candidate(
                         symbol,
                         file,
@@ -331,7 +493,7 @@ class ContextCandidateGenerator:
                     )
                 )
 
-        return candidates
+        return depth_1_candidates, depth_2_candidates, depth_1_symbol_ids
 
     async def _test_candidates(
         self,

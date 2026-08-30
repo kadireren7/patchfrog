@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from patchfrog.context.domain import ContextTargetType
+from patchfrog.context.domain import AdaptiveContextMetrics, ContextTargetType
 from patchfrog.persistence.models.context import ContextBundleModel, ContextBundleStatus
 
 
@@ -158,6 +159,7 @@ class ContextBundleRepository:
         total_tokens: int,
         total_lines: int,
         generation_ms: float,
+        adaptive_metrics: AdaptiveContextMetrics | None = None,
     ) -> ContextBundleModel:
         model = await session.get(ContextBundleModel, bundle_id)
         if model is None:
@@ -193,6 +195,16 @@ class ContextBundleRepository:
         model.total_tokens = total_tokens
         model.total_lines = total_lines
         model.generation_ms = generation_ms
+        if adaptive_metrics is not None:
+            model.adaptive_expansion_attempted = adaptive_metrics.attempted
+            model.adaptive_expansion_occurred = adaptive_metrics.occurred
+            model.adaptive_expansion_reasons = json.dumps([r.value for r in adaptive_metrics.reasons])
+            model.adaptive_expansion_direction = adaptive_metrics.direction
+            model.adaptive_requested_max_depth = adaptive_metrics.requested_max_depth
+            model.adaptive_effective_max_depth = adaptive_metrics.effective_max_depth
+            model.depth_2_candidate_count = adaptive_metrics.depth_2_candidate_count
+            model.depth_2_selected_count = adaptive_metrics.depth_2_selected_count
+            model.depth_2_tokens = adaptive_metrics.depth_2_tokens
         model.completed_at = datetime.now(UTC)
         await session.flush()
         return model

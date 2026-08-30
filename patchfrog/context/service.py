@@ -31,11 +31,14 @@ from patchfrog.context.candidates import ContextCandidateGenerator
 from patchfrog.context.config import CONTEXT_ENGINE_VERSION, ContextConfig
 from patchfrog.context.dedup import ScoredCandidate, deduplicate
 from patchfrog.context.domain import (
+    AdaptiveContextMetrics,
     ContextBundle,
     ContextItem,
     ContextQualityMetrics,
     ContextTarget,
     ContextTargetType,
+    ExpansionDecision,
+    ExpansionReason,
     ScoreComponent,
 )
 from patchfrog.context.scoring import score_candidate
@@ -297,15 +300,36 @@ class ContextService:
 
             finding_category = await self._finding_category(session, target.finding_id)
 
-            candidates = await self._candidates.generate(
-                session,
-                repository_index_id=repository_index_id,
-                target_file=target_file,
-                target_symbol=target_symbol,
-                target_line=target.line,
-                config=config,
-                changed_lines_by_file=changed_lines_by_file,
-            )
+            adaptive_metrics: AdaptiveContextMetrics | None = None
+            if config.adaptive is not None and config.adaptive.enabled:
+                adaptive_result = await self._candidates.generate_adaptive(
+                    session,
+                    repository_index_id=repository_index_id,
+                    target_file=target_file,
+                    target_symbol=target_symbol,
+                    target_line=target.line,
+                    config=config,
+                    changed_lines_by_file=changed_lines_by_file,
+                    finding_category=finding_category,
+                )
+                candidates = adaptive_result.candidates
+                decision: ExpansionDecision = adaptive_result.decision
+                log.info(
+                    "context_adaptive_decision",
+                    expand=decision.expand,
+                    reasons=[r.value for r in decision.reasons],
+                    direction=decision.direction,
+                )
+            else:
+                candidates = await self._candidates.generate(
+                    session,
+                    repository_index_id=repository_index_id,
+                    target_file=target_file,
+                    target_symbol=target_symbol,
+                    target_line=target.line,
+                    config=config,
+                    changed_lines_by_file=changed_lines_by_file,
+                )
 
         scored = []
         for c in candidates:
@@ -314,6 +338,12 @@ class ContextService:
             )
             scored.append(ScoredCandidate(candidate=c, score=item_score, breakdown=breakdown))
         dedup_result = deduplicate(scored)
+
+        max_expansion_tokens: int | None = None
+        max_expansion_lines: int | None = None
+        if config.adaptive is not None and config.adaptive.enabled:
+            max_expansion_tokens = int(config.max_tokens * config.adaptive.expansion_token_fraction)
+            max_expansion_lines = int(config.max_lines * config.adaptive.expansion_line_fraction)
 
         budget_result = self._budgeter.build(
             snapshot,
@@ -324,7 +354,30 @@ class ContextService:
             max_lines_per_item=config.max_lines_per_item,
             target_reservation_fraction=config.target_reservation_fraction,
             max_items_per_relationship=config.max_items_per_relationship,
+            max_expansion_tokens=max_expansion_tokens,
+            max_expansion_lines=max_expansion_lines,
         )
+
+        if config.adaptive is not None and config.adaptive.enabled:
+            depth_2_selected_in_budget = sum(1 for i in budget_result.items if i.distance >= 2)
+            depth_2_tokens = sum(i.estimated_tokens for i in budget_result.items if i.distance >= 2)
+            adaptive_metrics = AdaptiveContextMetrics(
+                attempted=True,
+                occurred=depth_2_selected_in_budget > 0,
+                reasons=decision.reasons,
+                direction=decision.direction,
+                requested_max_depth=config.adaptive.max_depth,
+                effective_max_depth=2 if depth_2_selected_in_budget > 0 else 1,
+                depth_2_candidate_count=adaptive_result.depth_2_candidate_count,
+                depth_2_selected_count=depth_2_selected_in_budget,
+                depth_2_tokens=depth_2_tokens,
+            )
+            log.info(
+                "context_adaptive_expansion_completed",
+                depth_2_candidates=adaptive_result.depth_2_candidate_count,
+                depth_2_selected=depth_2_selected_in_budget,
+                depth_2_tokens=depth_2_tokens,
+            )
 
         duration_ms = (time.monotonic() - start) * 1000
 
@@ -359,6 +412,7 @@ class ContextService:
                 total_tokens=budget_result.total_tokens,
                 total_lines=budget_result.total_lines,
                 generation_ms=duration_ms,
+                adaptive_metrics=adaptive_metrics,
             )
             await session.commit()
 
@@ -394,6 +448,7 @@ class ContextService:
                 generation_ms=duration_ms,
             ),
             reused_existing_bundle=(final_bundle.id != bundle_id),
+            adaptive_metrics=adaptive_metrics,
         )
 
     async def _finding_category(
@@ -429,6 +484,7 @@ class ContextService:
                 generation_ms=bundle.generation_ms or 0.0,
             ),
             reused_existing_bundle=reused,
+            adaptive_metrics=_adaptive_metrics_from_model(bundle),
         )
 
 
@@ -481,4 +537,20 @@ def _item_from_model(model: ContextItemModel) -> ContextItem:
         estimated_tokens=model.estimated_tokens,
         reason=model.reason,
         truncated=model.truncated,
+    )
+
+
+def _adaptive_metrics_from_model(bundle: ContextBundleModel) -> AdaptiveContextMetrics | None:
+    if not bundle.adaptive_expansion_attempted:
+        return None
+    return AdaptiveContextMetrics(
+        attempted=True,
+        occurred=bundle.adaptive_expansion_occurred,
+        reasons=tuple(ExpansionReason(r) for r in json.loads(bundle.adaptive_expansion_reasons or "[]")),
+        direction=bundle.adaptive_expansion_direction,  # type: ignore[arg-type]
+        requested_max_depth=bundle.adaptive_requested_max_depth or 0,
+        effective_max_depth=bundle.adaptive_effective_max_depth or 0,
+        depth_2_candidate_count=bundle.depth_2_candidate_count,
+        depth_2_selected_count=bundle.depth_2_selected_count,
+        depth_2_tokens=bundle.depth_2_tokens,
     )
