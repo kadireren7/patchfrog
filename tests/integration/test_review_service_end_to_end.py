@@ -73,11 +73,19 @@ def _diff_marking_lines(file_path: str, lines: list[int]) -> DiffFile:
 
 
 def _response_factory(request: ProviderRequest) -> ScriptedResponse:
-    """Route by which candidate's prompt this is, so scripted responses
-    are correct regardless of concurrent scheduling order."""
+    """Route by which candidate's prompt (and, since Agent Orchestration
+    v1, which specialist role -- see ``request.schema_name``) this is, so
+    scripted responses are correct regardless of concurrent scheduling
+    order. The fixture's bug is a correctness defect, so only the
+    Correctness role's call is scripted to find it -- the Security role
+    always returns no findings, keeping this test's proposal/accepted
+    counts meaningful without asserting on cross-role dedup behavior
+    (covered separately in ``tests/unit/test_review_agents_cross_role.py``)."""
 
     if request.schema_name == "critic_verdict":
         return ScriptedResponse(raw_json=json.dumps(_ACCEPT_VERDICT))
+    if request.schema_name == "review_response:security":
+        return ScriptedResponse(raw_json=json.dumps(_NO_FINDINGS))
     # Match on the review-target anchor line, not a bare substring -- the
     # target's own context bundle may legitimately include a sibling
     # symbol's source, so a bare substring check could misfire.

@@ -74,6 +74,7 @@ from patchfrog.persistence.repositories import (
     ReviewCandidateRepository,
 )
 from patchfrog.persistence.repositories.analysis_run import AnalysisRunRepository
+from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.config import (
     REVIEW_ENGINE_VERSION,
     REVIEW_POLICY_VERSION,
@@ -226,6 +227,7 @@ def _ai_to_predicted(
         reasoning_summary=finding.reasoning_summary,
         suggested_fix=finding.suggested_fix,
         impact=finding.impact,
+        agent_role=finding.agent_role,
     )
 
 
@@ -357,6 +359,9 @@ class EvaluationRunner:
             candidates_generated = candidates_reviewed = candidates_skipped = 0
             provider_calls = 0
             reviewer_input_tokens = reviewer_output_tokens = 0
+            calls_by_role: dict[AgentRole, int] = {}
+            reviewer_input_tokens_by_role: dict[AgentRole, int] = {}
+            reviewer_output_tokens_by_role: dict[AgentRole, int] = {}
 
             if mode in (EvaluationMode.AI_ONLY, EvaluationMode.FULL_PIPELINE):
                 provider = reviewer_provider or _default_reviewer_provider()
@@ -390,9 +395,16 @@ class EvaluationRunner:
                 candidates_generated = len(candidates)
                 candidates_reviewed = summary.candidates_reviewed
                 candidates_skipped = summary.candidates_skipped_budget
-                provider_calls = summary.candidates_reviewed
+                calls_by_role = dict(summary.calls_by_role)
+                provider_calls = sum(calls_by_role.values()) if calls_by_role else summary.candidates_reviewed
                 reviewer_input_tokens = summary.reviewer_usage.input_tokens
                 reviewer_output_tokens = summary.reviewer_usage.output_tokens
+                reviewer_input_tokens_by_role = {
+                    role: usage.input_tokens for role, usage in summary.usage_by_role.items()
+                }
+                reviewer_output_tokens_by_role = {
+                    role: usage.output_tokens for role, usage in summary.usage_by_role.items()
+                }
 
                 ai_predictions = [_ai_to_predicted(f, candidate_by_id.get(f.candidate_id)) for f in ai_findings]
                 proposals_predicted = [
@@ -413,6 +425,9 @@ class EvaluationRunner:
                 candidates_generated=candidates_generated, candidates_reviewed=candidates_reviewed,
                 candidates_skipped=candidates_skipped, provider_calls=provider_calls,
                 reviewer_input_tokens=reviewer_input_tokens, reviewer_output_tokens=reviewer_output_tokens,
+                calls_by_role=calls_by_role,
+                reviewer_input_tokens_by_role=reviewer_input_tokens_by_role,
+                reviewer_output_tokens_by_role=reviewer_output_tokens_by_role,
                 analyzer_executions=tuple(analyzer_executions),
             )
         finally:

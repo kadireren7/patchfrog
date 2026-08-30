@@ -30,6 +30,7 @@ from patchfrog.evaluation.domain import (
 from patchfrog.evaluation.matcher import unsupported_reason
 from patchfrog.evaluation.metrics import compute_critic_comparison, compute_static_ai_overlap
 from patchfrog.evaluation.runner import EvaluationRunner
+from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.provider import ProviderRequest
 from patchfrog.review.providers.fake import FakeLLMProvider, ScriptedResponse
 
@@ -147,8 +148,12 @@ async def test_hallucinated_finding_is_rejected_by_validation_and_marked_unsuppo
     # Rejected before validation -- never becomes an accepted prediction at all.
     assert result.predictions == ()
     # But it must still show up as a pre-validation proposal, so the
-    # hallucination-rate metric can see it.
-    assert len(result.proposals_before_validation) == 1
+    # hallucination-rate metric can see it. Agent Orchestration v1: both
+    # specialist roles are scripted identically here, so both
+    # independently hallucinate and both are independently rejected by
+    # validation -- cross-role dedup never merges them (it only ever
+    # operates on proposals that already passed validation).
+    assert len(result.proposals_before_validation) == 2
     reason = unsupported_reason(result.proposals_before_validation[0], frozenset({"billing.py"}), {"billing.py": 3})
     # The quoted text mismatch itself isn't caught by unsupported_reason
     # (that only checks file/line existence) -- Phase 5's own evidence
@@ -268,3 +273,36 @@ async def test_analyzer_executions_are_captured_for_per_analyzer_coverage(
     coverage = compute_static_analyzer_coverage([result])
     ruff_coverage = next(c for c in coverage if c.analyzer == "ruff")
     assert ruff_coverage.attempted == 1
+
+
+async def test_evaluation_records_role_provenance_and_call_counts(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Required scenario 27: the evaluation pipeline must be able to
+    record which specialist role produced a prediction and how many
+    calls each role made, without needing (or leaking) ground truth --
+    this test's provider is scripted purely on candidate/schema_name,
+    never on the case's expected findings."""
+
+    case, cases_root = _write_case(
+        tmp_path, "role-provenance-case", {"billing.py": _BILLING_SOURCE},
+        expected=(ExpectedFinding(id="ef1", category=FindingCategory.CORRECTNESS, file="billing.py", issue_family="fam", symbol="can_withdraw", line=3, ground_truth_source=GroundTruthSource.AI_EXPECTED),),
+    )
+    findings_response = ScriptedResponse(raw_json=json.dumps({"findings": [_finding()]}))
+    reviewer = FakeLLMProvider(response_factory=_factory_for_target("can_withdraw", findings_response))
+    critic = FakeLLMProvider(response_factory=_factory_for_target("can_withdraw", findings_response))
+    runner = EvaluationRunner(session_factory=session_factory)
+    result = await runner.run_case(
+        case, cases_root=cases_root, mode=EvaluationMode.FULL_PIPELINE, reviewer_provider=reviewer, critic_provider=critic
+    )
+    assert not result.is_error, result.error
+
+    # This fixture has 2 candidates (can_withdraw + one other symbol) --
+    # both specialist roles are called once per candidate by default.
+    assert result.calls_by_role.get(AgentRole.CORRECTNESS) == 2
+    assert result.calls_by_role.get(AgentRole.SECURITY) == 2
+    assert result.reviewer_input_tokens_by_role.get(AgentRole.CORRECTNESS, 0) > 0
+    assert result.reviewer_input_tokens_by_role.get(AgentRole.SECURITY, 0) > 0
+
+    assert len(result.predictions) == 1
+    assert result.predictions[0].prediction.agent_role == AgentRole.CORRECTNESS

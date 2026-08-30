@@ -96,7 +96,9 @@ async def test_deleting_a_review_run_cascades_to_candidates_but_not_into_the_con
         )
 
         diff_files = [_diff_marking_lines("src/billing.py", [14])]
-        provider = FakeLLMProvider([ScriptedResponse(raw_json=json.dumps({"findings": []}))])
+        provider = FakeLLMProvider(
+            response_factory=lambda req: ScriptedResponse(raw_json=json.dumps({"findings": []}))
+        )
         service = PullRequestReviewService(session_factory=session_factory, reviewer_provider=provider)
         await service.review_local(
             repository_id=repository_id, root_path=snapshot.root_path, repository_full_name=full_name,

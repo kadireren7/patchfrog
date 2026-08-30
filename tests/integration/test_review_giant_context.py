@@ -75,8 +75,12 @@ async def test_giant_symbol_never_produces_an_unbounded_prompt(
         commit_sha=snapshot.commit_sha, diff_files=diff_files, config=config,
     )
 
-    assert len(captured_prompt_lengths) == 1
+    # Agent Orchestration v1: both specialist roles (Correctness,
+    # Security) call the reviewer for this one candidate, each with its
+    # own (role-scoped, but similarly-sized) prompt built from the same
+    # shared, budget-bounded context.
+    assert len(captured_prompt_lengths) == 2
     # 2000 tokens * ~4 chars/token, generously bounded (prompt scaffolding
     # + context + diff excerpt) -- nowhere close to the raw 600-line
     # function's ~15,000+ raw characters if it had been sent whole.
-    assert captured_prompt_lengths[0] < 20_000
+    assert all(length < 20_000 for length in captured_prompt_lengths)

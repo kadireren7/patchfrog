@@ -25,7 +25,7 @@ import asyncio
 import hashlib
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -36,7 +36,6 @@ from patchfrog.analysis.queries import AnalysisQueryService
 from patchfrog.context.config import ContextConfig
 from patchfrog.context.domain import ContextTargetType
 from patchfrog.context.service import ContextService
-from patchfrog.context.tokens import estimate_tokens
 from patchfrog.diff.models import DiffFile, DiffHunk
 from patchfrog.intelligence.queries import RepositoryQueryService
 from patchfrog.persistence.models.analysis import FindingModel
@@ -50,6 +49,10 @@ from patchfrog.persistence.repositories import (
 )
 from patchfrog.persistence.repositories.analysis_run import AnalysisRunRepository
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
+from patchfrog.review.agents.cross_role import CROSS_ROLE_DUPLICATE, UNRESOLVED_CONTRADICTION
+from patchfrog.review.agents.evidence import CandidateEvidencePackage
+from patchfrog.review.agents.proposal import AgentProposal
+from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.candidates import ReviewCandidateGenerator, summarize_static_finding
 from patchfrog.review.confidence import aggregate, meets_minimum
 from patchfrog.review.config import MalformedReviewConfigError, ReviewConfig, ReviewModelIdentity
@@ -57,30 +60,17 @@ from patchfrog.review.critic import CriticService
 from patchfrog.review.dedup import deduplicate
 from patchfrog.review.domain import (
     CriticDecision,
-    CriticVerdict,
     FinalAIFinding,
     ProposalStatus,
     ReviewCandidate,
     ReviewRunStatus,
     ReviewRunSummary,
     TokenUsage,
-    ValidatedFinding,
     ValidationOutcome,
 )
-from patchfrog.review.prompt import build_reviewer_prompt
-from patchfrog.review.provider import (
-    LLMProvider,
-    ProviderFatalError,
-    ProviderRequest,
-    ProviderTransientError,
-)
+from patchfrog.review.orchestration import AgentOrchestrator
+from patchfrog.review.provider import LLMProvider
 from patchfrog.review.redaction import redact_secrets
-from patchfrog.review.schemas import REVIEW_RESPONSE_SCHEMA
-from patchfrog.review.validation import (
-    ResponseSchemaError,
-    ValidationContext,
-    parse_and_validate_response,
-)
 
 logger = structlog.get_logger(__name__)
 
@@ -199,6 +189,7 @@ async def persist_malformed_config_failure(
 
 class _CandidateOutcome:
     __slots__ = (
+        "calls_by_role",
         "candidate",
         "context_bundle_id",
         "context_text",
@@ -207,10 +198,10 @@ class _CandidateOutcome:
         "error",
         "failed",
         "final",
+        "proposals",
         "reviewer_usage",
         "skipped_budget",
-        "validated",
-        "verdicts",
+        "usage_by_role",
     )
 
     def __init__(self, candidate: ReviewCandidate) -> None:
@@ -218,14 +209,15 @@ class _CandidateOutcome:
         self.context_text = ""
         self.context_bundle_id: uuid.UUID | None = None
         self.diff_excerpt = ""
-        self.validated: list[ValidatedFinding] = []
-        self.verdicts: dict[int, CriticVerdict | None] = {}
+        self.proposals: list[AgentProposal] = []
         self.final: list[FinalAIFinding] = []
         self.failed = False
         self.error: str | None = None
         self.skipped_budget = False
         self.reviewer_usage = TokenUsage()
         self.critic_usage = TokenUsage()
+        self.usage_by_role: dict[AgentRole, TokenUsage] = {}
+        self.calls_by_role: dict[AgentRole, int] = {}
 
 
 class PullRequestReviewService:
@@ -493,6 +485,17 @@ class PullRequestReviewService:
         budget_state = {"used_input_tokens": 0}
         semaphore = asyncio.Semaphore(max(1, config.max_concurrent_requests))
 
+        orchestrator = AgentOrchestrator(
+            reviewer_providers={
+                AgentRole.CORRECTNESS: self._reviewer_provider,
+                AgentRole.SECURITY: self._reviewer_provider,
+            },
+            critic=self._critic,
+            critic_enabled=config.critic_enabled,
+            max_output_tokens_per_candidate=config.max_output_tokens_per_candidate,
+            max_retries=config.max_retries,
+        )
+
         async def _process(outcome: _CandidateOutcome) -> None:
             async with semaphore:
                 await self._review_candidate(
@@ -509,6 +512,7 @@ class PullRequestReviewService:
                     budget_state=budget_state,
                     log=log,
                     context_config_override=context_config_override,
+                    orchestrator=orchestrator,
                 )
 
         await asyncio.gather(*(_process(o) for o in outcomes))
@@ -520,16 +524,22 @@ class PullRequestReviewService:
         candidates_reviewed = sum(1 for o in outcomes if not o.failed and not o.skipped_budget)
         candidates_failed = sum(1 for o in outcomes if o.failed)
         candidates_skipped_budget = sum(1 for o in outcomes if o.skipped_budget)
-        proposals_count = sum(len(o.validated) for o in outcomes)
+        proposals_count = sum(len(o.proposals) for o in outcomes)
         rejected_count = proposals_count - len(all_final)
         accepted_count = len(dedup_result.kept)
         suppressed_duplicate_count = len(dedup_result.suppressed)
 
         reviewer_usage = TokenUsage()
         critic_usage = TokenUsage()
+        usage_by_role: dict[AgentRole, TokenUsage] = {}
+        calls_by_role: dict[AgentRole, int] = {}
         for o in outcomes:
             reviewer_usage = reviewer_usage + o.reviewer_usage
             critic_usage = critic_usage + o.critic_usage
+            for role, usage in o.usage_by_role.items():
+                usage_by_role[role] = usage_by_role.get(role, TokenUsage()) + usage
+            for role, count in o.calls_by_role.items():
+                calls_by_role[role] = calls_by_role.get(role, 0) + count
 
         duration_ms = (time.monotonic() - start) * 1000
 
@@ -568,7 +578,8 @@ class PullRequestReviewService:
                     session, candidate_id=candidate_model.id, context_bundle_id=outcome.context_bundle_id
                 )
 
-                for idx, validated in enumerate(outcome.validated):
+                for agent_proposal in outcome.proposals:
+                    validated = agent_proposal.validated
                     if validated.outcome != ValidationOutcome.VALID:
                         await self._proposal_repo.create(
                             session,
@@ -577,10 +588,40 @@ class PullRequestReviewService:
                             finding=validated.finding,
                             status=ProposalStatus.REJECTED_VALIDATION,
                             validation_detail=validated.detail,
+                            agent_role=agent_proposal.role,
                         )
                         continue
 
-                    verdict = outcome.verdicts.get(idx)
+                    verdict = agent_proposal.critic_verdict
+
+                    if agent_proposal.suppressed_reason == UNRESOLVED_CONTRADICTION:
+                        proposal = await self._proposal_repo.create(
+                            session,
+                            review_run_id=run_id,
+                            candidate_id=candidate_model.id,
+                            finding=validated.finding,
+                            status=ProposalStatus.SUPPRESSED_CONTRADICTION,
+                            validation_detail="unresolved cross-role contradiction",
+                            agent_role=agent_proposal.role,
+                        )
+                        if verdict is not None:
+                            await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
+                        continue
+
+                    if agent_proposal.suppressed_reason == CROSS_ROLE_DUPLICATE:
+                        proposal = await self._proposal_repo.create(
+                            session,
+                            review_run_id=run_id,
+                            candidate_id=candidate_model.id,
+                            finding=validated.finding,
+                            status=ProposalStatus.SUPPRESSED_DUPLICATE,
+                            validation_detail="cross-role duplicate of a stronger equivalent proposal",
+                            agent_role=agent_proposal.role,
+                        )
+                        if verdict is not None:
+                            await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
+                        continue
+
                     final = next(
                         (f for f in outcome.final if f.finding is validated.finding), None
                     )
@@ -593,6 +634,7 @@ class PullRequestReviewService:
                             finding=validated.finding,
                             status=ProposalStatus.REJECTED_CRITIC,
                             validation_detail=verdict.reasoning_summary,
+                            agent_role=agent_proposal.role,
                         )
                         await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
                         continue
@@ -606,6 +648,7 @@ class PullRequestReviewService:
                             finding=validated.finding,
                             status=ProposalStatus.REJECTED_LOW_CONFIDENCE,
                             validation_detail="below configured minimum final confidence",
+                            agent_role=agent_proposal.role,
                         )
                         if verdict is not None:
                             await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
@@ -620,6 +663,7 @@ class PullRequestReviewService:
                         finding=validated.finding,
                         status=status,
                         validation_detail=None,
+                        agent_role=agent_proposal.role,
                     )
                     if verdict is not None:
                         await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
@@ -639,6 +683,8 @@ class PullRequestReviewService:
             else:
                 run_status = ReviewRunStatus.SUCCEEDED
 
+            correctness_usage = usage_by_role.get(AgentRole.CORRECTNESS, TokenUsage())
+            security_usage = usage_by_role.get(AgentRole.SECURITY, TokenUsage())
             final_run = await self._run_repo.mark_succeeded(
                 session,
                 run_id=run_id,
@@ -655,6 +701,10 @@ class PullRequestReviewService:
                 reviewer_output_tokens=reviewer_usage.output_tokens,
                 critic_input_tokens=critic_usage.input_tokens,
                 critic_output_tokens=critic_usage.output_tokens,
+                correctness_input_tokens=correctness_usage.input_tokens,
+                correctness_output_tokens=correctness_usage.output_tokens,
+                security_input_tokens=security_usage.input_tokens,
+                security_output_tokens=security_usage.output_tokens,
                 duration_ms=duration_ms,
             )
             await session.commit()
@@ -685,6 +735,8 @@ class PullRequestReviewService:
             critic_usage=critic_usage,
             duration_ms=duration_ms,
             reused_existing_run=(final_run.id != run_id),
+            usage_by_role=usage_by_role,
+            calls_by_role=calls_by_role,
         )
 
     async def _review_candidate(
@@ -702,6 +754,7 @@ class PullRequestReviewService:
         budget_lock: asyncio.Lock,
         budget_state: dict[str, int],
         log: structlog.stdlib.BoundLogger,
+        orchestrator: AgentOrchestrator,
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
@@ -755,81 +808,47 @@ class PullRequestReviewService:
             if fid in static_by_id
         )
 
-        system_prompt, user_prompt = build_reviewer_prompt(
+        evidence = CandidateEvidencePackage(
             candidate=candidate,
             context_text=context_text,
             diff_excerpt=diff_excerpt,
             static_findings=static_summaries,
-        )
-        estimated_input = estimate_tokens(system_prompt) + estimate_tokens(user_prompt)
-
-        async with budget_lock:
-            if budget_state["used_input_tokens"] + estimated_input > config.max_total_input_tokens:
-                outcome.skipped_budget = True
-                return
-            budget_state["used_input_tokens"] += estimated_input
-
-        request = ProviderRequest(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            json_schema=REVIEW_RESPONSE_SCHEMA,
-            schema_name="review_response",
-            max_output_tokens=config.max_output_tokens_per_candidate,
+            allowed_file_paths=allowed_file_paths,
+            context_bundle_id=outcome.context_bundle_id,
         )
 
-        try:
-            result = await _call_with_retry(
-                lambda: self._reviewer_provider.generate_structured(request), max_retries=config.max_retries
-            )
-        except (ProviderFatalError, ProviderTransientError) as exc:
+        result = await orchestrator.review_candidate(
+            evidence,
+            min_final_confidence=config.min_final_confidence,
+            max_total_input_tokens=config.max_total_input_tokens,
+            budget_lock=budget_lock,
+            budget_state=budget_state,
+            log=log,
+        )
+
+        if result.skipped_budget:
+            outcome.skipped_budget = True
+            return
+        if result.failed:
             outcome.failed = True
-            outcome.error = f"reviewer call failed: {exc}"
+            outcome.error = result.error
+            outcome.calls_by_role = result.calls_by_role
             return
 
-        outcome.reviewer_usage = TokenUsage(
-            input_tokens=result.usage.input_tokens, output_tokens=result.usage.output_tokens
-        )
+        outcome.proposals = list(result.proposals)
+        outcome.reviewer_usage = result.reviewer_usage
+        outcome.critic_usage = result.critic_usage
+        outcome.usage_by_role = result.usage_by_role
+        outcome.calls_by_role = result.calls_by_role
 
-        validation_context = ValidationContext(
-            allowed_file_paths=allowed_file_paths, context_text=context_text, diff_excerpt=diff_excerpt
-        )
-        try:
-            validated = parse_and_validate_response(result.raw_json, context=validation_context)
-        except ResponseSchemaError as exc:
-            outcome.failed = True
-            outcome.error = f"reviewer response schema error: {exc}"
-            return
-
-        outcome.validated = validated
-
-        for idx, v in enumerate(validated):
+        for agent_proposal in outcome.proposals:
+            v = agent_proposal.validated
             if v.outcome != ValidationOutcome.VALID:
                 continue
+            if agent_proposal.suppressed_reason is not None:
+                continue
 
-            verdict: CriticVerdict | None = None
-            if self._critic is not None and config.critic_enabled:
-                narrowed_critic: CriticService = self._critic
-                try:
-
-                    async def _critique(
-                        v: ValidatedFinding = v, critic: CriticService = narrowed_critic
-                    ) -> CriticVerdict:
-                        return await critic.critique(v, candidate=candidate, context_text=context_text)
-
-                    verdict = await _call_with_retry(_critique, max_retries=config.max_retries)
-                except (ProviderFatalError, ProviderTransientError, ResponseSchemaError) as exc:
-                    # A critic failure never crashes the run or discards a
-                    # proposal -- it falls back to no-critic aggregation,
-                    # since the deterministic validation gate already ran.
-                    log.warning("review_critic_failed", candidate_file=candidate.file_path, error=str(exc))
-                    verdict = None
-
-            outcome.verdicts[idx] = verdict
-            if verdict is not None:
-                outcome.critic_usage = outcome.critic_usage + TokenUsage(
-                    input_tokens=verdict.input_tokens, output_tokens=verdict.output_tokens
-                )
-
+            verdict = agent_proposal.critic_verdict
             if verdict is not None and verdict.decision == CriticDecision.REJECT:
                 continue
 
@@ -854,6 +873,7 @@ class PullRequestReviewService:
                     final_confidence=aggregated.final_confidence,
                     corroborated_by_static=aggregated.corroborated_by_static,
                     static_finding_ids=candidate.static_finding_ids,
+                    agent_role=agent_proposal.role,
                 )
             )
 
@@ -867,25 +887,6 @@ def _malformed_config_fingerprint(exc: MalformedReviewConfigError) -> str:
 
     payload = f"malformed_review_config:{exc.path}:{exc.raw_text}"
     return hashlib.sha256(payload.encode()).hexdigest()
-
-
-async def _call_with_retry[T](
-    coro_factory: Callable[[], Awaitable[T]], *, max_retries: int, base_delay: float = 0.5
-) -> T:
-    """Bounded retry, transient failures only. ``ProviderFatalError`` and
-    :class:`~patchfrog.review.validation.ResponseSchemaError` propagate
-    immediately -- retrying a schema-invalid or auth/400 response would
-    just reproduce the identical failure."""
-
-    attempt = 0
-    while True:
-        try:
-            return await coro_factory()
-        except ProviderTransientError:
-            if attempt >= max_retries:
-                raise
-            await asyncio.sleep(base_delay * (2**attempt))
-            attempt += 1
 
 
 def _render_diff_excerpt(diff_files: list[DiffFile], candidate: ReviewCandidate) -> str:
@@ -930,4 +931,12 @@ def _summary_from_model(run: ReviewRunModel, *, reused: bool) -> ReviewRunSummar
         critic_usage=TokenUsage(input_tokens=run.critic_input_tokens, output_tokens=run.critic_output_tokens),
         duration_ms=run.duration_ms or 0.0,
         reused_existing_run=reused,
+        usage_by_role={
+            AgentRole.CORRECTNESS: TokenUsage(
+                input_tokens=run.correctness_input_tokens, output_tokens=run.correctness_output_tokens
+            ),
+            AgentRole.SECURITY: TokenUsage(
+                input_tokens=run.security_input_tokens, output_tokens=run.security_output_tokens
+            ),
+        },
     )

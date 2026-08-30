@@ -17,6 +17,14 @@ suppressed ones, with the reason recorded on ``status``/``validation_detail``.
 ``ai_findings`` holds only the subset that survived validation, the
 critic, confidence aggregation, and dedup -- the only table a
 user-facing query should ever read from.
+
+Both tables also carry ``agent_role`` (see
+:mod:`patchfrog.review.agents.roles`, Agent Orchestration v1): the
+specialist that produced a given proposal/finding, nullable for rows
+persisted before that milestone existed. ``review_runs`` similarly
+carries a per-role token-usage breakdown alongside the pre-existing
+``reviewer_input_tokens``/``reviewer_output_tokens`` totals, whose
+meaning is unchanged.
 """
 
 from __future__ import annotations
@@ -32,6 +40,7 @@ from sqlalchemy.types import Boolean, Uuid
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.persistence.models._enum import enum_column
 from patchfrog.persistence.models.base import Base
+from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import (
     CriticDecision,
     ProposalStatus,
@@ -109,6 +118,16 @@ class ReviewRunModel(Base):
     reviewer_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     critic_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     critic_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    #: Per-specialist-role breakdown of the totals above (see
+    #: :mod:`patchfrog.review.orchestration`) -- ``reviewer_input_tokens``/
+    #: ``reviewer_output_tokens`` remain the total across every role,
+    #: unchanged in meaning from before Agent Orchestration existed.
+    #: Nullable-safe defaults (0) for historical rows predating this
+    #: column, which never ran cooperative orchestration at all.
+    correctness_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    correctness_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    security_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    security_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
 
     duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -186,6 +205,12 @@ class AIFindingProposalModel(Base):
     impact: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[ProposalStatus] = mapped_column(enum_column(ProposalStatus, length=32))
     validation_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: The specialist role (see :mod:`patchfrog.review.agents.roles`)
+    #: that produced this proposal. Nullable: rows persisted before
+    #: Agent Orchestration existed never had a role at all -- ``None``
+    #: reads back honestly as "predates specialist attribution", never a
+    #: fabricated role.
+    agent_role: Mapped[AgentRole | None] = mapped_column(enum_column(AgentRole, length=32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -254,4 +279,6 @@ class AIFindingModel(Base):
     impact: Mapped[str | None] = mapped_column(Text, nullable=True)
     corroborated_by_static: Mapped[bool] = mapped_column(Boolean, default=False)
     static_finding_ids: Mapped[str] = mapped_column(Text, default="[]")
+    #: See :attr:`AIFindingProposalModel.agent_role`.
+    agent_role: Mapped[AgentRole | None] = mapped_column(enum_column(AgentRole, length=32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

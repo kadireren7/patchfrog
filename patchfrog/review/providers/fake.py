@@ -14,7 +14,7 @@ prompt).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from patchfrog.review.provider import (
@@ -89,3 +89,36 @@ def _assert_protocol_conformance(provider: LLMProvider) -> None:
 
 
 _assert_protocol_conformance(FakeLLMProvider([]))
+
+
+_Route = ScriptedResponse | Exception | Callable[[ProviderRequest], "ScriptedResponse | Exception"]
+
+
+def route_by_schema_name(
+    routes: Mapping[str, _Route], *, default: ScriptedResponse | Exception | None = None
+) -> Callable[[ProviderRequest], ScriptedResponse | Exception]:
+    """A ``response_factory`` that dispatches deterministically on
+    ``request.schema_name`` -- the discriminator Agent Orchestration v1
+    uses to distinguish which specialist role (or the critic) made a
+    given call (``"review_response:correctness"``,
+    ``"review_response:security"``, ``"critic_verdict"``). Lets a test
+    script each role's response independently without depending on call
+    order, which becomes ambiguous once two specialist calls for one
+    candidate can run concurrently (see
+    :mod:`patchfrog.review.orchestration`).
+
+    Each route may be a fixed :class:`ScriptedResponse`/``Exception``, or
+    a callable for routes that need to vary per-request (e.g. matching
+    on which candidate's prompt this is)."""
+
+    def factory(request: ProviderRequest) -> ScriptedResponse | Exception:
+        route = routes.get(request.schema_name, default)
+        if route is None:
+            raise ProviderError(
+                f"route_by_schema_name: no route for schema_name={request.schema_name!r} and no default"
+            )
+        if callable(route):
+            return route(request)
+        return route
+
+    return factory

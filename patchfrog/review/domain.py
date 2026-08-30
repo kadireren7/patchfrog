@@ -26,6 +26,7 @@ from enum import StrEnum
 from uuid import UUID
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
+from patchfrog.review.agents.roles import AgentRole
 
 
 class ReviewCandidateReason(StrEnum):
@@ -228,6 +229,12 @@ class ProposalStatus(StrEnum):
     REJECTED_CRITIC = "rejected_critic"
     REJECTED_LOW_CONFIDENCE = "rejected_low_confidence"
     SUPPRESSED_DUPLICATE = "suppressed_duplicate"
+    #: Two specialist agents made materially incompatible claims about
+    #: the same code (see :mod:`patchfrog.review.agents.cross_role`) and
+    #: the critic could not confidently resolve which was correct --
+    #: PatchFrog prefers suppressing both over publishing contradictory
+    #: comments about the same code.
+    SUPPRESSED_CONTRADICTION = "suppressed_contradiction"
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,6 +261,10 @@ class FinalAIFinding:
     final_confidence: Confidence
     corroborated_by_static: bool
     static_finding_ids: tuple[UUID, ...]
+    #: The specialist role (see :mod:`patchfrog.review.agents.roles`)
+    #: that produced this finding -- always attributable, never inferred
+    #: from prompt text after the fact.
+    agent_role: AgentRole
 
 
 class ReviewRunStatus(StrEnum):
@@ -293,3 +304,13 @@ class ReviewRunSummary:
     critic_usage: TokenUsage
     duration_ms: float
     reused_existing_run: bool = field(default=False)
+    #: Per-specialist-role token usage breakdown (see
+    #: :mod:`patchfrog.review.orchestration`) -- ``reviewer_usage`` above
+    #: remains the total across every role, unchanged in meaning from
+    #: before Agent Orchestration existed.
+    usage_by_role: dict[AgentRole, TokenUsage] = field(default_factory=dict)
+    #: Per-specialist-role call counts (attempted, regardless of
+    #: success/failure) -- lets evaluation/telemetry answer "how many
+    #: Correctness/Security calls did this run make" without re-deriving
+    #: it from raw provider call logs.
+    calls_by_role: dict[AgentRole, int] = field(default_factory=dict)

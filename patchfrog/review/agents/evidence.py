@@ -1,0 +1,35 @@
+"""The shared evidence package every specialist agent reviews from.
+
+Built exactly once per candidate (see
+:meth:`patchfrog.review.orchestration.AgentOrchestrator.review_candidate`),
+using the existing Context Engine exactly as-is -- no per-agent context
+rebuild, no adaptive multi-hop (that is a later milestone; see
+``docs/agent-orchestration.md``). Every specialist agent for one
+candidate receives this same, already-redacted package, which is what
+makes agent outputs comparable, reproducible, and cheap: one context
+build serves every role, not one per role.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from uuid import UUID
+
+from patchfrog.review.domain import ReviewCandidate, StaticFindingSummary
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateEvidencePackage:
+    """Everything a specialist agent is shown for one candidate --
+    already redacted, already scoped. ``allowed_file_paths`` is the exact
+    set deterministic validation checks every agent's claimed
+    ``file_path``/evidence locations against (see
+    :mod:`patchfrog.review.validation`), so an agent can never cite a
+    file it wasn't shown regardless of which role produced the claim."""
+
+    candidate: ReviewCandidate
+    context_text: str
+    diff_excerpt: str
+    static_findings: tuple[StaticFindingSummary, ...]
+    allowed_file_paths: frozenset[str]
+    context_bundle_id: UUID | None
