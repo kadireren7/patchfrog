@@ -7,3 +7,7 @@ def apply_tax(amount_cents: int, tax_rate_percent: float) -> int:
 def format_amount_cents(amount_cents: int) -> str:
     dollars, cents = divmod(amount_cents, 100)
     return f"${dollars}.{cents:02d}"
+
+
+def is_free(amount_cents: int) -> bool:
+    return amount_cents == 0
