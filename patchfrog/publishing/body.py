@@ -176,3 +176,23 @@ def format_summary_body(
     truncated_content, truncated = _truncate(content, limit=MAX_SUMMARY_BODY_CHARS - len(marker) - 2)
     body = f"{truncated_content}\n\n{marker}"
     return body, truncated
+
+
+def format_clean_review_body(*, publication_id: UUID, frog_marker: bool = True) -> str:
+    """The one-line review posted when Phase 5 genuinely produced zero
+    findings (``PublicationConfig.post_clean_summary``, off by default --
+    see that field's docstring). Deliberately never "No issues exist." --
+    PatchFrog only ever reports what its own review process did, never a
+    correctness guarantee about the code (external beta readiness: a
+    clean PR must not look like PatchFrog silently failed, but it also
+    must never overclaim)."""
+
+    heading = f"## {FROG_MARKER} PatchFrog review" if frog_marker else "## PatchFrog review"
+    lines = [
+        heading,
+        "",
+        "PatchFrog found no publishable findings in this review.",
+        "",
+        render_marker(publication_id),
+    ]
+    return "\n".join(lines)

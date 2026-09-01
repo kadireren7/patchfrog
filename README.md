@@ -38,6 +38,17 @@ A published review looks like:
 - PostgreSQL, Redis
 - A GitHub App installation (webhook + REST access to the target repository)
 
+## Quickstart
+
+New to PatchFrog? [`docs/quickstart.md`](docs/quickstart.md) is the one
+canonical path from a fresh clone to a real GitHub App review on a real
+pull request -- GitHub App creation, webhook setup, provider
+configuration, and the `patchfrog ops doctor`/`patchfrog ops preflight`
+diagnostics that tell you what's still missing before you open a PR to
+find out. See [`docs/external-beta.md`](docs/external-beta.md) first for
+exactly what you're setting up (self-hosted only -- PatchFrog Cloud is
+planned, not available today) and its current limitations.
+
 ## Local development
 
 ```bash
@@ -63,7 +74,7 @@ python -m patchfrog.cli review /path/to/repo --base main
 | `review-history`  | Inspect incremental review and finding-memory history                 |
 | `publish`         | Plan (default) or publish a completed review run as a GitHub review   |
 | `feedback`        | Sync/inspect/export reaction and command feedback signals             |
-| `ops`             | Health checks, recovery, usage, installation management               |
+| `ops`             | Health/doctor checks, per-repo preflight, recovery, usage, installation management |
 | `eval`            | Run the quality evaluation harness against the benchmark corpus       |
 
 Full command help: `python -m patchfrog.cli --help`.

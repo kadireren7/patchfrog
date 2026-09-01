@@ -37,8 +37,13 @@ DEFAULT_MAX_SUMMARY_FINDINGS = 50
 
 #: Bumped whenever PublicationConfig's own shape/semantics change --
 #: mirrors patchfrog.review.config.CONFIG_SCHEMA_VERSION. Bumped to 2 for
-#: the addition of `frog_marker`.
-PUBLICATION_CONFIG_SCHEMA_VERSION = 2
+#: the addition of `frog_marker`; bumped to 3 for the addition of
+#: `post_clean_summary` (external beta readiness) -- both changed what
+#: `fingerprint()` folds in, and therefore what a *new* publication
+#: attempt's canonical identity looks like going forward (never
+#: reinterpreting an already-`PUBLISHED` row's own already-frozen
+#: fingerprint column -- see that model's own docstring).
+PUBLICATION_CONFIG_SCHEMA_VERSION = 3
 
 #: Bumped whenever patchfrog.publishing.body's inline-comment/summary
 #: formatting (structure, headings, truncation behavior) changes
@@ -80,6 +85,17 @@ class PublicationConfig(BaseModel):
     #: `.patchfrog.yml` (`publish.frog_marker: false`) without affecting
     #: any other publication behavior.
     frog_marker: bool = True
+    #: When a review genuinely produces zero findings (never when findings
+    #: existed but were filtered/omitted/already-reported -- see
+    #: :mod:`patchfrog.publishing.planner`), post a short, honest
+    #: "PatchFrog found no publishable findings in this review" summary
+    #: instead of writing nothing at all. Off by default -- external beta
+    #: readiness found this ambiguous (a clean PR silently getting no
+    #: comment can look like PatchFrog never ran), but the pre-existing
+    #: silent behavior is preserved unless a repository explicitly opts
+    #: in (`publish.post_clean_summary: true`), so no existing deployment
+    #: is affected by this field's addition.
+    post_clean_summary: bool = False
 
     def fingerprint(self) -> str:
         """A deterministic fingerprint of the *effective* publication
@@ -105,6 +121,7 @@ class PublicationConfig(BaseModel):
             "max_inline_comments": self.max_inline_comments,
             "max_summary_findings": self.max_summary_findings,
             "frog_marker": self.frog_marker,
+            "post_clean_summary": self.post_clean_summary,
             "comment_format_version": COMMENT_FORMAT_VERSION,
             "publication_engine_version": PUBLICATION_ENGINE_VERSION,
         }

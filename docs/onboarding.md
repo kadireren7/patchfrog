@@ -69,24 +69,32 @@ content. PatchFrog never clones or accesses the fork repository itself,
 and never executes anything from the checked-out tree either way (see
 `patchfrog.repository.git`).
 
-## Publication is off by default -- two independent gates
+## Publication is off by default -- three independent gates
 
 A repository never gets real GitHub comments just by installing the
-App. **Both** of the following must be true:
+App. **All three** of the following must be true (see
+`docs/quickstart.md`'s step 15 for the one-screen version, and run
+`patchfrog ops preflight --repository owner/repo` to check all three
+for a real repository in one command, without waiting for a real PR to
+find out):
 
-1. **Beta gate** (`InstallationModel.publication_allowed`, default
+1. **Global gate** (`GLOBAL_PUBLICATION_ENABLED`, env var, default
+   `True`, restart required to change): the deployment-wide kill switch
+   for the publish stage specifically -- distinct from
+   `GLOBAL_REVIEW_PROCESSING_ENABLED`, which gates review *generation*
+   (see `docs/operations.md`'s "Kill switches").
+2. **Beta gate** (`InstallationModel.publication_allowed`, default
    `False`): an operator explicitly opts an installation in via
    `patchfrog ops installations --installation <id> --allow-publication`.
-2. **Repository gate** (`.patchfrog.yml`'s `publish.enabled`, default
+3. **Repository gate** (`.patchfrog.yml`'s `publish.enabled`, default
    `False`, unchanged from Phase 6): the repository owner opts their own
    repository in.
 
-Neither alone is sufficient -- this is deliberate defense in depth so a
-developer/test environment (where `publication_allowed` defaults `False`
-process-wide via `GLOBAL_PUBLICATION_ENABLED`, see `docs/deployment.md`)
-can never accidentally start writing real GitHub comments, and so a beta
-operator retains a global override independent of what any individual
-repository's config says.
+No one or two of the three is sufficient -- this is deliberate defense
+in depth so a developer/test environment can never accidentally start
+writing real GitHub comments, and so an operator retains an independent
+override regardless of what any individual repository's config says or
+what any individual installation was previously opted into.
 
 ## Beta allowlist mode
 
@@ -122,6 +130,20 @@ publish:
 That's the entire file most repositories will ever need. See
 `patchfrog/review/config.py` and `patchfrog/publishing/config.py` for
 every other (all optional) knob.
+
+A genuinely clean review (zero publishable findings) posts nothing at
+all by default -- the same silence as an ineligible repository, which
+can look like PatchFrog never ran. For a beta repository where that
+ambiguity matters, opt in to a one-line honest confirmation instead:
+
+```yaml
+publish:
+  enabled: true
+  post_clean_summary: true
+```
+
+Never posted when findings existed but were filtered/omitted/already
+reported -- only when Phase 5 genuinely found nothing to report.
 
 Selecting a non-default AI provider (Anthropic remains the default) is
 **not** a `.patchfrog.yml` concern -- it's an operator/deployment

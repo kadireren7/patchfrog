@@ -37,7 +37,11 @@ from uuid import UUID
 from patchfrog.analysis.domain import Confidence, Severity
 from patchfrog.diff.models import DiffFile
 from patchfrog.domain.pull_request import ChangedFile
-from patchfrog.publishing.body import format_inline_comment_body, format_summary_body
+from patchfrog.publishing.body import (
+    format_clean_review_body,
+    format_inline_comment_body,
+    format_summary_body,
+)
 from patchfrog.publishing.config import PublicationConfig
 from patchfrog.publishing.diff_mapper import map_finding_to_diff_position
 from patchfrog.publishing.domain import (
@@ -109,11 +113,26 @@ class PublicationPlanner:
             )
 
         if not findings:
+            if not config.post_clean_summary:
+                return ReviewPublicationPlan(
+                    snapshot=snapshot,
+                    mode=mode,
+                    status=ReviewPublicationStatus.SKIPPED_NO_FINDINGS,
+                    reason="the review run produced zero findings",
+                )
+            # Opt-in only (see PublicationConfig.post_clean_summary) --
+            # genuinely zero findings, never the "filtered/omitted/
+            # already-reported down to zero" case below, which still
+            # silently skips regardless of this setting (there IS
+            # something PatchFrog knows about; claiming "no publishable
+            # findings" for that case would be misleading).
+            clean_status = ReviewPublicationStatus.DRY_RUN if mode is ReviewPublicationMode.DRY_RUN else ReviewPublicationStatus.PLANNED
             return ReviewPublicationPlan(
                 snapshot=snapshot,
                 mode=mode,
-                status=ReviewPublicationStatus.SKIPPED_NO_FINDINGS,
-                reason="the review run produced zero findings",
+                status=clean_status,
+                reason=None,
+                summary_body=format_clean_review_body(publication_id=publication_id, frog_marker=config.frog_marker),
             )
 
         changed_by_path: Mapping[str, ChangedFile] = {f.path: f for f in changed_files}

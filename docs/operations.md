@@ -113,6 +113,11 @@ specific commit afterward with `patchfrog ops retry <review_run_id>`.
 
 ```
 patchfrog ops health                 # DB/Redis/migration readiness
+patchfrog ops doctor [--no-github-check]
+                                      # comprehensive, secret-safe deployment diagnostic
+                                      # -- see docs/beta-runbook.md
+patchfrog ops preflight --repository owner/repo
+                                      # would a PR against this repository publish right now?
 patchfrog ops stale [--recover]      # runs stuck RUNNING past the threshold
 patchfrog ops failed [--since ISO]   # failed review runs, with error detail
 patchfrog ops retry <review_run_id>  # re-enqueue the pipeline for that commit
@@ -121,6 +126,8 @@ patchfrog ops installations          # list, or --activate/--suspend/--allow-pub
 patchfrog telemetry review <run-id> [--format text|json] [--output PATH]
                                       # deterministic telemetry snapshot for one review run
                                       # -- see docs/telemetry-intelligence.md
+patchfrog telemetry beta-summary --since 7d [--repository owner/repo]
+                                      # operator summary across review runs in a time window
 ```
 
 No command mutates GitHub directly, and no command is destructive to
@@ -237,7 +244,9 @@ stdout.
 
 | Symptom | Check |
 |---|---|
-| PR opened, no review appears | `patchfrog ops failed`; `patchfrog.ops.eligibility` log line (`pull_request_ineligible`) for the reason |
-| Review happens, no GitHub comment | Both publication gates -- `patchfrog ops installations` for `publication_allowed`, and the repository's `.patchfrog.yml` `publish.enabled` |
+| Not sure what's misconfigured at all | `patchfrog ops doctor` |
+| Not sure if a specific repository will publish | `patchfrog ops preflight --repository owner/repo` |
+| PR opened, no review appears | `patchfrog ops failed`; `patchfrog ops preflight` for the exact eligibility reason |
+| Review happens, no GitHub comment | `patchfrog ops preflight` -- all three publication gates (global, installation, repository) must be true |
 | `GET /health/ready` returns 503 | Response body names which check failed (`database`/`redis`) and, for database, whether it's a migration mismatch |
 | A review run stuck `RUNNING` | `patchfrog ops stale` |

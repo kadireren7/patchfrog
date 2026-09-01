@@ -272,7 +272,19 @@ than surfacing as a confusing runtime error later.
   migration revision, Redis reachable. Returns HTTP 503 (never 200) on
   any failure. Use for a load balancer's routing decision. Deliberately
   never checks GitHub or the LLM provider -- their outages don't make
-  the API itself unable to accept a webhook.
+  the API itself unable to accept a webhook. Worker availability is
+  deliberately never inferred from API readiness either -- the two are
+  separate processes/containers; use `patchfrog ops doctor` (below) or
+  `celery -A apps.worker.celery_app inspect ping` against the worker
+  directly for that.
+
+For a comprehensive, human-readable, secret-safe report covering all of
+the above plus GitHub App/provider/model configuration --
+`patchfrog ops doctor` (external beta readiness; see
+`docs/beta-runbook.md`). It exists specifically because `Settings()`
+itself raises a raw `pydantic.ValidationError` for a missing required
+variable -- `doctor` catches that and reports each one as an actionable
+line instead of crashing before it can check anything else.
 
 ## Metrics
 

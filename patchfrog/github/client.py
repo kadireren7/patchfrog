@@ -80,6 +80,30 @@ class GitHubClient:
         data = await self._get_json(installation_id=installation_id, path=path)
         return _parse_pull_request(data)
 
+    async def get_default_branch_head_sha(
+        self, *, installation_id: int, owner: str, repository: str
+    ) -> str:
+        """The exact commit SHA at the tip of the repository's default
+        branch, right now -- used by ``patchfrog ops preflight`` (external
+        beta readiness) to resolve ``.patchfrog.yml`` for a repository
+        that has no open PR yet. Never used by the real review/publish
+        pipeline itself (that always works from a webhook-supplied
+        ``head_sha``, never a freshly-queried default branch -- see the
+        module docstring of :mod:`patchfrog.publishing.config_resolution`)."""
+
+        repo_data = await self._get_json(installation_id=installation_id, path=f"/repos/{owner}/{repository}")
+        default_branch = repo_data.get("default_branch")
+        if not isinstance(default_branch, str) or not default_branch:
+            raise GitHubResponseError(f"GitHub did not report a default_branch for {owner}/{repository}")
+
+        branch_data = await self._get_json(
+            installation_id=installation_id, path=f"/repos/{owner}/{repository}/branches/{default_branch}"
+        )
+        sha = branch_data.get("commit", {}).get("sha")
+        if not isinstance(sha, str) or not sha:
+            raise GitHubResponseError(f"GitHub did not report a head commit for {owner}/{repository}@{default_branch}")
+        return sha
+
     async def list_pull_request_files(
         self, *, installation_id: int, ref: PullRequestRef
     ) -> list[ChangedFile]:

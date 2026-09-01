@@ -93,6 +93,42 @@ async def test_retrying_the_same_review_run_after_success_is_idempotent(
     assert len(publisher.publish_calls) == 1  # no duplicate GitHub write
 
 
+async def test_post_clean_summary_enabled_publishes_a_real_clean_review(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """External beta readiness: a genuinely clean review must not look
+    like PatchFrog silently failed once a repository opts in -- proven
+    as a real GitHub write (FakeReviewPublisher), not just DRY_RUN
+    planning (see test_publishing_service_dry_run.py for that half)."""
+
+    reviewed = await setup_reviewed_pull_request(
+        session_factory,
+        full_name="test/clean-summary-publish",
+        changed_lines=[14],
+        response_factory=lambda req: scripted_findings_response([]),
+        tmp_root=tmp_path,
+    )
+    assert reviewed.findings == []
+
+    publisher = FakeReviewPublisher(
+        pull_request=_pr_metadata(number=reviewed.pull_request_number, head_sha=reviewed.commit_sha),
+        changed_files=reviewed.changed_files,
+    )
+    service = ReviewPublicationService(session_factory=session_factory, publisher=publisher)
+    result = await service.publish(
+        review_run_id=reviewed.review_run_id,
+        mode=ReviewPublicationMode.PUBLISH,
+        config=PublicationConfig(enabled=True, post_clean_summary=True),
+    )
+
+    assert result.status is ReviewPublicationStatus.PUBLISHED
+    assert result.published_inline == 0
+    assert len(publisher.publish_calls) == 1
+    call = publisher.publish_calls[0]
+    assert "no publishable findings" in call.body
+    assert call.comments == ()
+
+
 async def test_realistic_fixture_more_findings_than_cap_yields_inline_plus_summary(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
