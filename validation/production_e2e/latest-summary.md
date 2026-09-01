@@ -21,6 +21,15 @@ repository-level publish opt-in gate (see "Known limitation" below).
 Nothing here was fabricated or extrapolated; every REAL claim is backed
 by a persisted run/publication id or a real GitHub API response.
 
+**Update**: the unmet criterion above was a real product gap (a
+carried-forward finding had no way to ever become publishable once a
+gate opened late), not an external limitation. It was fixed in this same
+PR and re-validated live against a second real dogfood PR (#40) — see
+section 15 for the full root-cause writeup, the code fix, and the real
+publish/idempotency/feedback proof. Sections 1-14 below are preserved
+exactly as originally written, as the honest historical record of what
+the first pass found.
+
 ## 1. REAL: webhook deliveries
 
 Received on `POST /webhooks/github`, HMAC-verified against the real
@@ -441,8 +450,112 @@ it became more accurate.
   real recheck that genuinely fixes the bug resolves the finding and it
   is never published.
 
-Full local unit + integration suite: 1317 tests total, 1314 passing (3
+Full local unit + integration suite: 1319 tests total, 1316 passing (3
 pre-existing failures in `tests/integration/test_static_analysis_service.py`,
 confirmed via `git stash` to fail identically with none of this
 milestone's changes applied — an unrelated, pre-existing environment
 issue, not caused by this work).
+
+### 15.5 REAL: live re-validation against `kadireren7/patchfrog`
+
+Second dogfood PR, [#40](https://github.com/kadireren7/patchfrog/pull/40)
+on `kadireren7/patchfrog`, branch `dogfood/publish-gate-live-2026-09-01`
+— closed unmerged and its branch deleted after this validation. Unlike
+PR #38, `.patchfrog.yml` (`publish.enabled: true, min_severity: medium`)
+was present from this PR's **first** commit, so the publish gate was
+open from the start — the corrected acceptance criterion this round
+needed to actually exercise. Installation `publication_allowed` and
+`global_publication_enabled` (the latter already `true` by default) were
+both enabled for the duration and reverted afterward.
+
+**One real, self-inflicted operator misconfiguration, corrected before
+any valid attempt (not a PatchFrog bug)**: the worker was first started
+with `PATCHFROG_REVIEW_PROVIDER=gemini` but without explicitly setting
+`PATCHFROG_REVIEW_MODEL`, so it defaulted to `claude-opus-5` (the
+Anthropic default) while still using the Gemini client -- both real
+candidates for the `opened` delivery (`github_delivery_id=92641550-a5f1-11f1-9da1-f05fe727c679`,
+head `2023bd1...`) failed with a real `404 NOT_FOUND` from Gemini's API
+(`models/claude-opus-5 is not found`). This is a real HTTP call that
+really failed, but it never exercised the acceptance criterion at all
+-- corrected by restarting the worker with `PATCHFROG_REVIEW_MODEL=gemini-3.6-flash`
+/ `PATCHFROG_REVIEW_CRITIC_MODEL=gemini-3.6-flash` explicitly set, then
+pushing one necessary follow-up commit (a `synchronize`) to get a fresh
+review attempt under the corrected configuration -- consistent with this
+milestone's own established exception ("only if the prior run was
+invalid... due to infrastructure failure"); an operator misconfiguration
+preventing any real review from occurring is exactly that.
+
+**Real `synchronize` delivery** (`github_delivery_id=e3429910-a5f1-11f1-98dc-5d0137a4631a`,
+head `c5fa4379aedcd19cf4a0ef0723d16308aea0757e`) -> **real review run**
+`ea941e9d-5c65-400f-962a-3bf36b81cdb9`, `succeeded`, 2 candidates
+reviewed, 1 accepted (the intentional `apply_tax` percentage/fraction
+bug, correctly found, `severity=high`, `confidence=high`). Real Gemini
+usage: 2 reviewer calls (3,857 input / 450 output tokens) + 1 critic
+call (1,555 input / 89 output tokens), `gemini-3.6-flash` throughout,
+`retries_consumed=0` -- both within the same strict operator caps as
+before, no Anthropic call anywhere. Candidate 1 (`apply_tax` itself) was
+escalated to the `deep` effort tier via the `high_risk_proposal` path,
+the same real Quality + Cost Guard behavior observed in section 5.
+
+**Real publication**: `patchfrog.publish_review` produced
+publication `ccad1193-7388-4bfb-97c9-f189e3d451c5`, status `published`,
+`published_inline=1` -- a real GitHub PR review,
+[review id `5077028418`](https://github.com/kadireren7/patchfrog/pull/40#pullrequestreview-5077028418),
+one real inline comment (id `3903299441`) on
+`validation/production_e2e/dogfood2/pricing.py`, confirmed independently
+via `gh api repos/kadireren7/patchfrog/pulls/40/reviews` (not only from
+worker logs/DB state). This is the exact, previously-unmet mandatory
+acceptance criterion: a carried-forward-publication-fix-enabled
+`patchfrog.publish_review` dispatch reaching real GitHub for the first
+time.
+
+**Real publication idempotency**: the exact same `review_run_id` was
+dispatched to `patchfrog.publish_review` a second time. Result:
+`status=published`, `reconciled=True`, `review_publish_reconciled
+... reason=already_published` -- zero new GitHub write. Confirmed
+against GitHub itself, not only DB state:
+`gh api .../pulls/40/reviews` still reports exactly one
+`patchfrog[bot]` review (`5077028418`), both before and after the
+retry.
+
+**Real feedback signal**: a single `+1` reaction (id `433109934`,
+added via `gh api .../pulls/comments/3903299441/reactions`) on the real
+inline comment. `patchfrog feedback sync --repository
+kadireren7/patchfrog --pr 40` reported `observed=1 ingested=1
+duplicates_ignored=0 unattributed=0 github_comment_ids_enriched=1` --
+attributed to the exact real finding id `7ef76126-60d7-41c3-b53b-051398f2410c`
+(confirmed via `patchfrog telemetry review ea941e9d-... --format json`:
+`feedback: [{finding_id: "7ef76126-...", scope: "finding",
+has_feedback: true, positive_reactions: 1, usefulness_signal:
+"positive"}]` -- `scope: "finding"` is exactly
+`FeedbackScope.FINDING`).
+
+**Final telemetry** for this run is saved at
+`telemetry/run4_corrected_publish_lifecycle.json` (grepped for
+secret-shaped strings before commit -- none found), confirming: real
+provider usage as above, `deep` effort tier + escalation reason present,
+critic usage present, finding lifecycle `accepted_final`, real
+finding-scoped feedback as above, and no raw source/context/prompt/
+provider-response/comment-body/secret text anywhere in the export --
+the same privacy guarantee section 13 already established, now
+reconfirmed for this run.
+
+**Cleanup, identical discipline to the first round**: dogfood PR #40
+closed unmerged with an explanatory comment, its branch deleted both
+remotely and locally; `installation.publication_allowed` reverted
+`True` -> `False`; the App's webhook URL reverted to the exact prior
+value (`https://specialty-impose-depend-alias.trycloudflare.com/webhooks/github`);
+the temporary `cloudflared` tunnel, host-venv API process, and host-venv
+worker process were all stopped; the local dogfood clone directory was
+deleted. Review/publication/feedback/telemetry DB rows for PR #40 were
+preserved (not cleaned up), same reasoning as section "Cleanup
+discipline" in memory: this validation artifact references their exact
+ids by design.
+
+**Net result: mandatory acceptance criterion #9 ("normal PatchFrog
+publication reaches GitHub"), unmet in the first round (section 8), is
+now satisfied for real** -- both the originally-blocked scenario (a
+finding accepted before a gate opened, section 15.1-15.4's code fix)
+and a freshly-generated finding published for the first time
+(section 15.5) are proven, live, against PatchFrog's own real GitHub
+repository.

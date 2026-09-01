@@ -1,0 +1,151 @@
+{
+  "candidate_count": 2,
+  "candidates": [
+    {
+      "accepted_count": 1,
+      "candidate_id": "4468cdbb-3278-497d-a0bc-e4120c8a0f09",
+      "context_bundle_id": "3791a39e-662f-4711-9cc9-41310a7ee0ad",
+      "effort_reasons": [
+        "no_signal",
+        "high_risk_proposal"
+      ],
+      "effort_tier": "deep",
+      "escalated": true,
+      "escalation_reason": "high_risk_proposal",
+      "file_path": "validation/production_e2e/dogfood2/pricing.py",
+      "proposals_count": 1,
+      "reason": "changed_symbol",
+      "static_finding_count": 0,
+      "status": "reviewed"
+    },
+    {
+      "accepted_count": 0,
+      "candidate_id": "700d758e-d4d2-464a-a967-108da516d13c",
+      "context_bundle_id": "90a32bd4-13d0-404c-b5ba-8d2ea4fd6c05",
+      "effort_reasons": [
+        "no_signal"
+      ],
+      "effort_tier": "light",
+      "escalated": false,
+      "escalation_reason": null,
+      "file_path": "validation/production_e2e/dogfood2/pricing.py",
+      "proposals_count": 0,
+      "reason": "changed_module_region",
+      "static_finding_count": 0,
+      "status": "reviewed"
+    }
+  ],
+  "candidates_escalated": 1,
+  "candidates_failed": 0,
+  "candidates_reviewed": 2,
+  "candidates_skipped_budget": 0,
+  "commit_sha": "c5fa4379aedcd19cf4a0ef0723d16308aea0757e",
+  "completed_at": "2026-09-01T10:45:12.527348+00:00",
+  "context": [
+    {
+      "adaptive_attempted": false,
+      "adaptive_direction": null,
+      "adaptive_occurred": false,
+      "adaptive_reasons": [],
+      "bundle_id": "3791a39e-662f-4711-9cc9-41310a7ee0ad",
+      "candidate_id": "4468cdbb-3278-497d-a0bc-e4120c8a0f09",
+      "depth_2_candidate_count": 0,
+      "depth_2_selected_count": 0,
+      "depth_2_tokens": 0,
+      "engine_version": 2,
+      "generation_ms": 282.88691400302923,
+      "total_lines": 20,
+      "total_tokens": 270
+    },
+    {
+      "adaptive_attempted": false,
+      "adaptive_direction": null,
+      "adaptive_occurred": false,
+      "adaptive_reasons": [],
+      "bundle_id": "90a32bd4-13d0-404c-b5ba-8d2ea4fd6c05",
+      "candidate_id": "700d758e-d4d2-464a-a967-108da516d13c",
+      "depth_2_candidate_count": 0,
+      "depth_2_selected_count": 0,
+      "depth_2_tokens": 0,
+      "engine_version": 2,
+      "generation_ms": 14.387513998372015,
+      "total_lines": 26,
+      "total_tokens": 288
+    }
+  ],
+  "duration_ms": 104589.8586000003,
+  "feedback": [
+    {
+      "explicit_false_positive": 0,
+      "explicit_fixed": 0,
+      "explicit_ignore": 0,
+      "explicit_useful": 0,
+      "finding_id": "7ef76126-60d7-41c3-b53b-051398f2410c",
+      "has_feedback": true,
+      "negative_reactions": 0,
+      "positive_reactions": 1,
+      "resolution_signal": "unknown",
+      "scope": "finding",
+      "usefulness_signal": "positive"
+    }
+  ],
+  "finding_lifecycle": [
+    {
+      "agent_role": "correctness",
+      "candidate_id": "4468cdbb-3278-497d-a0bc-e4120c8a0f09",
+      "category": "correctness",
+      "confidence": "high",
+      "critic_decision": "accept",
+      "effort_tier": "deep",
+      "end_line": 4,
+      "file_path": "validation/production_e2e/dogfood2/pricing.py",
+      "finding_id": "7ef76126-60d7-41c3-b53b-051398f2410c",
+      "outcome": "accepted_final",
+      "proposal_id": "7715a611-5219-4877-9f39-22a6bf06bb03",
+      "severity": "high",
+      "start_line": 1,
+      "status": "accepted",
+      "validation_outcome": "valid"
+    }
+  ],
+  "provider": {
+    "critic_calls_total": 1,
+    "critic_input_tokens_total": 1555,
+    "critic_latency_ms_aggregate": 33807.29066599815,
+    "critic_model": "gemini-3.6-flash",
+    "critic_output_tokens_total": 89,
+    "critic_provider": "gemini",
+    "critic_thinking_tokens_total": 0,
+    "retries_consumed": 0,
+    "reviewer_by_role": [
+      {
+        "calls": 2,
+        "input_tokens": 3857,
+        "output_tokens": 450,
+        "role": "correctness",
+        "thinking_tokens": 0
+      },
+      {
+        "calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "role": "security",
+        "thinking_tokens": 0
+      }
+    ],
+    "reviewer_calls_total": 2,
+    "reviewer_input_tokens_total": 3857,
+    "reviewer_latency_ms_aggregate": 60321.81103000039,
+    "reviewer_model": "gemini-3.6-flash",
+    "reviewer_output_tokens_total": 450,
+    "reviewer_provider": "gemini",
+    "reviewer_thinking_tokens_total": 0
+  },
+  "pull_request_id": "3113d780-3b92-48d9-865b-5be5128e9bfb",
+  "repository_id": "1cb9e303-428c-45a3-84ec-02f1dad0bc3b",
+  "review_feedback": [],
+  "review_run_id": "ea941e9d-5c65-400f-962a-3bf36b81cdb9",
+  "schema_version": 1,
+  "started_at": "2026-09-01T10:43:27.867949+00:00",
+  "status": "succeeded"
+}
