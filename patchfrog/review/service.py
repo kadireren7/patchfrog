@@ -205,6 +205,7 @@ class _CandidateOutcome:
         "final",
         "proposals",
         "retries_consumed",
+        "reviewer_latency_ms",
         "reviewer_usage",
         "skipped_budget",
         "usage_by_role",
@@ -231,6 +232,7 @@ class _CandidateOutcome:
         self.effort_decision: ReviewEffortDecision | None = None
         self.critic_calls = 0
         self.retries_consumed = 0
+        self.reviewer_latency_ms = 0.0
 
 
 class PullRequestReviewService:
@@ -563,6 +565,7 @@ class PullRequestReviewService:
         candidates_escalated = 0
         critic_calls_total = 0
         retries_total = 0
+        reviewer_latency_ms_total = 0.0
         for o in outcomes:
             reviewer_usage = reviewer_usage + o.reviewer_usage
             critic_usage = critic_usage + o.critic_usage
@@ -577,6 +580,7 @@ class PullRequestReviewService:
                     candidates_escalated += 1
             critic_calls_total += o.critic_calls
             retries_total += o.retries_consumed
+            reviewer_latency_ms_total += o.reviewer_latency_ms
 
         duration_ms = (time.monotonic() - start) * 1000
 
@@ -633,6 +637,7 @@ class PullRequestReviewService:
                             status=ProposalStatus.REJECTED_VALIDATION,
                             validation_detail=validated.detail,
                             agent_role=agent_proposal.role,
+                            validation_outcome=validated.outcome,
                         )
                         continue
 
@@ -647,6 +652,7 @@ class PullRequestReviewService:
                             status=ProposalStatus.SUPPRESSED_CONTRADICTION,
                             validation_detail="unresolved cross-role contradiction",
                             agent_role=agent_proposal.role,
+                            validation_outcome=validated.outcome,
                         )
                         if verdict is not None:
                             await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
@@ -661,6 +667,7 @@ class PullRequestReviewService:
                             status=ProposalStatus.SUPPRESSED_DUPLICATE,
                             validation_detail="cross-role duplicate of a stronger equivalent proposal",
                             agent_role=agent_proposal.role,
+                            validation_outcome=validated.outcome,
                         )
                         if verdict is not None:
                             await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
@@ -675,6 +682,7 @@ class PullRequestReviewService:
                             status=ProposalStatus.SUPPRESSED_BUDGET,
                             validation_detail="required critic verification could not be reserved against the run budget",
                             agent_role=agent_proposal.role,
+                            validation_outcome=validated.outcome,
                         )
                         continue
 
@@ -691,6 +699,7 @@ class PullRequestReviewService:
                             status=ProposalStatus.REJECTED_CRITIC,
                             validation_detail=verdict.reasoning_summary,
                             agent_role=agent_proposal.role,
+                            validation_outcome=validated.outcome,
                         )
                         await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
                         continue
@@ -705,6 +714,7 @@ class PullRequestReviewService:
                             status=ProposalStatus.REJECTED_LOW_CONFIDENCE,
                             validation_detail="below configured minimum final confidence",
                             agent_role=agent_proposal.role,
+                            validation_outcome=validated.outcome,
                         )
                         if verdict is not None:
                             await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
@@ -720,6 +730,7 @@ class PullRequestReviewService:
                         status=status,
                         validation_detail=None,
                         agent_role=agent_proposal.role,
+                        validation_outcome=validated.outcome,
                     )
                     if verdict is not None:
                         await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
@@ -769,6 +780,8 @@ class PullRequestReviewService:
                 candidates_escalated=candidates_escalated,
                 critic_calls=critic_calls_total,
                 retries_consumed=retries_total,
+                reviewer_latency_ms=reviewer_latency_ms_total,
+                calls_by_role=calls_by_role,
                 duration_ms=duration_ms,
             )
             await session.commit()
@@ -805,6 +818,7 @@ class PullRequestReviewService:
             candidates_escalated=candidates_escalated,
             critic_calls=critic_calls_total,
             retries_consumed=retries_total,
+            reviewer_latency_ms=reviewer_latency_ms_total,
         )
 
     async def _review_candidate(
@@ -976,6 +990,7 @@ class PullRequestReviewService:
         outcome.calls_by_role = result.calls_by_role
         outcome.critic_calls = result.critic_calls
         outcome.retries_consumed = result.retries_consumed
+        outcome.reviewer_latency_ms = result.reviewer_latency_ms
 
         for agent_proposal in outcome.proposals:
             v = agent_proposal.validated
@@ -1054,6 +1069,10 @@ def _summary_from_model(run: ReviewRunModel, *, reused: bool) -> ReviewRunSummar
         tier_counts = {ReviewEffortTier(k): v for k, v in json.loads(run.candidates_by_tier).items()}
     except (json.JSONDecodeError, ValueError):
         tier_counts = {}
+    try:
+        role_call_counts = {AgentRole(k): v for k, v in json.loads(run.calls_by_role).items()}
+    except (json.JSONDecodeError, ValueError):
+        role_call_counts = {}
 
     return ReviewRunSummary(
         run_id=run.id,
@@ -1090,8 +1109,10 @@ def _summary_from_model(run: ReviewRunModel, *, reused: bool) -> ReviewRunSummar
                 thinking_tokens=run.security_thinking_tokens,
             ),
         },
+        calls_by_role=role_call_counts,
         candidates_by_tier=tier_counts,
         candidates_escalated=run.candidates_escalated,
         critic_calls=run.critic_calls,
         retries_consumed=run.retries_consumed,
+        reviewer_latency_ms=run.reviewer_latency_ms,
     )

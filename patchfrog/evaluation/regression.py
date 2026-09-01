@@ -29,7 +29,15 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True)
 class RegressionThresholds:
-    """All configurable -- see the Phase 8 spec's own suggested defaults."""
+    """All configurable -- see the Phase 8 spec's own suggested defaults.
+
+    The three ``max_*_increase_pct`` cost thresholds (Evaluation &
+    Telemetry Intelligence milestone, spec section 36) default to
+    ``None`` -- meaning "report the delta, never fail on it." A cost
+    regression is not automatically a quality regression, so CI must
+    never be silently gated on a cost threshold nobody configured; a
+    caller opts in explicitly by passing a real percentage.
+    """
 
     max_precision_drop: float = 0.03
     max_clean_pass_rate_drop: float = 0.05
@@ -39,6 +47,10 @@ class RegressionThresholds:
     #: Looser: recall may regress by up to this much before it's treated
     #: as a failure -- precision is the priority, not recall.
     max_recall_drop: float = 0.10
+    #: Report-only unless configured -- see the class docstring.
+    max_provider_calls_increase_pct: float | None = None
+    max_input_tokens_increase_pct: float | None = None
+    max_critic_calls_increase_pct: float | None = None
 
 
 #: The module-level default instance -- used as :func:`compare`'s default
@@ -55,6 +67,15 @@ _IDENTITY_KEYS_MUST_MATCH = (
     "incremental_review_engine_version",
     "review_memory_version",
     "mode",
+    #: Evaluation & Telemetry Intelligence milestone (spec section 18):
+    #: a Context Engine version bump, a Quality + Cost Guard policy
+    #: change, a guard-on run compared against a "uniform baseline"
+    #: ablation run, or two different context ablation variants must
+    #: never be silently treated as comparable baselines.
+    "context_engine_version",
+    "quality_cost_policy_version",
+    "quality_cost_guard_enabled",
+    "context_config_identity",
 )
 
 
@@ -159,6 +180,36 @@ def compare(
             f"(threshold {thresholds.max_duplicate_rate_increase:.4f})",
         )
     )
+
+    # ``.get(..., {})``: gracefully skipped (never a crash) for a report
+    # that predates efficiency metrics entirely -- real reports built by
+    # patchfrog.evaluation.reporting.build_report always have this
+    # section, but regression.compare must never assume every caller's
+    # input dict does.
+    b_efficiency = b_metrics.get("efficiency", {})
+    c_efficiency = c_metrics.get("efficiency", {})
+    for name, threshold, key in (
+        ("provider_calls", thresholds.max_provider_calls_increase_pct, "provider_calls"),
+        ("input_tokens", thresholds.max_input_tokens_increase_pct, "reviewer_input_tokens"),
+        ("critic_calls", thresholds.max_critic_calls_increase_pct, "critic_calls"),
+    ):
+        if key not in b_efficiency or key not in c_efficiency:
+            continue
+        b_value = b_efficiency[key]
+        c_value = c_efficiency[key]
+        increase_pct = ((c_value - b_value) / b_value * 100) if b_value else (100.0 if c_value else 0.0)
+        # ``threshold is None`` -- report-only by default (spec section
+        # 36): the delta is always computed and surfaced, but never fails
+        # the run unless a caller explicitly configured a real threshold.
+        passed = threshold is None or increase_pct <= threshold
+        checks.append(
+            RegressionCheck(
+                name=f"cost_{name}",
+                passed=passed,
+                detail=f"baseline={b_value} current={c_value} increase={increase_pct:.2f}% "
+                f"(threshold {'report-only' if threshold is None else f'{threshold:.2f}%'})",
+            )
+        )
 
     c_incremental = current.get("incremental")
     c_unsafe = c_incremental["unsafe_carry_forward_count"] if c_incremental else 0

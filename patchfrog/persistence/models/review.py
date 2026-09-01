@@ -46,6 +46,7 @@ from patchfrog.review.domain import (
     ProposalStatus,
     ReviewCandidateReason,
     ReviewRunStatus,
+    ValidationOutcome,
 )
 from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 
@@ -143,12 +144,32 @@ class ReviewRunModel(Base):
     candidates_escalated: Mapped[int] = mapped_column(Integer, default=0)
     critic_calls: Mapped[int] = mapped_column(Integer, default=0)
     retries_consumed: Mapped[int] = mapped_column(Integer, default=0)
+    #: Per-specialist-role reviewer call counts (see
+    #: :mod:`patchfrog.review.orchestration`) -- JSON object mapping role
+    #: value -> call count, the same JSON-text-column pattern as
+    #: ``candidates_by_tier``. Was previously computed in-memory
+    #: (:attr:`patchfrog.review.domain.ReviewRunSummary.calls_by_role`)
+    #: but never persisted -- a real gap for telemetry (spec section 10:
+    #: "Reviewer: ... calls"), since per-role token *counts* alone
+    #: (``correctness_input_tokens`` etc. above) cannot tell "one large
+    #: call" apart from "several small calls." Default ``"{}"``:
+    #: nullable-safe for historical rows.
+    calls_by_role: Mapped[str] = mapped_column(Text, default="{}")
     #: Thinking/reasoning token totals (see
     #: :attr:`patchfrog.review.domain.TokenUsage.thinking_tokens`),
     #: broken out for providers/models that report them. 0 for a run
     #: where nothing reported them -- never fabricated.
     reviewer_thinking_tokens: Mapped[int] = mapped_column(Integer, default=0)
     critic_thinking_tokens: Mapped[int] = mapped_column(Integer, default=0)
+
+    #: Sum of every specialist role call's provider-reported latency
+    #: across the whole run (:mod:`patchfrog.telemetry`'s "provider-work
+    #: latency aggregate") -- deliberately distinct from ``duration_ms``
+    #: (wall clock) below: roles run concurrently and candidates may run
+    #: concurrently too, so this can legitimately exceed ``duration_ms``.
+    #: 0.0 default is nullable-safe for rows predating this milestone,
+    #: which never captured per-role latency at all -- never fabricated.
+    reviewer_latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
 
     duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -240,6 +261,20 @@ class AIFindingProposalModel(Base):
     impact: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[ProposalStatus] = mapped_column(enum_column(ProposalStatus, length=32))
     validation_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: The typed :class:`~patchfrog.review.domain.ValidationOutcome` this
+    #: proposal's own deterministic validation produced -- distinct from
+    #: ``validation_detail`` (free-text prose, never machine-classified)
+    #: and from ``status`` (the proposal's *overall* terminal disposition,
+    #: which folds in critic/dedup/budget outcomes too). Populated for
+    #: every proposal, not just rejected ones, since validation always
+    #: runs and always produces one outcome regardless of what happens
+    #: downstream. ``None`` only for rows persisted before this column
+    #: existed -- never fabricated, never inferred from ``validation_detail``
+    #: prose (see :mod:`patchfrog.telemetry`'s module docstring on why
+    #: telemetry must never guess from free text).
+    validation_outcome: Mapped[ValidationOutcome | None] = mapped_column(
+        enum_column(ValidationOutcome, length=32), nullable=True
+    )
     #: The specialist role (see :mod:`patchfrog.review.agents.roles`)
     #: that produced this proposal. Nullable: rows persisted before
     #: Agent Orchestration existed never had a role at all -- ``None``

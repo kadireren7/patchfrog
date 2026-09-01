@@ -266,3 +266,12 @@ silently reused as if it already went through orchestration.
 `CONFIG_SCHEMA_VERSION` (repository-controlled `.patchfrog.yml`
 semantics) is **unchanged** -- this milestone added no new repository
 field.
+
+## See also
+
+`docs/telemetry-intelligence.md` reports per-role reviewer token/call
+counts (`ProviderTelemetry.reviewer_by_role`) and a per-role proposal
+funnel (`compute_role_funnel`), so "is Security producing more
+unsupported claims than Correctness?" is answerable directly from
+already-persisted data -- never by re-deriving it from raw provider call
+logs.
