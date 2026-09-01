@@ -6,8 +6,15 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from patchfrog.persistence.models.publishing import ReviewPublicationCommentModel
-from patchfrog.publishing.domain import ReviewPublicationComment
+from patchfrog.persistence.models.publishing import (
+    ReviewPublicationCommentModel,
+    ReviewPublicationModel,
+)
+from patchfrog.publishing.domain import (
+    PublicationDisposition,
+    ReviewPublicationComment,
+    ReviewPublicationStatus,
+)
 
 
 def _body_hash(body: str) -> str | None:
@@ -57,3 +64,41 @@ class ReviewPublicationCommentRepository:
             .order_by(ReviewPublicationCommentModel.path, ReviewPublicationCommentModel.line)
         )
         return list(result.scalars().all())
+
+    async def list_actually_published_finding_ids(
+        self, session: AsyncSession, *, finding_ids: frozenset[uuid.UUID]
+    ) -> frozenset[uuid.UUID]:
+        """Which of ``finding_ids`` were part of a publication that
+        actually reached GitHub -- i.e. a comment row (``INLINE`` or
+        ``SUMMARY_ONLY`` disposition; ``ALREADY_REPORTED``/``OMITTED``
+        never wrote anything) attached to a publication whose *parent*
+        row's status is ``PUBLISHED``. Comment rows are persisted for
+        every attempt regardless of outcome (dry-run, stale, disabled,
+        failed), so the parent's status is the only reliable signal that
+        a real GitHub write happened -- see the ``_persist_plan_comments``
+        call site in :mod:`patchfrog.publishing.service`, which runs
+        before any of those outcomes are known.
+
+        Used by :func:`patchfrog.publishing.queries.get_current_active_findings`
+        to tell a genuinely never-published carried-forward finding (safe
+        to publish now that a gate has opened) apart from one that was
+        already reported to the PR in an earlier review's real write
+        (must never be re-published)."""
+
+        if not finding_ids:
+            return frozenset()
+        result = await session.execute(
+            select(ReviewPublicationCommentModel.finding_id)
+            .join(
+                ReviewPublicationModel,
+                ReviewPublicationCommentModel.review_publication_id == ReviewPublicationModel.id,
+            )
+            .where(
+                ReviewPublicationCommentModel.finding_id.in_(finding_ids),
+                ReviewPublicationModel.status == ReviewPublicationStatus.PUBLISHED,
+                ReviewPublicationCommentModel.disposition.in_(
+                    (PublicationDisposition.INLINE, PublicationDisposition.SUMMARY_ONLY)
+                ),
+            )
+        )
+        return frozenset(fid for fid in result.scalars().all() if fid is not None)

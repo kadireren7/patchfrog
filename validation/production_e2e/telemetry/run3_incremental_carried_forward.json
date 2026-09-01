@@ -1,0 +1,54 @@
+{
+  "candidate_count": 0,
+  "candidates": [],
+  "candidates_escalated": 0,
+  "candidates_failed": 0,
+  "candidates_reviewed": 0,
+  "candidates_skipped_budget": 0,
+  "commit_sha": "a374d981ac7a704ac93ed6b2b5d21dc97564ed51",
+  "completed_at": "2026-09-01T09:36:45.039517+00:00",
+  "context": [],
+  "duration_ms": 371.9277849995706,
+  "feedback": [],
+  "finding_lifecycle": [],
+  "provider": {
+    "critic_calls_total": 0,
+    "critic_input_tokens_total": 0,
+    "critic_latency_ms_aggregate": 0,
+    "critic_model": "gemini-3.6-flash",
+    "critic_output_tokens_total": 0,
+    "critic_provider": "gemini",
+    "critic_thinking_tokens_total": 0,
+    "retries_consumed": 0,
+    "reviewer_by_role": [
+      {
+        "calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "role": "correctness",
+        "thinking_tokens": 0
+      },
+      {
+        "calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "role": "security",
+        "thinking_tokens": 0
+      }
+    ],
+    "reviewer_calls_total": 0,
+    "reviewer_input_tokens_total": 0,
+    "reviewer_latency_ms_aggregate": 0.0,
+    "reviewer_model": "gemini-3.6-flash",
+    "reviewer_output_tokens_total": 0,
+    "reviewer_provider": "gemini",
+    "reviewer_thinking_tokens_total": 0
+  },
+  "pull_request_id": "6394bfb0-bf63-4577-873a-74a55c5f222f",
+  "repository_id": "1cb9e303-428c-45a3-84ec-02f1dad0bc3b",
+  "review_feedback": [],
+  "review_run_id": "3d9a61aa-07a6-46b3-893d-5248cab1304f",
+  "schema_version": 1,
+  "started_at": "2026-09-01T09:36:44.808332+00:00",
+  "status": "succeeded"
+}

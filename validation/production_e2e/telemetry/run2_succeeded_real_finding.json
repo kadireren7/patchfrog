@@ -1,0 +1,168 @@
+{
+  "candidate_count": 2,
+  "candidates": [
+    {
+      "accepted_count": 0,
+      "candidate_id": "84f48d42-7292-434f-9935-9492865d2502",
+      "context_bundle_id": "f773d302-2fa5-46ae-9127-461fbf61584e",
+      "effort_reasons": [
+        "no_signal"
+      ],
+      "effort_tier": "light",
+      "escalated": false,
+      "escalation_reason": null,
+      "file_path": "validation/production_e2e/dogfood/sample.py",
+      "proposals_count": 1,
+      "reason": "changed_module_region",
+      "static_finding_count": 0,
+      "status": "reviewed"
+    },
+    {
+      "accepted_count": 1,
+      "candidate_id": "cc0880d8-1cb3-4c98-a123-86ea5c3d6616",
+      "context_bundle_id": "5c4e5fe5-8d73-4e02-a754-b4131655aa77",
+      "effort_reasons": [
+        "no_signal",
+        "high_risk_proposal"
+      ],
+      "effort_tier": "deep",
+      "escalated": true,
+      "escalation_reason": "high_risk_proposal",
+      "file_path": "validation/production_e2e/dogfood/sample.py",
+      "proposals_count": 1,
+      "reason": "changed_symbol",
+      "static_finding_count": 0,
+      "status": "reviewed"
+    }
+  ],
+  "candidates_escalated": 1,
+  "candidates_failed": 0,
+  "candidates_reviewed": 2,
+  "candidates_skipped_budget": 0,
+  "commit_sha": "88dc39cf116bbbc6dca823255702af376ce413d9",
+  "completed_at": "2026-09-01T09:30:04.544240+00:00",
+  "context": [
+    {
+      "adaptive_attempted": false,
+      "adaptive_direction": null,
+      "adaptive_occurred": false,
+      "adaptive_reasons": [],
+      "bundle_id": "f773d302-2fa5-46ae-9127-461fbf61584e",
+      "candidate_id": "84f48d42-7292-434f-9935-9492865d2502",
+      "depth_2_candidate_count": 0,
+      "depth_2_selected_count": 0,
+      "depth_2_tokens": 0,
+      "engine_version": 2,
+      "generation_ms": 42.5215510003909,
+      "total_lines": 16,
+      "total_tokens": 166
+    },
+    {
+      "adaptive_attempted": false,
+      "adaptive_direction": null,
+      "adaptive_occurred": false,
+      "adaptive_reasons": [],
+      "bundle_id": "5c4e5fe5-8d73-4e02-a754-b4131655aa77",
+      "candidate_id": "cc0880d8-1cb3-4c98-a123-86ea5c3d6616",
+      "depth_2_candidate_count": 0,
+      "depth_2_selected_count": 0,
+      "depth_2_tokens": 0,
+      "engine_version": 2,
+      "generation_ms": 31.09095399850048,
+      "total_lines": 12,
+      "total_tokens": 163
+    }
+  ],
+  "duration_ms": 24684.94598899997,
+  "feedback": [
+    {
+      "explicit_false_positive": 0,
+      "explicit_fixed": 0,
+      "explicit_ignore": 0,
+      "explicit_useful": 0,
+      "finding_id": "4420b718-7f75-484f-8e55-64d6593b75fc",
+      "has_feedback": false,
+      "negative_reactions": 0,
+      "positive_reactions": 0,
+      "resolution_signal": null,
+      "scope": "finding",
+      "usefulness_signal": null
+    }
+  ],
+  "finding_lifecycle": [
+    {
+      "agent_role": "correctness",
+      "candidate_id": "84f48d42-7292-434f-9935-9492865d2502",
+      "category": "correctness",
+      "confidence": "high",
+      "critic_decision": null,
+      "effort_tier": "light",
+      "end_line": 19,
+      "file_path": "validation/production_e2e/dogfood/sample.py",
+      "finding_id": null,
+      "outcome": "suppressed_duplicate",
+      "proposal_id": "8fdd0a45-ac3e-43f7-9797-d0a60bba4593",
+      "severity": "medium",
+      "start_line": 12,
+      "status": "suppressed_duplicate",
+      "validation_outcome": "valid"
+    },
+    {
+      "agent_role": "correctness",
+      "candidate_id": "cc0880d8-1cb3-4c98-a123-86ea5c3d6616",
+      "category": "correctness",
+      "confidence": "high",
+      "critic_decision": "accept",
+      "effort_tier": "deep",
+      "end_line": 19,
+      "file_path": "validation/production_e2e/dogfood/sample.py",
+      "finding_id": "4420b718-7f75-484f-8e55-64d6593b75fc",
+      "outcome": "accepted_final",
+      "proposal_id": "289bfe19-ac44-4794-b871-84a683335251",
+      "severity": "high",
+      "start_line": 12,
+      "status": "accepted",
+      "validation_outcome": "valid"
+    }
+  ],
+  "provider": {
+    "critic_calls_total": 1,
+    "critic_input_tokens_total": 1364,
+    "critic_latency_ms_aggregate": 2554.7155319982267,
+    "critic_model": "gemini-3.6-flash",
+    "critic_output_tokens_total": 84,
+    "critic_provider": "gemini",
+    "critic_thinking_tokens_total": 0,
+    "retries_consumed": 0,
+    "reviewer_by_role": [
+      {
+        "calls": 2,
+        "input_tokens": 3827,
+        "output_tokens": 811,
+        "role": "correctness",
+        "thinking_tokens": 0
+      },
+      {
+        "calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "role": "security",
+        "thinking_tokens": 0
+      }
+    ],
+    "reviewer_calls_total": 2,
+    "reviewer_input_tokens_total": 3827,
+    "reviewer_latency_ms_aggregate": 13102.173016999586,
+    "reviewer_model": "gemini-3.6-flash",
+    "reviewer_output_tokens_total": 811,
+    "reviewer_provider": "gemini",
+    "reviewer_thinking_tokens_total": 0
+  },
+  "pull_request_id": "6394bfb0-bf63-4577-873a-74a55c5f222f",
+  "repository_id": "1cb9e303-428c-45a3-84ec-02f1dad0bc3b",
+  "review_feedback": [],
+  "review_run_id": "b474a0ae-6de1-4960-ad84-1b87fb37b6af",
+  "schema_version": 1,
+  "started_at": "2026-09-01T09:29:39.824135+00:00",
+  "status": "succeeded"
+}

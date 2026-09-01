@@ -10,8 +10,11 @@
 
 Publishing a completed review result never invokes an LLM again --
 :class:`ReviewPublicationService` only ever reads already-persisted Phase 5
-``ai_findings`` rows (see :mod:`patchfrog.publishing.queries`). Review
-generation is an AI operation; publishing is a deterministic side effect.
+``ai_findings`` rows, plus (see
+:func:`patchfrog.publishing.queries.get_current_active_findings`) any
+Phase 7 (:mod:`patchfrog.review_memory`) finding that was zero-AI-call
+carried forward to this exact run and never actually published before.
+Review generation is an AI operation; publishing is a deterministic side effect.
 The two are deliberately separate Celery tasks (see
 :mod:`apps.worker.tasks.publish_review` vs
 :mod:`apps.worker.tasks.review_pull_request`) precisely so publishing can
@@ -68,7 +71,7 @@ from patchfrog.publishing.domain import (
 from patchfrog.publishing.errors import classify_github_exception
 from patchfrog.publishing.github_publisher import ReviewPublisher
 from patchfrog.publishing.planner import PublicationPlanner
-from patchfrog.publishing.queries import get_publishable_findings
+from patchfrog.publishing.queries import get_current_active_findings
 
 logger = structlog.get_logger(__name__)
 
@@ -107,6 +110,17 @@ class ReviewPublicationService:
         config: PublicationConfig | None = None,
         already_reported_finding_ids: frozenset[uuid.UUID] = frozenset(),
     ) -> ReviewPublicationResult:
+        """``already_reported_finding_ids`` is an optional caller-supplied
+        addition to the ``ALREADY_REPORTED`` suppression set -- the
+        Phase 7 (:mod:`patchfrog.review_memory`) contribution to that set
+        is always computed internally, from ``review_run_id`` alone, via
+        :func:`patchfrog.publishing.queries.get_current_active_findings`
+        (which also supplies any safely carried-forward finding that has
+        never actually been published, merged into ``findings`` below).
+        A publish retry/redelivery therefore always recomputes both
+        correctly with no dependency on anything the review task passed
+        through in-process."""
+
         config = config or PublicationConfig()
 
         async with self._session_factory() as session:
@@ -121,7 +135,10 @@ class ReviewPublicationService:
             pull_request = await session.get(PullRequestModel, run.pull_request_id)
             assert repository is not None and pull_request is not None  # FK-enforced
 
-            findings = await get_publishable_findings(session, review_run_id=review_run_id)
+            findings, memory_already_reported_finding_ids = await get_current_active_findings(
+                session, review_run_id=review_run_id
+            )
+            already_reported_finding_ids = already_reported_finding_ids | memory_already_reported_finding_ids
 
         ref = PullRequestRef(owner=repository.owner, repository=repository.name, number=pull_request.github_pr_number)
         snapshot = ReviewInputSnapshot(

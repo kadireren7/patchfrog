@@ -16,7 +16,14 @@ import respx
 from patchfrog.review.provider import ProviderFatalError, ProviderRequest, ProviderTransientError
 from patchfrog.review.providers.gemini_provider import GeminiLLMProvider
 
-_GENERATE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent"
+_MODEL = "gemini-3.6-flash"
+
+
+def _generate_url(model: str = _MODEL) -> str:
+    return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+
+_GENERATE_URL = _generate_url()
 
 _REQUEST = ProviderRequest(
     system_prompt="system", user_prompt="user", json_schema={"type": "object"}, schema_name="s",
@@ -24,8 +31,8 @@ _REQUEST = ProviderRequest(
 )
 
 
-def _provider() -> GeminiLLMProvider:
-    return GeminiLLMProvider(api_key="test-key-not-real", model="gemini-3.6-flash", timeout_seconds=2.0)
+def _provider(*, model: str = _MODEL) -> GeminiLLMProvider:
+    return GeminiLLMProvider(api_key="test-key-not-real", model=model, timeout_seconds=2.0)
 
 
 def _success_body(
@@ -205,6 +212,13 @@ async def test_request_uses_structured_output_config() -> None:
     assert payload["contents"][0]["parts"][0]["text"] == "user"
 
 
+#: Thinking-budget tests below deliberately target a Gemini 2.5-family
+#: model -- thinking_budget only applies to that generation (see
+#: test_gemini_3x_sends_thinking_level_not_thinking_budget below for the
+#: 3.x split this milestone's live dogfood found).
+_25_MODEL = "gemini-2.5-flash"
+
+
 async def test_thinking_budget_is_capped_leaving_room_for_the_answer() -> None:
     # Reproduced live: an unbounded ("AUTOMATIC") thinking budget can
     # consume nearly all of max_output_tokens, truncating the JSON
@@ -217,8 +231,8 @@ async def test_thinking_budget_is_capped_leaving_room_for_the_answer() -> None:
         max_output_tokens=4096,
     )
     with respx.mock:
-        route = respx.post(_GENERATE_URL).mock(return_value=httpx.Response(200, json=_success_body()))
-        await _provider().generate_structured(request)
+        route = respx.post(_generate_url(_25_MODEL)).mock(return_value=httpx.Response(200, json=_success_body()))
+        await _provider(model=_25_MODEL).generate_structured(request)
         sent = route.calls.last.request
     payload = json.loads(sent.content)
     assert payload["generationConfig"]["thinkingConfig"]["thinking_budget"] == 4096 - _MIN_RESERVED_OUTPUT_TOKENS
@@ -230,11 +244,59 @@ async def test_thinking_budget_never_goes_negative_for_a_small_output_budget() -
         max_output_tokens=200,  # smaller than _MIN_RESERVED_OUTPUT_TOKENS
     )
     with respx.mock:
-        route = respx.post(_GENERATE_URL).mock(return_value=httpx.Response(200, json=_success_body()))
-        await _provider().generate_structured(request)
+        route = respx.post(_generate_url(_25_MODEL)).mock(return_value=httpx.Response(200, json=_success_body()))
+        await _provider(model=_25_MODEL).generate_structured(request)
         sent = route.calls.last.request
     payload = json.loads(sent.content)
     assert payload["generationConfig"]["thinkingConfig"]["thinking_budget"] == 0
+
+
+async def test_gemini_3x_sends_thinking_level_not_thinking_budget() -> None:
+    """Real bug, reproduced live during Milestone H's production E2E
+    dogfood: gemini-3.6-flash rejected thinking_budget with a generic
+    400 INVALID_ARGUMENT. Gemini 3.x models use thinking_level instead --
+    the two fields are mutually exclusive on one request."""
+
+    with respx.mock:
+        route = respx.post(_generate_url("gemini-3.6-flash")).mock(
+            return_value=httpx.Response(200, json=_success_body())
+        )
+        await _provider(model="gemini-3.6-flash").generate_structured(_REQUEST)
+        sent = route.calls.last.request
+    thinking_config = json.loads(sent.content)["generationConfig"]["thinkingConfig"]
+    assert "thinking_level" in thinking_config
+    assert "thinking_budget" not in thinking_config
+
+
+async def test_gemini_25_family_sends_thinking_budget_not_thinking_level() -> None:
+    with respx.mock:
+        route = respx.post(_generate_url(_25_MODEL)).mock(return_value=httpx.Response(200, json=_success_body()))
+        await _provider(model=_25_MODEL).generate_structured(_REQUEST)
+        sent = route.calls.last.request
+    thinking_config = json.loads(sent.content)["generationConfig"]["thinkingConfig"]
+    assert "thinking_budget" in thinking_config
+    assert "thinking_level" not in thinking_config
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("gemini-3.6-flash", True),
+        ("gemini-3.0-pro", True),
+        ("gemini-4.1-flash", True),
+        ("gemini-2.5-flash", False),
+        ("gemini-2.5-pro", False),
+        ("gemini-2.0-flash", False),
+        ("models/gemini-3.6-flash", True),  # SDK-accepted resource-path form -- normalized before detection
+        ("models/gemini-2.5-flash", False),  # normalized to the 2.5 family, not just stripped-and-assumed
+        ("publishers/google/models/gemini-3.6-flash", False),  # Vertex-only path; this provider never uses Vertex
+        ("", False),
+    ],
+)
+def test_uses_thinking_level_detects_model_generation_from_name(model: str, expected: bool) -> None:
+    from patchfrog.review.providers.gemini_provider import _uses_thinking_level
+
+    assert _uses_thinking_level(model) is expected
 
 
 async def test_api_key_never_appears_in_request_body() -> None:
