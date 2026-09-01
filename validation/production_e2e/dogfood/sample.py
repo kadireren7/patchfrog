@@ -23,3 +23,9 @@ def format_price_cents(cents: int) -> str:
     """Format an integer number of cents as a "$X.YY" string. No bug."""
     dollars, remainder = divmod(cents, 100)
     return f"${dollars}.{remainder:02d}"
+
+
+def is_free(price_cents: int) -> bool:
+    """Return True if the price is exactly zero. No bug -- a second,
+    clean synchronize-event commit for Milestone H's E2E validation."""
+    return price_cents == 0
