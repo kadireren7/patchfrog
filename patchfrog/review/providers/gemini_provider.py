@@ -120,6 +120,24 @@ _DEFAULT_THINKING_LEVEL = genai_types.ThinkingLevel.LOW
 
 _MODEL_MAJOR_VERSION_PATTERN = re.compile(r"^gemini-(\d+)")
 
+#: The Gemini Developer API (never Vertex AI -- this provider always
+#: constructs ``genai.Client(api_key=...)``, so Vertex's longer
+#: ``projects/.../locations/.../publishers/google/models/<name>`` resource
+#: paths never apply here) accepts a bare model name (``gemini-3.6-flash``)
+#: interchangeably with this short resource-name form
+#: (``models/gemini-3.6-flash``) in ``generate_content(model=...)`` --
+#: confirmed directly from the installed SDK's own docstrings (see
+#: ``google.genai.models.Models.generate_content``, "The model name starts
+#: with 'models/'"), not assumed. An operator following Google's own docs
+#: (or copying a name straight out of a ``client.models.list()`` response,
+#: whose ``name`` field always comes back ``models/``-prefixed) could
+#: therefore legitimately set ``PATCHFROG_REVIEW_MODEL``/
+#: ``PATCHFROG_REVIEW_CRITIC_MODEL`` to either form -- stripped only for
+#: :func:`_uses_thinking_level`'s own detection, never for the value
+#: actually sent to the API (the SDK already accepts both, so the call
+#: site passes ``self._model`` through unchanged).
+_MODEL_RESOURCE_PREFIX = "models/"
+
 
 def _uses_thinking_level(model: str) -> bool:
     """Whether ``model`` takes ``ThinkingConfig.thinking_level`` (a
@@ -141,12 +159,19 @@ def _uses_thinking_level(model: str) -> bool:
     never a hardcoded, staleness-prone list of specific model strings,
     since new model names are added by the operator via
     ``PATCHFROG_REVIEW_MODEL``/``PATCHFROG_REVIEW_CRITIC_MODEL``, never
-    by a PatchFrog code change. An unrecognized naming shape (no leading
-    ``gemini-<digits>``) conservatively falls back to the
-    longer-established, more precisely-tested ``thinking_budget`` path.
+    by a PatchFrog code change. A leading ``models/`` resource-path
+    prefix (see :data:`_MODEL_RESOURCE_PREFIX`) is stripped before
+    matching, since that is also a legitimate, SDK-accepted way an
+    operator can express the same model. Any *other* unrecognized naming
+    shape (no leading ``gemini-<digits>`` once that prefix is stripped --
+    e.g. a Vertex-style ``publishers/google/models/...`` resource path,
+    which this provider's Developer-API-only client never produces or
+    expects) conservatively falls back to the longer-established, more
+    precisely-tested ``thinking_budget`` path.
     """
 
-    match = _MODEL_MAJOR_VERSION_PATTERN.match(model)
+    normalized = model.removeprefix(_MODEL_RESOURCE_PREFIX)
+    match = _MODEL_MAJOR_VERSION_PATTERN.match(normalized)
     if match is None:
         return False
     return int(match.group(1)) >= 3

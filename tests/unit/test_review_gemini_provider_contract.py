@@ -287,7 +287,9 @@ async def test_gemini_25_family_sends_thinking_budget_not_thinking_level() -> No
         ("gemini-2.5-flash", False),
         ("gemini-2.5-pro", False),
         ("gemini-2.0-flash", False),
-        ("models/gemini-3.6-flash", False),  # unrecognized shape -- conservative fallback
+        ("models/gemini-3.6-flash", True),  # SDK-accepted resource-path form -- normalized before detection
+        ("models/gemini-2.5-flash", False),  # normalized to the 2.5 family, not just stripped-and-assumed
+        ("publishers/google/models/gemini-3.6-flash", False),  # Vertex-only path; this provider never uses Vertex
         ("", False),
     ],
 )

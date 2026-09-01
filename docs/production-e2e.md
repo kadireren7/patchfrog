@@ -134,6 +134,27 @@ live review could not be published at all until `.patchfrog.yml` was
 added to the reviewed commit, because gate 3 was never configured for
 this repository.
 
+### What "publishable" means once a gate opens late
+
+The set of findings a given `review_run_id` can publish is never just
+that run's own fresh `ai_findings` rows.
+`patchfrog.publishing.queries.get_current_active_findings` also merges
+in any Phase 7 (`patchfrog.review_memory`) finding that was zero-AI-call
+carried forward *to this exact run* -- symbol continuity unchanged,
+evidence independently reconfirmed verbatim at this run's own commit --
+and has never actually reached GitHub before (a real `PUBLISHED`-status
+publication with an `INLINE`/`SUMMARY_ONLY` comment; a `DRY_RUN` or
+`ALREADY_REPORTED` history never counts). This closes a gap this
+milestone's own dogfood found live: a finding accepted while publishing
+was disabled, then correctly carried forward with zero further provider
+calls once code stopped changing, previously had no way to ever become
+publishable once a gate opened on a later, carry-forward-only head --
+see `validation/production_e2e/latest-summary.md` section 15 for the
+full root-cause writeup and the real dogfood run that proves the fix. A
+carried-forward finding that *was* already actually published is
+suppressed via the existing `PublicationDisposition.ALREADY_REPORTED`
+path (unchanged), never republished, and never re-reviewed.
+
 ## Retry / idempotency
 
 - **Webhook delivery**: `PullRequestIngestionRepository.reserve()` keys

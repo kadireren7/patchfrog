@@ -295,6 +295,154 @@ gap this milestone's own audit found (see below).
   was understood (would have required either a genuine code change to
   the dogfood fixture, forcing a real re-review, or a cross-cutting
   incremental-memory/publication design change — both out of scope for
-  a single bounded validation session).
+  a single bounded validation session). **Superseded by section 15**:
+  the cross-cutting design change was completed in a follow-up
+  correction round in this same PR, which did make exactly one further
+  bounded live-provider call to complete the originally-unmet
+  acceptance criterion for real.
 - The dogfood PR was **not** merged; it was closed and its branch
   deleted after this summary and the telemetry exports were captured.
+
+## 15. CORRECTION ROUND: the "known limitation" in section 8 is a real product gap, now fixed
+
+Sections 1-14 above are preserved exactly as originally written and are
+**not** rewritten by this correction — they remain the honest record of
+what the first validation pass found, including its one unmet mandatory
+criterion. This section records what changed afterward, in the same PR,
+after the user rejected "READY, with one mandatory criterion not met"
+as an internally contradictory status and required the underlying
+product gap to actually be fixed rather than only documented.
+
+### 15.1 Root cause, precisely
+
+`ReviewPublicationService.publish()` computed its publishable-finding set
+as `get_publishable_findings(review_run_id)` — strictly the current run's
+own fresh `ai_findings` rows. A Phase 7 (`patchfrog.review_memory`)
+zero-AI-call carried-forward finding is never copied into the carrying
+run's own `ai_findings` (by design — see the module docstring of
+`patchfrog.review_memory.service` on the accepted-vs-published
+distinction); it only ever exists as a `ReviewMemoryFindingModel` row
+pointing back at the `ai_findings` row from whichever run last actually
+produced it. So once a publish gate opened on a later, carry-forward-only
+head (run 3 in section 8), there was structurally no way for run 2's
+real, already-accepted, still-active finding to ever enter a publishable
+set again.
+
+Separately, and more subtly: the *existing*
+`already_reported_finding_ids` suppression mechanism
+(`ReviewMemoryFindingRepository.list_carried_forward_current_finding_ids`,
+feeding `PublicationDisposition.ALREADY_REPORTED`) assumed that *any*
+`CARRIED_FORWARD` memory row for the current run represents a finding
+already reported to GitHub in a previous publication — true when
+publishing was enabled from the start, but false in exactly this
+session's own scenario (the underlying finding was never actually
+published, because the gate opened *after* it was first found). Left
+alone, that assumption would have permanently and silently suppressed
+this finding even after the fix added it to the publishable set.
+
+### 15.2 Chosen design, and why
+
+Investigated the full Phase 7 memory architecture
+(`patchfrog/review_memory/{domain,service,resolver}.py`,
+`patchfrog/persistence/models/review_memory.py`,
+`patchfrog/persistence/repositories/review_memory_finding.py`,
+`patchfrog/publishing/{queries,service,planner,domain}.py`,
+`patchfrog/persistence/models/publishing.py`,
+`patchfrog/persistence/repositories/review_publication_comment.py`)
+before choosing an approach, per the correction's explicit instruction.
+Chose the "typed current-active-finding query/service" design (option B
+of the two suggested): a new
+`patchfrog.publishing.queries.get_current_active_findings(review_run_id)`
+merges the current run's fresh findings with any `CARRIED_FORWARD`
+memory finding scoped to that exact `review_run_id`, excluding whichever
+of those were **actually already published** — determined by a new
+`ReviewPublicationCommentRepository.list_actually_published_finding_ids`
+query that requires both a real `PUBLISHED`-status parent publication
+*and* an `INLINE`/`SUMMARY_ONLY` disposition (a `DRY_RUN` attempt, a
+`FAILED` attempt, or the `ALREADY_REPORTED` disposition itself never
+count — none of them ever wrote anything real to GitHub). Rejected
+option A (materializing a carried-forward projection row into the
+current review run) because it would mean writing a synthetic
+`ai_findings`-shaped row for something Phase 5 never produced this run,
+which the existing "review generation only ever includes what it
+genuinely reviewed" invariant (see `patchfrog/persistence/models/review.py`)
+would then have to special-case around forever.
+
+`ReviewPublicationService.publish()` now calls
+`get_current_active_findings` instead of `get_publishable_findings`
+directly, and unions its returned already-published set into the
+existing `already_reported_finding_ids` parameter — the pre-existing
+`ALREADY_REPORTED` suppression path (planner, persisted comment
+disposition, telemetry) is reused completely unchanged; only what feeds
+it became more accurate.
+
+### 15.3 Zero new provider calls, zero schema changes, no version bump
+
+- `get_current_active_findings` never calls an LLM and never re-derives
+  a continuity/evidence decision — it only reads state
+  `patchfrog.review_memory`'s own `finalize()` already persisted.
+- No new database column, table, or Alembic migration —
+  `ReviewMemoryFindingModel.current_finding_id` /
+  `current_review_run_id` / `status` and
+  `ReviewPublicationCommentModel.finding_id` / `disposition` plus
+  `ReviewPublicationModel.status` already carried everything required.
+  Provenance (originating finding/run, current review run,
+  `carried_forward`, revalidated-at-current-head) is fully answerable by
+  joining these existing tables — no new field was added to
+  `PublishableFinding` or the persisted comment row, and the visible
+  GitHub comment body format is unchanged.
+- No engine/policy/schema version constant was bumped
+  (`REVIEW_ENGINE_VERSION`, `REVIEW_POLICY_VERSION`,
+  `PUBLICATION_ENGINE_VERSION`, `PUBLICATION_CONFIG_SCHEMA_VERSION`,
+  `INCREMENTAL_REVIEW_ENGINE_VERSION`, `TELEMETRY_SCHEMA_VERSION`).
+  Reasoning: (1) an already-`PUBLISHED` publication row is permanently
+  protected by the existing `uq_review_publications_published_identity`
+  partial unique index plus `get_or_create_attempt`'s
+  `ALREADY_PUBLISHED` short-circuit *before* `get_current_active_findings`
+  is even consulted for that identity again — no already-terminal
+  publication is ever reconsidered under the new logic, so no old data
+  needs invalidating; (2) `PublicationConfig`'s own fields and
+  `.fingerprint()` are untouched, so publication identity itself is
+  unaffected; (3) no review-memory continuity/evidence decision logic
+  changed, so incremental review memory's own version is unaffected;
+  (4) this codebase's own established precedent (Milestone G added a
+  whole new `review_feedback` telemetry field without bumping
+  `TELEMETRY_SCHEMA_VERSION`, since it was purely additive) was followed
+  for telemetry too — no telemetry field was added at all this round,
+  since the same provenance is already fully queryable from persisted
+  state without one, and the correction's own instruction was to add
+  telemetry "only if necessary."
+
+### 15.4 Deterministic test coverage added
+
+- `tests/integration/test_publishing_current_active_findings.py` (10
+  tests) — direct, hand-crafted-row coverage of
+  `get_current_active_findings`: zero-call carry-forward becomes
+  publishable; already-published carry-forward is suppressed, not
+  re-added; a `DRY_RUN`-only or `ALREADY_REPORTED`-only publication
+  history never counts as "actually published"; `RESOLVED` / `CHANGED`
+  / `AMBIGUOUS` memory statuses are never carried or published; a
+  memory row scoped to a different run is ignored; fresh and carried
+  findings are never double-added; no-memory-rows behaves exactly like
+  the pre-fix `get_publishable_findings`.
+- `tests/integration/test_publishing_carried_forward_findings.py` (1
+  real four-commit lifecycle test, real git repo + real
+  `IncrementalReviewMemoryService` + real `PullRequestReviewService` +
+  real `ReviewPublicationService` against `FakeReviewPublisher`) —
+  finding accepted with publishing disabled; a config-only head change
+  (README-only, `divide` itself byte-for-byte untouched) carries the
+  finding forward with **zero** AI calls for `divide` specifically;
+  publishing, now enabled, publishes it for real (exactly one GitHub
+  write); an immediate retry of the same publication identity is
+  idempotent (still exactly one write, zero further LLM calls); a
+  second config-only commit's own carry-forward is correctly suppressed
+  as already-published (zero new writes); the stale-head guard still
+  wins for a run that was never published once a newer head exists; a
+  real recheck that genuinely fixes the bug resolves the finding and it
+  is never published.
+
+Full local unit + integration suite: 1317 tests total, 1314 passing (3
+pre-existing failures in `tests/integration/test_static_analysis_service.py`,
+confirmed via `git stash` to fail identically with none of this
+milestone's changes applied — an unrelated, pre-existing environment
+issue, not caused by this work).
