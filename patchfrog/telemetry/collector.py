@@ -54,10 +54,12 @@ from patchfrog.telemetry.domain import (
     TELEMETRY_SCHEMA_VERSION,
     CandidateTelemetry,
     ContextTelemetry,
+    FeedbackScope,
     FeedbackTelemetry,
     FindingLifecycleTelemetry,
     ProviderRoleUsage,
     ProviderTelemetry,
+    ReviewFeedbackEventTelemetry,
     ReviewTelemetrySnapshot,
     classify_lifecycle_outcome,
 )
@@ -123,12 +125,34 @@ async def _collect_context_telemetry(
 
 async def _collect_feedback_telemetry(
     session: AsyncSession, *, review_run_id: uuid.UUID, findings: list[AIFindingModel]
-) -> tuple[FeedbackTelemetry, ...]:
+) -> tuple[tuple[FeedbackTelemetry, ...], tuple[ReviewFeedbackEventTelemetry, ...]]:
+    """Returns ``(finding_feedback, review_feedback)``. An event whose
+    ``finding_id`` is ``None`` (best-effort attribution failed -- see
+    :mod:`patchfrog.feedback.attribution`) is never dropped and never
+    forced onto a finding it was never confirmed to be about; it is
+    preserved instead as a :class:`ReviewFeedbackEventTelemetry` (spec
+    sections 33/34)."""
+
     events = await get_feedback_for_review(session, review_run_id=review_run_id)
     by_finding: dict[uuid.UUID, list[FeedbackEvent]] = defaultdict(list)
+    review_scoped: list[FeedbackEvent] = []
     for event in events:
         if event.finding_id is not None:
             by_finding[event.finding_id].append(event)
+        else:
+            review_scoped.append(event)
+
+    review_feedback = tuple(
+        ReviewFeedbackEventTelemetry(
+            scope=FeedbackScope.REVIEW,
+            event_type=event.event_type,
+            source=event.source,
+            normalized_signal=event.normalized_signal,
+            signal_strength=event.signal_strength,
+            occurred_at=event.occurred_at.isoformat(),
+        )
+        for event in review_scoped
+    )
 
     out: list[FeedbackTelemetry] = []
     for finding in findings:
@@ -164,7 +188,7 @@ async def _collect_feedback_telemetry(
                 negative_reactions=summary.negative_reactions,
             )
         )
-    return tuple(out)
+    return tuple(out), review_feedback
 
 
 def _finding_lifecycle_from_proposal(
@@ -285,7 +309,7 @@ async def collect_review_telemetry(
     )
 
     context_telemetry = await _collect_context_telemetry(session, candidates=candidates)
-    feedback_telemetry = await _collect_feedback_telemetry(
+    feedback_telemetry, review_feedback_telemetry = await _collect_feedback_telemetry(
         session, review_run_id=review_run_id, findings=findings
     )
 
@@ -309,4 +333,5 @@ async def collect_review_telemetry(
         provider=provider,
         context=context_telemetry,
         feedback=feedback_telemetry,
+        review_feedback=review_feedback_telemetry,
     )

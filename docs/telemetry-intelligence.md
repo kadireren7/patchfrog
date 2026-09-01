@@ -228,6 +228,54 @@ computes:
 ground truth. This module never computes a "global false-positive rate"
 from feedback alone.
 
+### Finding-scoped vs. review-scoped feedback
+
+`patchfrog.feedback` attribution is deliberately best-effort (see
+`patchfrog.feedback.attribution`): a raw signal -- a reaction, a reply,
+an explicit `/patchfrog <token>` command, a PR-lifecycle event -- may
+have `FeedbackEvent.finding_id = None` when it can't be resolved to one
+exact published finding, or structurally never has one at all (a
+`PR_MERGED`/`PR_CLOSED` event is about the whole PR, never a single
+finding). The raw event is still retained for audit either way; nothing
+in `patchfrog.feedback` ever discards it.
+
+Telemetry mirrors that distinction explicitly via `FeedbackScope`
+(`FINDING` / `REVIEW`), never collapsing one into the other:
+
+- `ReviewTelemetrySnapshot.feedback: tuple[FeedbackTelemetry, ...]` --
+  one entry per *published finding*, always `scope=FeedbackScope.FINDING`.
+  Unchanged by this section.
+- `ReviewTelemetrySnapshot.review_feedback: tuple[ReviewFeedbackEventTelemetry, ...]`
+  -- one entry per feedback event that could not be (or structurally
+  never could be) attributed to one finding, always
+  `scope=FeedbackScope.REVIEW`. This dataclass has no `finding_id` field
+  at all -- there is nothing to misattribute even by accident.
+
+`compute_review_feedback_summary` aggregates these into
+`review_feedback_event_count`/`review_feedback_by_event_type`/
+`review_feedback_by_signal` -- **plain counts only**, never collapsed
+into one fabricated truth label. Two conflicting review-scoped events
+(e.g. one `/patchfrog useful` and one `/patchfrog false-positive`, both
+unattributable to the same finding) are both retained and both counted,
+not merged into a single "verdict."
+
+**Isolation is structural, not just a convention**: `compute_feedback_coverage`
+takes `Sequence[FeedbackTelemetry]` -- calling it with
+`snapshot.feedback` (the only correct call) is mechanically incapable of
+including review-scoped events, since `ReviewFeedbackEventTelemetry` is
+a different, incompatible type. Every finding-level rate
+(`coverage_rate`, `useful_rate`, `user_reported_false_positive_rate`,
+`fixed_rate`) is therefore unaffected by however much review-scoped
+feedback exists on the same run.
+
+Privacy: `ReviewFeedbackEventTelemetry` is safe by the same construction
+as everything else in this package -- `patchfrog.feedback.sync` never
+writes a reply/comment body into `raw_signal`/`normalized_signal`/
+`metadata` (a reply event's `raw_signal` is always the empty string; its
+`metadata` holds only `{"reply_comment_id": "<id>"}`), and this
+dataclass doesn't even expose `raw_signal`/`metadata` -- only the
+already-safe `normalized_signal`.
+
 ## Benchmark quality metrics -- unchanged
 
 `patchfrog.evaluation.metrics` (TP/FP/missed/duplicate/unsupported/

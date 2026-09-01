@@ -29,6 +29,7 @@ from patchfrog.telemetry.domain import (
     FeedbackTelemetry,
     FindingLifecycleOutcome,
     FindingLifecycleTelemetry,
+    ReviewFeedbackEventTelemetry,
     ReviewTelemetrySnapshot,
     TelemetryAggregate,
 )
@@ -377,4 +378,27 @@ def compute_feedback_coverage(feedback: Sequence[FeedbackTelemetry]) -> Feedback
         useful_rate=_rate(useful, bearing_count),
         user_reported_false_positive_rate=_rate(false_positive, bearing_count),
         fixed_rate=_rate(fixed, bearing_count),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewFeedbackSummary:
+    """Aggregate over review-scoped (unattributed) feedback events --
+    spec sections 33/34. Deliberately separate from :class:`FeedbackCoverage`:
+    these events never participate in any per-finding rate, and are never
+    collapsed into one fabricated truth label -- every conflicting raw
+    event is retained and counted individually in the breakdowns below."""
+
+    review_feedback_event_count: int
+    review_feedback_by_event_type: dict[str, int]
+    review_feedback_by_signal: dict[str, int]
+
+
+def compute_review_feedback_summary(
+    events: Sequence[ReviewFeedbackEventTelemetry],
+) -> ReviewFeedbackSummary:
+    return ReviewFeedbackSummary(
+        review_feedback_event_count=len(events),
+        review_feedback_by_event_type=dict(Counter(e.event_type.value for e in events)),
+        review_feedback_by_signal=dict(Counter(e.normalized_signal for e in events)),
     )

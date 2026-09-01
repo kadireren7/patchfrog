@@ -69,6 +69,7 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 from patchfrog.telemetry.aggregation import (
     compute_feedback_coverage,
     compute_quality_funnel,
+    compute_review_feedback_summary,
     compute_role_funnel,
     compute_tier_distribution,
     compute_tier_funnel,
@@ -754,3 +755,266 @@ async def test_collector_against_a_real_review_pipeline_run(
     telemetry_finding_ids = {e.finding_id for e in snapshot.finding_lifecycle if e.finding_id is not None}
     assert real_finding_ids == telemetry_finding_ids
     assert snapshot.provider.reviewer_input_tokens_total > 0
+
+
+# ---------------------------------------------------------------------------
+# Review-scoped (unattributed) feedback -- FeedbackEvent.finding_id is best-
+# effort and may be None (see patchfrog.feedback.attribution). Telemetry must
+# preserve that ambiguity rather than dropping the event or forcing it onto a
+# finding it was never confirmed to be about.
+# ---------------------------------------------------------------------------
+
+_REVIEW_FEEDBACK_SENTINEL = "TELEMETRY_REVIEW_FEEDBACK_SENTINEL_NOT_A_REAL_SECRET_554433"
+
+
+@dataclass(frozen=True, slots=True)
+class _ReviewFeedbackScenario:
+    review_run_id: uuid.UUID
+    finding_id: uuid.UUID
+
+
+async def _persist_review_scoped_feedback_scenario(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> _ReviewFeedbackScenario:
+    """One published finding with its own explicit feedback, plus three
+    review-level events that could never be attributed to it or to any
+    other finding: two *conflicting* explicit commands (one on each of
+    two review-publication-comment-less contexts) and one PR-lifecycle
+    event, which structurally never carries a ``finding_id`` at all."""
+
+    async with session_factory() as session:
+        repo_row = await RepositoryRepository().upsert(
+            session, github_repository_id=uuid.uuid4().int & 0x7FFFFFFFFFFFFFFF, owner="t", name="review-fb",
+            full_name="t/review-fb", installation_id=0,
+        )
+        index_row = RepositoryIndexModel(
+            repository_id=repo_row.id, commit_sha="d" * 40, index_version=1, status=IndexStatus.SUCCEEDED,
+            is_active=True, started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
+        )
+        session.add(index_row)
+        await session.flush()
+        run_model, _ = await ReviewRunRepository().get_or_create_running(
+            session, repository_id=repo_row.id, repository_index_id=index_row.id, commit_sha="d" * 40,
+            config_fingerprint="c3", model_fingerprint="m3", reviewer_provider="fake", reviewer_model="fake-1",
+            critic_provider=None, critic_model=None,
+        )
+        candidate = await ReviewCandidateRepository().create(
+            session, review_run_id=run_model.id, candidate=_candidate(), effort_tier=ReviewEffortTier.STANDARD,
+        )
+        finding = _finding(title="attributed")
+        proposal = await AIFindingProposalRepository().create(
+            session, review_run_id=run_model.id, candidate_id=candidate.id, finding=finding,
+            status=ProposalStatus.ACCEPTED, validation_detail=None, agent_role=AgentRole.CORRECTNESS,
+        )
+        [finding_model] = await AIFindingRepository().bulk_create(
+            session, review_run_id=run_model.id,
+            findings=[
+                FinalAIFinding(
+                    proposal_id=proposal.id, candidate_id=candidate.id, candidate=_candidate(), finding=finding,
+                    critic_verdict=None, final_severity=Severity.MEDIUM, final_confidence=Confidence.HIGH,
+                    corroborated_by_static=False, static_finding_ids=(), agent_role=AgentRole.CORRECTNESS,
+                )
+            ],
+        )
+        await ReviewRunRepository().mark_succeeded(
+            session, run_id=run_model.id, status=ReviewRunStatus.SUCCEEDED, candidate_count=1,
+            candidates_reviewed=1, candidates_failed=0, candidates_skipped_budget=0, proposals_count=1,
+            accepted_count=1, rejected_count=0, suppressed_duplicate_count=0, reviewer_input_tokens=10,
+            reviewer_output_tokens=5, critic_input_tokens=0, critic_output_tokens=0, duration_ms=10.0,
+        )
+
+        feedback_repo = FeedbackEventRepository()
+        actor = ActorIdentity(login="dev", is_bot=False)
+
+        # Finding-scoped: attributed normally.
+        await feedback_repo.create_if_new(
+            session,
+            event=FeedbackEvent(
+                repository_id=repo_row.id, pull_request_id=None, review_run_id=run_model.id, publication_id=None,
+                review_publication_comment_id=None, finding_id=finding_model.id, github_review_id=1,
+                github_comment_id=1, event_type=FeedbackEventType.EXPLICIT_COMMAND, source=FeedbackSource.REPLY_SYNC,
+                external_event_id="cmd:attributed", raw_signal=ExplicitCommand.USEFUL.value,
+                normalized_signal=ExplicitCommand.USEFUL.value, signal_strength=SignalStrength.STRONG, actor=actor,
+                occurred_at=datetime.now(UTC),
+            ),
+        )
+        # Review-scoped: attribution failed -- finding_id=None, but still a
+        # real, structured signal that must be preserved, not dropped.
+        # Plants a sentinel in raw_signal/metadata (never actually
+        # populated with free text by patchfrog.feedback.sync, but tested
+        # here as defense-in-depth) to prove it can never leak.
+        await feedback_repo.create_if_new(
+            session,
+            event=FeedbackEvent(
+                repository_id=repo_row.id, pull_request_id=None, review_run_id=run_model.id, publication_id=None,
+                review_publication_comment_id=None, finding_id=None, github_review_id=1, github_comment_id=2,
+                event_type=FeedbackEventType.EXPLICIT_COMMAND, source=FeedbackSource.REPLY_SYNC,
+                external_event_id="cmd:unattributed-1", raw_signal=_REVIEW_FEEDBACK_SENTINEL,
+                normalized_signal=ExplicitCommand.USEFUL.value, signal_strength=SignalStrength.STRONG, actor=actor,
+                occurred_at=datetime.now(UTC), metadata={"note": _REVIEW_FEEDBACK_SENTINEL},
+            ),
+        )
+        # A second, conflicting review-scoped event -- must be retained
+        # alongside the first, never collapsed into one label.
+        await feedback_repo.create_if_new(
+            session,
+            event=FeedbackEvent(
+                repository_id=repo_row.id, pull_request_id=None, review_run_id=run_model.id, publication_id=None,
+                review_publication_comment_id=None, finding_id=None, github_review_id=1, github_comment_id=3,
+                event_type=FeedbackEventType.EXPLICIT_COMMAND, source=FeedbackSource.REPLY_SYNC,
+                external_event_id="cmd:unattributed-2", raw_signal=ExplicitCommand.FALSE_POSITIVE.value,
+                normalized_signal=ExplicitCommand.FALSE_POSITIVE.value, signal_strength=SignalStrength.STRONG,
+                actor=actor, occurred_at=datetime.now(UTC),
+            ),
+        )
+        # A PR-lifecycle event -- structurally never has a finding_id at
+        # all, not merely one that failed attribution.
+        await feedback_repo.create_if_new(
+            session,
+            event=FeedbackEvent(
+                repository_id=repo_row.id, pull_request_id=None, review_run_id=run_model.id, publication_id=None,
+                review_publication_comment_id=None, finding_id=None, github_review_id=None, github_comment_id=None,
+                event_type=FeedbackEventType.PR_MERGED, source=FeedbackSource.PR_LIFECYCLE_SYNC,
+                external_event_id="pr:merged", raw_signal="merged", normalized_signal="merged",
+                signal_strength=SignalStrength.WEAK, actor=actor, occurred_at=datetime.now(UTC),
+            ),
+        )
+        await session.commit()
+        return _ReviewFeedbackScenario(review_run_id=run_model.id, finding_id=finding_model.id)
+
+
+async def test_finding_scoped_feedback_still_appears_under_exact_finding(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    scenario = await _persist_review_scoped_feedback_scenario(session_factory)
+    async with session_factory() as session:
+        snapshot = await collect_review_telemetry(session, review_run_id=scenario.review_run_id)
+    assert snapshot is not None
+    assert len(snapshot.feedback) == 1
+    assert snapshot.feedback[0].finding_id == scenario.finding_id
+    assert snapshot.feedback[0].has_feedback is True
+    assert snapshot.feedback[0].explicit_useful == 1
+    assert snapshot.feedback[0].scope.value == "finding"
+
+
+async def test_review_scoped_event_with_no_finding_id_is_preserved(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    scenario = await _persist_review_scoped_feedback_scenario(session_factory)
+    async with session_factory() as session:
+        snapshot = await collect_review_telemetry(session, review_run_id=scenario.review_run_id)
+    assert snapshot is not None
+    # 3 review-scoped events persisted above -- none dropped.
+    assert len(snapshot.review_feedback) == 3
+
+
+async def test_review_scoped_feedback_is_not_assigned_to_any_finding(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    scenario = await _persist_review_scoped_feedback_scenario(session_factory)
+    async with session_factory() as session:
+        snapshot = await collect_review_telemetry(session, review_run_id=scenario.review_run_id)
+    assert snapshot is not None
+    # ReviewFeedbackEventTelemetry has no finding_id field at all --
+    # structurally impossible to misattribute. The one real finding's own
+    # feedback entry is unaffected by the 3 review-scoped events.
+    assert len(snapshot.feedback) == 1
+    assert all(f.scope.value == "review" for f in snapshot.review_feedback)
+
+
+async def test_feedback_coverage_denominators_ignore_review_scoped_events(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    scenario = await _persist_review_scoped_feedback_scenario(session_factory)
+    async with session_factory() as session:
+        snapshot = await collect_review_telemetry(session, review_run_id=scenario.review_run_id)
+    assert snapshot is not None
+    coverage = compute_feedback_coverage(snapshot.feedback)
+    # 1 published finding, 1 feedback-bearing -- the 3 review-scoped
+    # events never inflate either the numerator or the denominator.
+    assert coverage.published_findings == 1
+    assert coverage.feedback_bearing_findings == 1
+    assert coverage.coverage_rate == 1.0
+    assert coverage.useful_rate == 1.0
+    assert coverage.user_reported_false_positive_rate == 0.0
+
+
+async def test_conflicting_review_level_events_are_all_retained_not_collapsed(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """One review-scoped event says "useful", another says "false-
+    positive" -- both must survive as distinct, countable events. Never
+    collapsed into one fabricated truth label."""
+
+    scenario = await _persist_review_scoped_feedback_scenario(session_factory)
+    async with session_factory() as session:
+        snapshot = await collect_review_telemetry(session, review_run_id=scenario.review_run_id)
+    assert snapshot is not None
+    signals = sorted(e.normalized_signal for e in snapshot.review_feedback)
+    assert signals == ["false-positive", "merged", "useful"]
+
+    summary = compute_review_feedback_summary(snapshot.review_feedback)
+    assert summary.review_feedback_event_count == 3
+    assert summary.review_feedback_by_signal == {"useful": 1, "false-positive": 1, "merged": 1}
+    assert summary.review_feedback_by_event_type == {"explicit_command": 2, "pr_merged": 1}
+
+
+async def test_historical_review_scoped_feedback_with_no_finding_id_is_supported(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A PR-lifecycle event has never had a finding_id -- this is not a
+    row predating a migration, it is a kind of event that is inherently
+    review-scoped. Telemetry must support it identically to a reaction/
+    reply whose attribution merely failed."""
+
+    scenario = await _persist_review_scoped_feedback_scenario(session_factory)
+    async with session_factory() as session:
+        snapshot = await collect_review_telemetry(session, review_run_id=scenario.review_run_id)
+    assert snapshot is not None
+    merged_events = [e for e in snapshot.review_feedback if e.event_type.value == "pr_merged"]
+    assert len(merged_events) == 1
+    assert merged_events[0].scope.value == "review"
+
+
+async def test_review_scoped_feedback_json_export_has_no_secret_and_includes_scope(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    scenario = await _persist_review_scoped_feedback_scenario(session_factory)
+    async with session_factory() as session:
+        snapshot = await collect_review_telemetry(session, review_run_id=scenario.review_run_id)
+    assert snapshot is not None
+    payload = snapshot_to_dict(snapshot)
+    dumped = json.dumps(payload)
+
+    # Defense-in-depth: even though raw_signal/metadata are never
+    # populated with free text by patchfrog.feedback.sync in production,
+    # ReviewFeedbackEventTelemetry structurally never reads either field
+    # at all -- the sentinel planted in both must never appear.
+    assert _REVIEW_FEEDBACK_SENTINEL not in dumped
+
+    assert payload["feedback"][0]["scope"] == "finding"
+    review_scopes = {e["scope"] for e in payload["review_feedback"]}
+    assert review_scopes == {"review"}
+
+
+async def test_collector_query_bound_unaffected_by_review_scoped_events(
+    session_factory: async_sessionmaker[AsyncSession], db_engine: AsyncEngine,
+) -> None:
+    scenario = await _persist_review_scoped_feedback_scenario(session_factory)
+
+    queries: list[str] = []
+
+    def _count(*_args: object, **_kwargs: object) -> None:
+        queries.append("q")
+
+    sync_engine = db_engine.sync_engine
+    event.listen(sync_engine, "before_cursor_execute", _count)
+    try:
+        async with session_factory() as session:
+            await collect_review_telemetry(session, review_run_id=scenario.review_run_id)
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _count)
+
+    # Same single get_feedback_for_review() query already covers both
+    # finding-scoped and review-scoped events -- no new query is added.
+    assert len(queries) <= 15, queries

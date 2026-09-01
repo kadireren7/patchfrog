@@ -26,8 +26,9 @@ raw source file content, full diff text, raw prompts, raw context
 snippets, quoted evidence text, or API response bodies. Telemetry
 references existing persisted review/context/feedback entities by their
 stable ids; it is never a second copy of the code those entities are
-about. See ``tests/unit/telemetry/test_telemetry_redaction.py`` for the
-enforced guarantee.
+about. See ``tests/unit/test_telemetry_reporting.py`` and
+``tests/integration/test_telemetry_collector.py`` (the
+``*_no_secret*``/``*redaction*`` tests) for the enforced guarantee.
 
 Nothing in this module does I/O, calls an LLM, or opens a database
 session -- that all lives in :mod:`patchfrog.telemetry.collector`.
@@ -44,7 +45,13 @@ from uuid import UUID
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.context.domain import ExpansionDirection, ExpansionReason
-from patchfrog.feedback.domain import ResolutionState, SignalPolarity
+from patchfrog.feedback.domain import (
+    FeedbackEventType,
+    FeedbackSource,
+    ResolutionState,
+    SignalPolarity,
+    SignalStrength,
+)
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import (
     CriticDecision,
@@ -231,6 +238,22 @@ class ContextTelemetry:
     depth_2_tokens: int
 
 
+class FeedbackScope(StrEnum):
+    """Whether one piece of feedback telemetry is attributable to an
+    exact published finding, or only to the review as a whole.
+
+    :mod:`patchfrog.feedback`'s own attribution is deliberately
+    best-effort (see :mod:`patchfrog.feedback.attribution`) --
+    :attr:`~patchfrog.feedback.domain.FeedbackEvent.finding_id` is
+    ``None`` whenever a raw signal (a reaction, a reply, an explicit
+    command) could not be resolved to one exact finding. Telemetry must
+    preserve that ambiguity, never force an unattributed signal onto a
+    finding it was never confirmed to be about (spec section 33)."""
+
+    FINDING = "finding"
+    REVIEW = "review"
+
+
 @dataclass(frozen=True, slots=True)
 class FeedbackTelemetry:
     """One published finding's real-world feedback, if any --
@@ -238,7 +261,9 @@ class FeedbackTelemetry:
     ``usefulness_signal`` of ``NEGATIVE`` is
     ``user_reported_false_positive``-shaped evidence, never a canonical
     false positive. ``has_feedback=False`` means "unknown", never
-    "confirmed correct"."""
+    "confirmed correct". Always :attr:`FeedbackScope.FINDING` --
+    unattributed feedback is never represented here, see
+    :class:`ReviewFeedbackEventTelemetry`."""
 
     finding_id: UUID
     has_feedback: bool
@@ -250,6 +275,34 @@ class FeedbackTelemetry:
     explicit_ignore: int
     positive_reactions: int
     negative_reactions: int
+    scope: FeedbackScope = FeedbackScope.FINDING
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewFeedbackEventTelemetry:
+    """One raw feedback event that :mod:`patchfrog.feedback.attribution`
+    could not attribute to an exact finding
+    (``FeedbackEvent.finding_id is None``) -- still retained here for
+    audit, never discarded and never forced onto any individual finding
+    (spec sections 33/34).
+
+    Deliberately no ``finding_id`` field at all: this dataclass can only
+    ever represent :attr:`FeedbackScope.REVIEW`, so there is structurally
+    nothing to misattribute. Privacy-safe by construction --
+    :mod:`patchfrog.feedback.sync` never writes a reply/comment body into
+    ``raw_signal``/``normalized_signal``/``metadata`` in the first place
+    (``raw_signal`` is always an enum-shaped value like a reaction
+    content or explicit-command token, or the empty string for a plain
+    engagement signal), so nothing here needs scrubbing beyond simply not
+    including fields this dataclass never had.
+    """
+
+    scope: FeedbackScope
+    event_type: FeedbackEventType
+    source: FeedbackSource
+    normalized_signal: str
+    signal_strength: SignalStrength
+    occurred_at: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +334,12 @@ class ReviewTelemetrySnapshot:
     provider: ProviderTelemetry
     context: tuple[ContextTelemetry, ...]
     feedback: tuple[FeedbackTelemetry, ...]
+    #: Feedback events tied to this run but not attributable to one
+    #: exact finding -- see :class:`ReviewFeedbackEventTelemetry`. Never
+    #: folded into ``feedback`` above and never used by
+    #: :func:`patchfrog.telemetry.aggregation.compute_feedback_coverage`
+    #: (spec section 33/34).
+    review_feedback: tuple[ReviewFeedbackEventTelemetry, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,7 +9,13 @@ from __future__ import annotations
 import uuid
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
-from patchfrog.feedback.domain import ResolutionState, SignalPolarity
+from patchfrog.feedback.domain import (
+    FeedbackEventType,
+    FeedbackSource,
+    ResolutionState,
+    SignalPolarity,
+    SignalStrength,
+)
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import CriticDecision, ProposalStatus, ValidationOutcome
 from patchfrog.review.effort_types import ReviewEffortTier
@@ -19,16 +25,19 @@ from patchfrog.telemetry.aggregation import (
     compute_feedback_coverage,
     compute_lifecycle_outcome_counts,
     compute_quality_funnel,
+    compute_review_feedback_summary,
     compute_role_funnel,
     compute_tier_funnel,
     compute_validation_outcomes_by_role,
 )
 from patchfrog.telemetry.domain import (
     TELEMETRY_SCHEMA_VERSION,
+    FeedbackScope,
     FeedbackTelemetry,
     FindingLifecycleOutcome,
     FindingLifecycleTelemetry,
     ProviderTelemetry,
+    ReviewFeedbackEventTelemetry,
     ReviewTelemetrySnapshot,
 )
 
@@ -206,3 +215,30 @@ def test_aggregate_snapshots_sums_across_runs() -> None:
     assert aggregate.reviewer_calls_total == 8
     assert aggregate.candidate_count == 4
     assert aggregate.reviewer_latency_ms_aggregate == 100.0
+
+
+def _review_event(*, event_type: FeedbackEventType, signal: str) -> ReviewFeedbackEventTelemetry:
+    return ReviewFeedbackEventTelemetry(
+        scope=FeedbackScope.REVIEW, event_type=event_type, source=FeedbackSource.REPLY_SYNC,
+        normalized_signal=signal, signal_strength=SignalStrength.STRONG, occurred_at="2026-01-01T00:00:00+00:00",
+    )
+
+
+def test_compute_review_feedback_summary_retains_conflicting_events() -> None:
+    events = (
+        _review_event(event_type=FeedbackEventType.EXPLICIT_COMMAND, signal="useful"),
+        _review_event(event_type=FeedbackEventType.EXPLICIT_COMMAND, signal="false-positive"),
+        _review_event(event_type=FeedbackEventType.PR_MERGED, signal="merged"),
+    )
+    summary = compute_review_feedback_summary(events)
+    assert summary.review_feedback_event_count == 3
+    # Never collapsed into one fabricated label -- both conflicting
+    # "useful" and "false-positive" signals survive as separate counts.
+    assert summary.review_feedback_by_signal == {"useful": 1, "false-positive": 1, "merged": 1}
+    assert summary.review_feedback_by_event_type == {"explicit_command": 2, "pr_merged": 1}
+
+
+def test_compute_review_feedback_summary_empty_is_zero_not_error() -> None:
+    summary = compute_review_feedback_summary(())
+    assert summary.review_feedback_event_count == 0
+    assert summary.review_feedback_by_signal == {}
