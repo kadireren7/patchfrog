@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,3 +38,19 @@ class CriticVerdictRepository:
             select(CriticVerdictModel).where(CriticVerdictModel.proposal_id == proposal_id)
         )
         return result.scalar_one_or_none()
+
+    async def list_for_proposal_ids(
+        self, session: AsyncSession, *, proposal_ids: Sequence[uuid.UUID]
+    ) -> list[CriticVerdictModel]:
+        """One query for every verdict across many proposals -- the bulk
+        counterpart to :meth:`get_for_proposal`, used by
+        :mod:`patchfrog.telemetry.collector` so collecting one review
+        run's telemetry never issues one verdict query per proposal (spec
+        section 43: avoid N+1)."""
+
+        if not proposal_ids:
+            return []
+        result = await session.execute(
+            select(CriticVerdictModel).where(CriticVerdictModel.proposal_id.in_(proposal_ids))
+        )
+        return list(result.scalars().all())

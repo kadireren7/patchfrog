@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from patchfrog.analysis.queries import AnalysisQueryService
 from patchfrog.analysis.security_rule_metadata import lookup as lookup_security_rule_metadata
 from patchfrog.analysis.service import StaticAnalysisService
-from patchfrog.context.config import ContextConfig
+from patchfrog.context.config import CONTEXT_ENGINE_VERSION, ContextConfig
 from patchfrog.diff.models import DiffFile
 from patchfrog.diff.parser import build_diff_file
 from patchfrog.evaluation.domain import (
@@ -76,6 +76,7 @@ from patchfrog.persistence.repositories import (
 from patchfrog.persistence.repositories.analysis_run import AnalysisRunRepository
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.config import (
+    QUALITY_COST_POLICY_VERSION,
     REVIEW_ENGINE_VERSION,
     REVIEW_POLICY_VERSION,
     REVIEW_PROMPT_VERSION,
@@ -115,13 +116,23 @@ def build_evaluation_identity(
     critic_enabled: bool,
     cases: Sequence[EvaluationCase],
     cases_root: Path,
+    use_quality_cost_guard: bool = True,
+    context_config_override: ContextConfig | None = None,
 ) -> EvaluationIdentity:
     """Everything that must match for two evaluation runs to be
     comparable -- see the module docstring of
     :mod:`patchfrog.evaluation.regression`. ``cases`` determines
     ``case_fixture_hashes`` -- two runs over a different case subset (a
     ``--tag``/``--language``/``--case`` filtered run vs. the full corpus)
-    are therefore never silently conflated."""
+    are therefore never silently conflated.
+
+    ``use_quality_cost_guard``/``context_config_override`` must be passed
+    the exact same values given to the matching
+    :meth:`~patchfrog.evaluation.runner.EvaluationRunner.run_case`/``run_suite``
+    call -- a guard-vs-uniform or fixed-vs-adaptive ablation whose
+    identity doesn't reflect what was actually run would defeat the
+    entire point of :attr:`~patchfrog.evaluation.domain.EvaluationIdentity.quality_cost_guard_enabled`/
+    ``context_config_identity``."""
 
     return EvaluationIdentity(
         evaluation_benchmark_version=EVALUATION_BENCHMARK_VERSION,
@@ -137,6 +148,12 @@ def build_evaluation_identity(
         static_toolchain_available=static_toolchain_available(),
         mode=mode,
         case_fixture_hashes={c.id: fixture_content_hash(c, cases_root=cases_root) for c in cases},
+        context_engine_version=CONTEXT_ENGINE_VERSION,
+        quality_cost_policy_version=QUALITY_COST_POLICY_VERSION,
+        quality_cost_guard_enabled=use_quality_cost_guard,
+        context_config_identity=(
+            context_config_override.fingerprint() if context_config_override is not None else "default"
+        ),
     )
 
 _ALWAYS_NO_FINDINGS = ScriptedResponse(raw_json=json.dumps({"findings": []}))

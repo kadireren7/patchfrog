@@ -105,6 +105,20 @@ feedback_events_total = Counter(
     "patchfrog_feedback_events_total", "Raw feedback events ingested", ["event_type"]
 )
 
+# Evaluation & Telemetry Intelligence milestone additions. ``tier`` is a
+# closed 3-value set (light/standard/deep) and therefore low-cardinality,
+# same bar as every other label on this page -- never a repository name,
+# PR number, candidate id, finding id, or file path (spec section 41).
+candidates_by_tier_total = Counter(
+    "patchfrog_candidates_by_tier_total", "Review candidates by Quality + Cost Guard effort tier", ["tier"]
+)
+candidates_skipped_budget_total = Counter(
+    "patchfrog_candidates_skipped_budget_total", "Review candidates skipped because the run's token budget was exhausted"
+)
+critic_calls_total = Counter(
+    "patchfrog_critic_calls_total", "Critic verification calls made across all candidates"
+)
+
 
 def start_worker_metrics_server(port: int) -> bool:
     """Serve an aggregating ``/metrics`` HTTP endpoint from the worker

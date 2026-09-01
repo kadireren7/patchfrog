@@ -339,3 +339,11 @@ class ReviewRunSummary:
     candidates_escalated: int = 0
     critic_calls: int = 0
     retries_consumed: int = 0
+    #: Sum of every specialist role call's provider-reported latency
+    #: across the whole run -- a *provider-work* latency aggregate,
+    #: deliberately distinct from ``duration_ms`` (wall clock). Since
+    #: roles run concurrently and candidates may run concurrently too,
+    #: this can legitimately exceed ``duration_ms``; never treat it as a
+    #: wall-clock measurement. See :mod:`patchfrog.telemetry`'s module
+    #: docstring for why the two are never conflated.
+    reviewer_latency_ms: float = 0.0

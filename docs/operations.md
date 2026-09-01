@@ -118,6 +118,9 @@ patchfrog ops failed [--since ISO]   # failed review runs, with error detail
 patchfrog ops retry <review_run_id>  # re-enqueue the pipeline for that commit
 patchfrog ops usage                  # per-installation quota usage (24h)
 patchfrog ops installations          # list, or --activate/--suspend/--allow-publication
+patchfrog telemetry review <run-id> [--format text|json] [--output PATH]
+                                      # deterministic telemetry snapshot for one review run
+                                      # -- see docs/telemetry-intelligence.md
 ```
 
 No command mutates GitHub directly, and no command is destructive to
@@ -137,7 +140,23 @@ patchfrog_publication_duration_seconds
 patchfrog_provider_calls_total{provider,model,role} / _input_tokens_total / _output_tokens_total
 patchfrog_findings_generated_total / _published_total / _suppressed_total{reason}
 patchfrog_feedback_events_total{event_type}
+patchfrog_candidates_by_tier_total{tier}          # Quality + Cost Guard tier distribution
+patchfrog_candidates_skipped_budget_total          # candidates skipped for run-level token budget
+patchfrog_critic_calls_total                       # critic verification calls made
 ```
+
+The three tier/budget/critic counters above (Evaluation & Telemetry
+Intelligence milestone) are deliberately the only *aggregate* operational
+signal this milestone adds to Prometheus -- `tier` is a closed 3-value
+set (`light`/`standard`/`deep`), and none of the three carry a repository
+name, PR number, candidate id, finding id, or file path. Per-run,
+per-candidate, and per-finding detail (which tier a specific candidate
+landed on, which role produced which finding, per-role token/latency
+breakdowns) belongs in the telemetry snapshot
+(`patchfrog telemetry review <run-id>`, see
+[docs/telemetry-intelligence.md](telemetry-intelligence.md)), never in a
+Prometheus label -- that is exactly the line this milestone draws
+between "low-cardinality live-ops signal" and "detailed analysis."
 
 **Read this from `:9100/metrics` on the worker, not `:8000/metrics` on
 the API** -- every counter above is incremented from worker-side task

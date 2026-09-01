@@ -407,6 +407,22 @@ fields end-to-end; it is not evidence of real semantic quality (see "Two
 kinds of AI numbers" above — the same oracle-vs-live distinction applies
 here unchanged).
 
+## Comparison identity and regression thresholds
+
+`EvaluationIdentity` also folds in `context_engine_version`,
+`quality_cost_policy_version`, `quality_cost_guard_enabled`, and
+`context_config_identity` (Evaluation & Telemetry Intelligence
+milestone) — a guard-on run is never silently compared against a
+"uniform baseline" ablation run, and a fixed-depth-1 run is never
+silently compared against an adaptive-context run.
+`patchfrog.evaluation.regression.compare` also reports (report-only by
+default; see `RegressionThresholds`) provider-call/input-token/
+critic-call cost deltas alongside the existing precision/recall/clean-
+case/hallucination/duplicate checks. See
+[docs/telemetry-intelligence.md](telemetry-intelligence.md) for the full
+writeup, including why cost deltas never fail a comparison unless a
+caller explicitly configures a threshold.
+
 ## What Phase 8 deliberately does not do
 
 - **No LLM-as-judge for the canonical score.** Ever.

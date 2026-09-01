@@ -198,3 +198,7 @@ protects context identity.
   logic described above is completely unaffected -- tiering only
   changes what budget/mode it is invoked with, never how it behaves
   once invoked.
+- `docs/telemetry-intelligence.md` -- reports this engine's adaptive-
+  expansion provenance (`ContextBundleModel.adaptive_expansion_*`,
+  depth-2 counts/tokens) per bundle, never snippet content, and never a
+  causal-improvement claim.

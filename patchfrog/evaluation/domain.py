@@ -30,7 +30,16 @@ EVALUATION_BENCHMARK_VERSION = 1
 
 #: Bumped whenever this package's own logic (matcher/metrics/regression)
 #: changes materially -- never for a fixture/label change alone.
-EVALUATION_ENGINE_VERSION = 1
+#:
+#: Bumped to 2 for the Evaluation & Telemetry Intelligence milestone:
+#: :class:`EvaluationIdentity` gained four new fields
+#: (``context_engine_version``, ``quality_cost_policy_version``,
+#: ``quality_cost_guard_enabled``, ``context_config_identity``) that
+#: participate in comparison compatibility (see
+#: :mod:`patchfrog.evaluation.regression`), and the evaluation cost/
+#: efficiency reporting shape changed materially enough that a v1-shaped
+#: baseline is no longer directly comparable.
+EVALUATION_ENGINE_VERSION = 2
 
 
 class EvaluationMode(StrEnum):
@@ -421,6 +430,28 @@ class EvaluationIdentity:
     static_toolchain_available: bool
     mode: EvaluationMode
     case_fixture_hashes: dict[str, str] = field(default_factory=dict)
+    #: The four fields below (Evaluation & Telemetry Intelligence
+    #: milestone, spec section 18) close a real comparison-compatibility
+    #: gap: none of the fields above distinguish a Context Engine version
+    #: bump, a Quality + Cost Guard policy change, a guard-on run from a
+    #: fixed "uniform baseline" ablation run, or one context ablation
+    #: variant (fixed depth-1, fixed depth-2, adaptive, kind-restricted)
+    #: from another. Without these, two runs that differ in exactly the
+    #: dimension being ablated could be silently treated as identical
+    #: baselines -- see :mod:`patchfrog.evaluation.regression`.
+    context_engine_version: int = 0
+    quality_cost_policy_version: int = 0
+    #: ``True`` for every real review and for the default evaluation
+    #: path; ``False`` only for the evaluation harness's fixed "uniform
+    #: baseline" ablation (:func:`patchfrog.review.effort.uniform_baseline_decision`).
+    quality_cost_guard_enabled: bool = True
+    #: :meth:`patchfrog.context.config.ContextConfig.fingerprint` of
+    #: whatever ``context_config_override`` a run used, or the literal
+    #: string ``"default"`` when no override was supplied (production-
+    #: equivalent context config) -- so a fixed-depth-1 run, a fixed-
+    #: depth-2 run, an adaptive run, and a kind-restricted ablation
+    #: variant each get a distinct identity.
+    context_config_identity: str = "default"
 
 
 @dataclass(frozen=True, slots=True)

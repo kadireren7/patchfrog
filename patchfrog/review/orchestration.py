@@ -134,6 +134,14 @@ class CandidateOrchestrationResult:
     #: this one candidate -- see :mod:`patchfrog.review.effort`.
     critic_calls: int = 0
     retries_consumed: int = 0
+    #: Sum of every specialist role call's :attr:`~patchfrog.review.provider.ProviderResult.latency_ms`
+    #: for this candidate -- a *provider-work* latency aggregate, never a
+    #: wall-clock measurement (Correctness/Security calls run
+    #: concurrently via :func:`asyncio.gather`, so this can legitimately
+    #: exceed the candidate's actual wall-clock time). Telemetry
+    #: (:mod:`patchfrog.telemetry`) is the only consumer that needs this
+    #: distinction spelled out explicitly -- see its module docstring.
+    reviewer_latency_ms: float = 0.0
     #: The *effective* effort decision after this candidate's own
     #: post-proposal escalation check
     #: (:meth:`~patchfrog.review.effort.ReviewEffortPolicy.escalate_for_high_risk_proposal`)
@@ -307,6 +315,7 @@ class AgentOrchestrator:
         proposals: list[AgentProposal] = []
         retries_consumed = 0
         actual_input_total = 0
+        reviewer_latency_ms = 0.0
         validation_context = ValidationContext(
             allowed_file_paths=evidence.allowed_file_paths,
             context_text=evidence.context_text,
@@ -321,10 +330,11 @@ class AgentOrchestrator:
                     continue
                 raise outcome
 
-            raw_json, usage, retries_used = outcome
+            raw_json, usage, retries_used, latency_ms = outcome
             usage_by_role[role] = usage
             actual_input_total += usage.input_tokens
             retries_consumed += retries_used
+            reviewer_latency_ms += latency_ms
             try:
                 validated = parse_and_validate_response(raw_json, context=validation_context)
             except ResponseSchemaError as exc:
@@ -411,11 +421,12 @@ class AgentOrchestrator:
             critic_calls=critic_calls,
             retries_consumed=retries_consumed,
             effort_decision=effort_decision,
+            reviewer_latency_ms=reviewer_latency_ms,
         )
 
     async def _call_role(
         self, role: AgentRole, prompt: tuple[str, str], *, max_output_tokens: int, max_retries: int
-    ) -> tuple[str, TokenUsage, int]:
+    ) -> tuple[str, TokenUsage, int, float]:
         system_prompt, user_prompt = prompt
         provider = self._reviewer_providers[role]
         request = ProviderRequest(
@@ -436,6 +447,7 @@ class AgentOrchestrator:
                 thinking_tokens=result.usage.thinking_tokens,
             ),
             retries_used,
+            result.latency_ms,
         )
 
     async def _critique(

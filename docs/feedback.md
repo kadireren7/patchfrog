@@ -190,3 +190,14 @@ event; it only replaces the derived summary for the current version.
   sync is always an explicit, on-demand action.
 - No bulk historical crawl of a repository's existing comments without an
   explicit, scoped sync call naming a specific PR.
+
+## Telemetry integration
+
+`docs/telemetry-intelligence.md` covers how feedback is folded into a
+review run's telemetry snapshot (`FeedbackTelemetry`, one entry per
+published finding, `has_feedback=False` meaning "unknown" — never
+"confirmed correct") and the coverage/useful/user-reported-false-
+positive/fixed rate calculations, every one of them denominated by
+feedback-*bearing* findings only, never all published findings. Feedback
+metrics are never combined with benchmark precision/recall into one
+score.

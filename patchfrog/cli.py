@@ -144,6 +144,9 @@ from patchfrog.review_memory.config_resolution import resolve_repository_increme
 from patchfrog.review_memory.domain import IncrementalPlan, ReviewMemoryFinding
 from patchfrog.review_memory.queries import ReviewMemoryQueryService
 from patchfrog.review_memory.service import IncrementalReviewMemoryService
+from patchfrog.telemetry.collector import collect_review_telemetry
+from patchfrog.telemetry.reporting import render_markdown_snapshot, snapshot_to_dict
+from patchfrog.telemetry.reporting import write_json as write_telemetry_json
 
 logger = structlog.get_logger(__name__)
 
@@ -838,6 +841,50 @@ def _run_publish(args: argparse.Namespace) -> int:
         for error in result.errors:
             print(f"  error: {error}", file=sys.stderr)
         return 1
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Evaluation & Telemetry Intelligence (patchfrog.telemetry)
+# ---------------------------------------------------------------------------
+
+
+async def _telemetry_review_async(review_run_id: uuid.UUID) -> dict[str, Any] | None:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            snapshot = await collect_review_telemetry(session, review_run_id=review_run_id)
+        if snapshot is None:
+            return None
+        return snapshot_to_dict(snapshot)
+    finally:
+        await engine.dispose()
+
+
+def _run_telemetry_review(args: argparse.Namespace) -> int:
+    try:
+        review_run_id = uuid.UUID(args.review_run_id)
+    except ValueError:
+        print(f"error: not a valid review run id: {args.review_run_id!r}", file=sys.stderr)
+        return 1
+
+    payload = asyncio.run(_telemetry_review_async(review_run_id))
+    if payload is None:
+        print(f"error: no review run with id {review_run_id}", file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        import json as _json
+
+        print(_json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(render_markdown_snapshot(payload))
+
+    if args.output:
+        write_telemetry_json(payload, Path(args.output))
+        print(f"wrote telemetry JSON to {args.output}", file=sys.stderr)
     return 0
 
 
@@ -1544,7 +1591,7 @@ async def _run_context_ablation(
         variant_duration_ms = (time.monotonic() - variant_start) * 1000
         variant_identity = build_evaluation_identity(
             mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=True,
-            cases=cases, cases_root=DEFAULT_CASES_ROOT,
+            cases=cases, cases_root=DEFAULT_CASES_ROOT, context_config_override=override,
         )
         variant_report = build_report(
             EvaluationRunResult(
@@ -1839,6 +1886,20 @@ def main(argv: list[str] | None = None) -> int:
         "--include-reply-bodies", action="store_true", help="Include reply text (never the default)"
     )
 
+    telemetry_parser = subparsers.add_parser(
+        "telemetry", help="Evaluation & Telemetry Intelligence (patchfrog.telemetry)"
+    )
+    telemetry_subparsers = telemetry_parser.add_subparsers(dest="telemetry_command", required=True)
+
+    telemetry_review_parser = telemetry_subparsers.add_parser(
+        "review", help="Collect the deterministic telemetry snapshot for one review run"
+    )
+    telemetry_review_parser.add_argument("review_run_id", help="review_runs.id")
+    telemetry_review_parser.add_argument(
+        "--format", choices=["text", "json"], default="text", help="Output format (default: text)"
+    )
+    telemetry_review_parser.add_argument("--output", default=None, help="Also write the JSON export to this path")
+
     ops_parser = subparsers.add_parser(
         "ops", help="Public-beta operations (patchfrog.ops) -- health, recovery, usage, installations"
     )
@@ -1953,6 +2014,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_publish(args)
     if args.command == "feedback":
         return _run_feedback(args)
+    if args.command == "telemetry" and args.telemetry_command == "review":
+        return _run_telemetry_review(args)
     if args.command == "ops":
         return _run_ops(args)
     if args.command == "eval":

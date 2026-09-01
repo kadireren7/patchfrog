@@ -400,6 +400,19 @@ the corrected, larger total; an overestimate (or a failed call, whose
 real usage is 0) credits the difference back. The tracked total is
 never allowed to go negative.
 
+## Telemetry over tiering decisions
+
+`patchfrog telemetry review <run-id>` (see
+[docs/telemetry-intelligence.md](telemetry-intelligence.md)) reports
+per-run tier distribution, escalation counts/reasons, and per-role
+reviewer/critic token and call counts, derived directly from the columns
+this milestone added (`review_candidates.effort_tier`/`escalated`/
+`escalation_reason`, `review_runs.candidates_by_tier`/`candidates_escalated`)
+plus two further additions from that later milestone
+(`review_runs.calls_by_role`, `review_runs.reviewer_latency_ms`) that
+close gaps this milestone's own `ReviewRunSummary` already computed in
+memory but never persisted.
+
 ## What this does not prove
 
 Every test in this milestone uses `FakeLLMProvider`, an oracle-mode

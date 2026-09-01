@@ -243,6 +243,10 @@ async def _review_pull_request(
         metrics.provider_output_tokens_total.labels(**provider_labels).inc(summary.reviewer_usage.output_tokens)
         metrics.findings_generated_total.inc(summary.proposals_count)
         metrics.findings_suppressed_total.labels(reason="duplicate").inc(summary.suppressed_duplicate_count)
+        for tier, count in summary.candidates_by_tier.items():
+            metrics.candidates_by_tier_total.labels(tier=tier.value).inc(count)
+        metrics.candidates_skipped_budget_total.inc(summary.candidates_skipped_budget)
+        metrics.critic_calls_total.inc(summary.critic_calls)
 
         return summary
     finally:
