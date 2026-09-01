@@ -1,0 +1,3 @@
+publish:
+  enabled: true
+  min_severity: medium
