@@ -20,7 +20,7 @@ choice not to suppress a model's native reasoning step -- PatchFrog only
 ever reads the final structured JSON, never any thought content,
 regardless of whether thinking is on.
 
-Unlike Anthropic, Gemini's thinking tokens are drawn from the *same*
+Unlike Anthropic, Gemini's thinking tokens are drawn from the same
 ``max_output_tokens`` budget as the visible JSON response, and its
 default thinking budget is unbounded ("AUTOMATIC"). Live testing during
 this provider's validation reproduced real, intermittent truncated-JSON
@@ -31,6 +31,17 @@ writing the JSON. ``thinking_budget`` is therefore explicitly capped
 headroom for the answer -- a provider-boundary adaptation, not a schema
 change (see :mod:`patchfrog.review.schemas`, untouched).
 
+**Two incompatible thinking-control fields across model generations**
+(found live during Milestone H's production E2E dogfood, against
+``gemini-3.6-flash``): Gemini 2.5-family models take the token-count
+``thinking_budget`` capped as described above, but Gemini 3.x-family
+models replaced it with a coarse ``thinking_level`` enum
+(``MINIMAL``/``LOW``/``MEDIUM``/``HIGH``) instead -- sending the wrong
+one for a model's generation is rejected outright with a generic ``400
+INVALID_ARGUMENT`` that names no offending field. See
+:func:`_uses_thinking_level` for the version-detection logic and exactly
+why it exists.
+
 Retry policy lives one layer up, in :mod:`patchfrog.review.service` --
 this adapter's job is only to classify each failure as transient or fatal
 via the exception types in :mod:`patchfrog.review.provider`, never to
@@ -40,6 +51,7 @@ same reason ``_SDK_MAX_RETRIES = 0`` disables Anthropic's.
 
 from __future__ import annotations
 
+import re
 import time
 
 import httpx
@@ -91,7 +103,53 @@ _REFUSAL_FINISH_REASONS = frozenset(
 #: the entire budget, truncating the JSON mid-object. Chosen generously
 #: relative to a single finding's typical size (a few hundred tokens) so
 #: even a multi-finding response has room to complete.
+#:
+#: Only meaningful for :func:`_uses_thinking_level`-negative (Gemini
+#: 2.5-family) models -- see that function's docstring for why Gemini 3.x
+#: has no token-count equivalent to cap.
 _MIN_RESERVED_OUTPUT_TOKENS = 1024
+
+#: Gemini 3.x's coarse thinking-effort default used for every call --
+#: PatchFrog's own candidate reviews are small, well-scoped single-symbol
+#: units of work (see :mod:`patchfrog.review.candidates`), never a task
+#: that plausibly benefits from the model's highest thinking effort, so a
+#: fixed, moderate level is used unconditionally rather than trying to
+#: map a token-count budget onto this generation's semantic scale (no
+#: such mapping is documented or exposed by the API).
+_DEFAULT_THINKING_LEVEL = genai_types.ThinkingLevel.LOW
+
+_MODEL_MAJOR_VERSION_PATTERN = re.compile(r"^gemini-(\d+)")
+
+
+def _uses_thinking_level(model: str) -> bool:
+    """Whether ``model`` takes ``ThinkingConfig.thinking_level`` (a
+    coarse ``MINIMAL``/``LOW``/``MEDIUM``/``HIGH`` enum) rather than
+    ``ThinkingConfig.thinking_budget`` (a precise token count).
+
+    Real bug, reproduced live against ``gemini-3.6-flash`` during
+    Milestone H's production E2E dogfood: sending ``thinking_budget`` to
+    a Gemini 3.x-family model is rejected outright with a generic ``400
+    INVALID_ARGUMENT`` (no field named in the error body) -- Gemini 3.x
+    replaced the 2.5-family's token-budget field with this coarse level
+    enum instead, and the two are mutually exclusive on one request.
+    Every prior live validation of this provider (see
+    ``validation/gemini_provider/``) predates this milestone's addition
+    of an explicit ``thinking_budget`` on every call, which is what
+    first exposed the incompatibility for real.
+
+    Determined from the model name's leading major-version number --
+    never a hardcoded, staleness-prone list of specific model strings,
+    since new model names are added by the operator via
+    ``PATCHFROG_REVIEW_MODEL``/``PATCHFROG_REVIEW_CRITIC_MODEL``, never
+    by a PatchFrog code change. An unrecognized naming shape (no leading
+    ``gemini-<digits>``) conservatively falls back to the
+    longer-established, more precisely-tested ``thinking_budget`` path.
+    """
+
+    match = _MODEL_MAJOR_VERSION_PATTERN.match(model)
+    if match is None:
+        return False
+    return int(match.group(1)) >= 3
 
 
 class GeminiLLMProvider:
@@ -125,6 +183,13 @@ class GeminiLLMProvider:
 
     async def generate_structured(self, request: ProviderRequest) -> ProviderResult:
         start = time.monotonic()
+        thinking_config = (
+            genai_types.ThinkingConfig(thinking_level=_DEFAULT_THINKING_LEVEL)
+            if _uses_thinking_level(self._model)
+            else genai_types.ThinkingConfig(
+                thinking_budget=max(0, request.max_output_tokens - _MIN_RESERVED_OUTPUT_TOKENS)
+            )
+        )
         try:
             response = await self._client.aio.models.generate_content(
                 model=self._model,
@@ -134,9 +199,7 @@ class GeminiLLMProvider:
                     max_output_tokens=request.max_output_tokens,
                     response_mime_type="application/json",
                     response_json_schema=request.json_schema,
-                    thinking_config=genai_types.ThinkingConfig(
-                        thinking_budget=max(0, request.max_output_tokens - _MIN_RESERVED_OUTPUT_TOKENS)
-                    ),
+                    thinking_config=thinking_config,
                 ),
             )
         except genai_errors.ClientError as exc:
