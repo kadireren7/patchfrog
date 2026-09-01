@@ -66,6 +66,34 @@ async def test_opened_event_is_queued(
     assert _stub_celery_delay[0]["pull_request_number"] == 14
 
 
+async def test_synchronize_event_is_queued(
+    client: httpx.AsyncClient, fixture_loader: Any, _stub_celery_delay: list[dict[str, Any]]
+) -> None:
+    """Real-shaped `synchronize` delivery reaches the same queueing path
+    as `opened` -- see `tests/unit/test_webhook_parser.py` for the
+    parser-level fixture coverage this mirrors at the full HTTP route."""
+
+    payload = fixture_loader("pull_request_synchronize.json")
+    body = json.dumps(payload).encode("utf-8")
+
+    response = await client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-Hub-Signature-256": _signature(body),
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-int-6",
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 202
+    assert len(_stub_celery_delay) == 1
+    assert _stub_celery_delay[0]["delivery_id"] == "delivery-int-6"
+    assert _stub_celery_delay[0]["action"] == "synchronize"
+    assert _stub_celery_delay[0]["pull_request_number"] == 14
+
+
 async def test_invalid_signature_is_rejected(
     client: httpx.AsyncClient, fixture_loader: Any
 ) -> None:
