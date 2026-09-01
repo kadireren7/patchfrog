@@ -17,6 +17,23 @@ existing, already-tested pure functions
 -- never a second, divergent SQL aggregation path, and never a composite
 score (see that module's own docstring: "never a weighted rate that
 mixes telemetry with feedback or benchmark ground truth").
+
+**Known, accepted scale characteristic**: :func:`compute_beta_summary`
+calls :func:`~patchfrog.telemetry.collector.collect_review_telemetry`
+once per succeeded run in the window -- each of those calls is itself
+already query-bound (a small, fixed number of queries regardless of how
+many candidates/proposals/findings/feedback events that one run has --
+see ``tests/integration/test_telemetry_collector.py``'s own
+``test_collector_query_count_does_not_scale_linearly_with_proposal_count``),
+but the *total* query count for this function still scales with the
+*number of runs* in the window. Fine at beta scale (a handful of
+repositories, tens of runs a week -- see
+``tests/integration/test_telemetry_beta_summary.py``'s own query-bound
+test, which asserts this explicitly rather than leaving it
+unverified). Batching ``collect_review_telemetry`` itself across many
+run ids in one query pass would be a real rewrite of an already-tested
+core telemetry function, not a trivial change -- deliberately left as
+documented, on-demand, beta-scale behavior rather than built here.
 """
 
 from __future__ import annotations

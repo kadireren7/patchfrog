@@ -343,3 +343,119 @@ No live LLM call anywhere in this test matrix.
   real repository by this PR — that is a one-click operator action
   documented in `SECURITY.md`, not something this PR's diff can do on
   the maintainer's behalf.
+
+## 9. CORRECTION ROUND: clean-summary + already-published carried-forward finding
+
+Sections 1-8 above are preserved unchanged. A real bug in the
+interaction between two features introduced across two milestones was
+found in review before merge and is fixed here, in the same PR, before
+any merge.
+
+**Root cause**: Milestone H's `get_current_active_findings` deliberately
+returns an *empty* `findings` list for a Phase 7 zero-AI-call
+carried-forward finding that was already genuinely published earlier —
+it surfaces that finding only via the separate
+`already_reported_finding_ids` parameter instead (never re-added to
+`findings`, never duplicated — see that function's own docstring).
+`PublicationPlanner.build_plan`'s original `post_clean_summary` check
+was `if not findings: post a clean summary`, evaluated *before*
+`already_reported_finding_ids` was ever consulted (the loop that
+would have populated `already_reported_tuple` from it never runs when
+`findings` is empty). So for exactly this carried-forward-already-
+published scenario, the planner incorrectly concluded "genuinely
+clean" and would have posted a false "PatchFrog found no publishable
+findings in this review" summary over an active, already-known finding
+— and would have repeated that false claim on every subsequent
+`synchronize` while the finding kept carrying forward with zero AI
+calls.
+
+**Fix**: `genuinely_zero_findings` is now computed explicitly, once,
+from the literal inputs — `not findings and not already_reported_finding_ids`
+— rather than inferred from the shape of the planner's own derived
+output. The clean-summary decision (and the `SKIPPED_NO_FINDINGS`
+reason string, for the same reason) now checks this explicit flag, not
+`not findings` alone. `already_reported_finding_ids` is checked as the
+raw parameter, not the derived `already_reported_tuple`, precisely
+because the latter is empty in this exact scenario regardless of what
+the former contains.
+
+**Preserved, unchanged**: zero-AI-call carry-forward itself, no
+duplicate finding publication, real `PUBLISHED`+`INLINE`/`SUMMARY_ONLY`
+semantics, `DRY_RUN` never counting as actually published,
+`ALREADY_REPORTED` never counting as a real GitHub write on its own,
+stale-head protection, current-exact-run scoping. No carried-forward
+finding was re-added to the publishable list to work around this bug —
+Milestone H's suppression design is untouched; only the clean-summary
+decision was corrected.
+
+### Real, query→service→planner-path regression coverage
+
+`tests/integration/test_publishing_carried_forward_findings.py`'s new
+`test_post_clean_summary_never_fires_for_an_already_published_carried_forward_finding`
+proves every required case through the REAL
+`get_current_active_findings` → `ReviewPublicationService` →
+`PublicationPlanner` path (never a hand-built findings list), with
+`post_clean_summary=True` enabled throughout:
+
+- **(E)** commit2: the finding's first-ever publish opportunity —
+  publishes for real, exactly once, `post_clean_summary=True` never
+  preempts it.
+- **(A)** commit3: the finding carries forward again, already
+  published by commit2 — `SKIPPED_NO_FINDINGS`, zero GitHub writes,
+  zero clean-summary text, persisted reason correctly says "already
+  reported in a previous review."
+- **(B)** commit4: a *second* subsequent config-only commit — still
+  `SKIPPED_NO_FINDINGS`, still zero writes, still no clean-summary
+  spam.
+
+`tests/unit/test_publishing_planner.py` (pre-existing, from this same
+PR's original commit) already covers **(C)** genuinely-zero-findings
+with `post_clean_summary=True` publishing, and
+`tests/integration/test_publishing_service_dry_run.py`'s pre-existing
+`test_dry_run_with_no_findings_is_skipped` covers **(D)**
+genuinely-zero-findings with `post_clean_summary=False` (the default)
+preserving the original silent behavior — both re-verified still
+passing after this fix, unmodified.
+
+### Doctor/preflight wording audit
+
+Re-read every path into `PublicationPlanner` and confirmed the
+`post_clean_summary` text ("PatchFrog found no publishable findings in
+this review") is now only ever reachable when `genuinely_zero_findings`
+is true — it can no longer imply a known active finding disappeared
+merely because it was already reported. Wording unchanged (no redesign
+needed).
+
+Separately audited `preflight` vs `doctor`'s scope, per the
+correction's own request: `preflight`'s module/CLI docstrings and its
+printed output now explicitly state it only ever checks repository/
+eligibility/publication *gates*, never provider/model/credential
+health or GitHub App auth (that remains `doctor`'s job) — `docs/quickstart.md`
+step 11 and `docs/beta-runbook.md`'s "Run repo preflight" section were
+updated to say the same. No logic was duplicated between the two
+modules; this was a wording-only clarification.
+
+### `beta-summary` scale note (non-blocking, addressed)
+
+`patchfrog/telemetry/beta_summary.py`'s module docstring now documents
+explicitly that its total query count scales with the number of
+review runs in a time window (one `collect_review_telemetry` call per
+run, each already individually query-bound), not with the rows inside
+any one run — a known, accepted beta-scale characteristic, not a
+regression. A new query-bound test
+(`tests/integration/test_telemetry_beta_summary.py::test_beta_summary_query_count_scales_with_run_count_not_row_count`)
+asserts this explicitly (2 real runs, bounded query count) rather than
+leaving it unverified. No batching change was made — per the
+correction's own instruction, only an "obviously trivial" improvement
+would have qualified, and rewriting `collect_review_telemetry` to
+batch across many run ids is a real, non-trivial change to an
+already-tested core telemetry function.
+
+### Gates re-run after the correction
+
+`git diff --check` clean; `ruff check .` / `mypy . --strict` clean
+(424 source files); `pytest`: 1353 total, 1350 passing (the same 3
+pre-existing, unrelated `test_static_analysis_service.py` failures,
+never represented as 0); single Alembic head unchanged; both Docker
+images build clean; 9/9 Celery tasks registered; full-diff secret scan
+clean.

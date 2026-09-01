@@ -158,6 +158,10 @@ patchfrog ops preflight --repository <owner>/<repo>
 Reports one of `PUBLISH` / `DRY_RUN` / `BLOCKED` -- see "Publication is
 off by default" below for what each of the three gates this checks
 means, and fix whichever one is closed before expecting a real comment.
+This checks gates only -- it does not re-check provider/model/credential
+health (that's `patchfrog ops doctor`, step 9). Run both; a `PUBLISH`
+outcome here still needs a healthy `doctor` report for a provider-backed
+review to actually succeed.
 
 ## 12. Open a test pull request
 

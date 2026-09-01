@@ -75,6 +75,13 @@ network step (reading the repository's current `.patchfrog.yml`) is
 best-effort -- an unreachable GitHub API degrades that one check to
 `WARN`, never silently assumes the gate is open.
 
+**Gates only, not provider health**: `PUBLISH` here means the
+repository/eligibility/publication gates permit publication -- it never
+re-checks provider/model/credential health or GitHub App auth (that's
+`patchfrog ops doctor`'s job). Run both before considering a repository
+beta-ready; a `PUBLISH` preflight with an unhealthy `doctor` report
+still won't produce a real review.
+
 ## Allow review eligibility
 
 Review *generation* (not publication) is normally automatic once an
@@ -127,6 +134,11 @@ patchfrog telemetry beta-summary --since 7d [--repository owner/repo]
 window: how many reviews ran, how many succeeded/failed, findings
 published, provider calls/tokens, and feedback coverage -- read-only,
 reuses the existing telemetry aggregation, never a new analytics store.
+Its query cost scales with the number of runs in the window (one
+collector call per run, each already query-bound) -- fine for a
+handful of repositories and tens of runs a week; prefer a narrower
+`--since` window or `--repository` filter if a beta ever grows well
+beyond that scale.
 
 ## Sync feedback
 

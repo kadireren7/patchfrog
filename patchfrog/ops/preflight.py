@@ -21,6 +21,18 @@ Never calls an LLM. The one live network access this module performs
 (resolving ``.patchfrog.yml`` from the repository's current default
 branch) is read-only and best-effort: an unreachable GitHub API degrades
 that single check to ``WARN``, never crashes the whole report.
+
+**Scope, precisely**: this module answers whether the *repository/
+eligibility/publication gates* permit review and publication -- it
+deliberately does not re-check provider/model/credential health
+(``patchfrog ops doctor``'s job -- see that module's own
+``review_provider``/``review_provider_credential``/``model_family:*``
+checks) or GitHub App auth (also doctor's ``github_app_auth`` check).
+Never duplicated here: a `PUBLISH` outcome means "every gate this
+module checks is open," not "a provider-backed review is guaranteed to
+succeed" -- doctor must *also* report no `FAIL` (and ideally no
+provider-related `WARN`) for that. Run both; neither subsumes the
+other.
 """
 
 from __future__ import annotations

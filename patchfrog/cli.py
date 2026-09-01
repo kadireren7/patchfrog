@@ -1348,6 +1348,11 @@ async def _ops_preflight_async(*, repository_full_name: str) -> PreflightOutcome
     for check in report.checks:
         print(f"[{check.status.value.upper():4s}] {check.name}: {check.detail}")
     print(f"\noutcome: {report.outcome.value.upper()}")
+    if report.outcome is not PreflightOutcome.BLOCKED:
+        print(
+            "(gates only -- this does not check provider/model/credential health; "
+            "run `patchfrog ops doctor` too before expecting a provider-backed review to succeed)"
+        )
     return report.outcome
 
 
@@ -2009,7 +2014,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     ops_preflight_parser = ops_subparsers.add_parser(
-        "preflight", help="Would a PR against this repository actually publish right now? (read-only)"
+        "preflight",
+        help="Do this repository's eligibility/publication gates permit a PR to publish right now? "
+        "(read-only; run `ops doctor` too for provider/credential health)",
     )
     ops_preflight_parser.add_argument("--repository", required=True, help="e.g. 'owner/repo'")
 
