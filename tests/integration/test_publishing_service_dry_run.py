@@ -14,6 +14,7 @@ from patchfrog.persistence.models.publishing import (
     ReviewPublicationCommentModel,
     ReviewPublicationModel,
 )
+from patchfrog.publishing.config import PublicationConfig
 from patchfrog.publishing.domain import (
     PublicationDisposition,
     ReviewPublicationMode,
@@ -99,6 +100,35 @@ async def test_dry_run_with_no_findings_is_skipped(
 
     assert result.status is ReviewPublicationStatus.SKIPPED_NO_FINDINGS
     assert publisher.publish_calls == []
+
+
+async def test_dry_run_with_post_clean_summary_enabled_plans_a_clean_review(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    reviewed = await setup_reviewed_pull_request(
+        session_factory,
+        full_name="test/clean-summary-dry-run",
+        changed_lines=[14],
+        response_factory=lambda req: scripted_findings_response([]),
+        tmp_root=tmp_path,
+    )
+    assert reviewed.findings == []
+
+    publisher = FakeReviewPublisher(
+        pull_request=_pr_metadata(number=reviewed.pull_request_number, head_sha=reviewed.commit_sha),
+        changed_files=reviewed.changed_files,
+    )
+    service = ReviewPublicationService(session_factory=session_factory, publisher=publisher)
+    result = await service.publish(
+        review_run_id=reviewed.review_run_id,
+        mode=ReviewPublicationMode.DRY_RUN,
+        config=PublicationConfig(post_clean_summary=True),
+    )
+
+    assert result.status is ReviewPublicationStatus.DRY_RUN
+    assert result.published_inline == 0
+    assert result.planned_inline == 0
+    assert publisher.publish_calls == []  # DRY_RUN never writes
 
 
 async def test_dry_run_unmappable_finding_preserved_in_summary(

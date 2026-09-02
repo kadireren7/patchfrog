@@ -97,6 +97,56 @@ def test_empty_findings_is_skipped_no_findings() -> None:
     assert plan.status is ReviewPublicationStatus.SKIPPED_NO_FINDINGS
     assert plan.inline_comments == ()
     assert plan.summary_only == ()
+    assert plan.summary_body == ""
+
+
+def test_empty_findings_with_post_clean_summary_enabled_produces_a_publishable_plan() -> None:
+    config = PublicationConfig(min_severity=Severity.INFO, post_clean_summary=True)
+    plan = _build([], config=config)
+    assert plan.status is ReviewPublicationStatus.DRY_RUN
+    assert plan.is_publishable
+    assert plan.inline_comments == ()
+    assert plan.summary_only == ()
+    assert "no publishable findings" in plan.summary_body
+    assert "No issues exist" not in plan.summary_body
+
+
+def test_empty_findings_with_post_clean_summary_enabled_publish_mode_is_planned() -> None:
+    config = PublicationConfig(min_severity=Severity.INFO, post_clean_summary=True)
+    plan = _build([], config=config, mode=ReviewPublicationMode.PUBLISH)
+    assert plan.status is ReviewPublicationStatus.PLANNED
+    assert plan.is_publishable
+
+
+def test_all_findings_omitted_never_posts_a_clean_summary_even_when_enabled() -> None:
+    """post_clean_summary only ever applies when Phase 5 produced
+    genuinely zero findings -- a finding that exists but was filtered
+    below the severity threshold is real information PatchFrog knows
+    about; claiming "no publishable findings" would be misleading."""
+
+    config = PublicationConfig(min_severity=Severity.HIGH, post_clean_summary=True)
+    plan = _build([_finding(severity=Severity.LOW)], config=config)
+    assert plan.status is ReviewPublicationStatus.SKIPPED_NO_FINDINGS
+    assert plan.summary_body == ""
+
+
+def test_all_findings_already_reported_never_posts_a_clean_summary_even_when_enabled() -> None:
+    config = PublicationConfig(min_severity=Severity.INFO, post_clean_summary=True)
+    finding = _finding()
+    changed_files, diff_files = _whole_file_changed_files()
+    plan = PublicationPlanner().build_plan(
+        publication_id=uuid.uuid4(),
+        snapshot=_snapshot(),
+        findings=[finding],
+        changed_files=changed_files,
+        diff_files=diff_files,
+        config=config,
+        mode=ReviewPublicationMode.DRY_RUN,
+        current_head_sha=_HEAD_SHA,
+        already_reported_finding_ids=frozenset({finding.finding_id}),
+    )
+    assert plan.status is ReviewPublicationStatus.SKIPPED_NO_FINDINGS
+    assert plan.summary_body == ""
 
 
 def test_stale_head_never_produces_comments() -> None:

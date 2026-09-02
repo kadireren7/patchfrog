@@ -84,7 +84,9 @@ from patchfrog.github.auth import InstallationTokenProvider
 from patchfrog.github.client import GitHubClient
 from patchfrog.indexing.models import IndexingSummary
 from patchfrog.indexing.service import RepositoryIndexingService
+from patchfrog.ops.doctor import DoctorReport, run_doctor
 from patchfrog.ops.health import check_readiness
+from patchfrog.ops.preflight import PreflightOutcome, run_preflight
 from patchfrog.ops.queries import (
     FailedRun,
     InstallationUsage,
@@ -144,6 +146,7 @@ from patchfrog.review_memory.config_resolution import resolve_repository_increme
 from patchfrog.review_memory.domain import IncrementalPlan, ReviewMemoryFinding
 from patchfrog.review_memory.queries import ReviewMemoryQueryService
 from patchfrog.review_memory.service import IncrementalReviewMemoryService
+from patchfrog.telemetry.beta_summary import BetaSummary, compute_beta_summary, parse_since
 from patchfrog.telemetry.collector import collect_review_telemetry
 from patchfrog.telemetry.reporting import render_markdown_snapshot, snapshot_to_dict
 from patchfrog.telemetry.reporting import write_json as write_telemetry_json
@@ -888,6 +891,46 @@ def _run_telemetry_review(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _telemetry_beta_summary_async(args: argparse.Namespace) -> BetaSummary:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            repository_id = (
+                await _resolve_repository_id(session, full_name=args.repository) if args.repository else None
+            )
+            since = parse_since(args.since)
+            return await compute_beta_summary(session, since=since, repository_id=repository_id)
+    finally:
+        await engine.dispose()
+
+
+def _run_telemetry_beta_summary(args: argparse.Namespace) -> int:
+    try:
+        summary = asyncio.run(_telemetry_beta_summary_async(args))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"beta summary since {summary.since.isoformat()}" + (f" for {args.repository}" if args.repository else " (all repositories)"))
+    print(f"  runs: {summary.runs_total} total -- {summary.runs_succeeded} succeeded, {summary.runs_partial} partial, {summary.runs_failed} failed")
+    print(f"  findings published: {summary.findings_published}")
+    a = summary.aggregate
+    print(
+        f"  reviewer: {a.reviewer_calls_total} calls, {a.reviewer_input_tokens_total} in / {a.reviewer_output_tokens_total} out tokens"
+    )
+    print(f"  critic: {a.critic_calls_total} calls, {a.critic_input_tokens_total} in / {a.critic_output_tokens_total} out tokens")
+    print(f"  retries consumed: {a.retries_consumed}")
+    c = summary.feedback_coverage
+    print(
+        f"  feedback: {c.feedback_bearing_findings}/{c.published_findings} published findings have feedback "
+        f"(coverage={c.coverage_rate:.0%}, useful={c.useful_rate:.0%}, "
+        f"user-reported false positive={c.user_reported_false_positive_rate:.0%}, fixed={c.fixed_rate:.0%})"
+    )
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Phase 9: feedback loop (patchfrog.feedback)
 # ---------------------------------------------------------------------------
@@ -1150,6 +1193,24 @@ def _run_ops_health(_args: argparse.Namespace) -> int:
     return 0 if healthy else 1
 
 
+def _run_ops_doctor(args: argparse.Namespace) -> int:
+    """External beta readiness: a comprehensive, secret-safe deployment
+    diagnostic -- see the module docstring of :mod:`patchfrog.ops.doctor`
+    for exactly why this exists alongside (not instead of) `ops health`."""
+
+    try:
+        report: DoctorReport = asyncio.run(run_doctor(check_github_auth=not args.no_github_check))
+    except Exception as exc:
+        # exception escaping here is a genuine internal doctor failure (spec: distinct exit code 2).
+        print(f"internal doctor failure: {exc}", file=sys.stderr)
+        return 2
+
+    for check in report.checks:
+        print(f"[{check.status.value.upper():4s}] {check.name}: {check.detail}")
+    print(f"\noverall: {report.overall.value.upper()}")
+    return report.exit_code
+
+
 async def _ops_stale_async(*, recover: bool) -> list[StaleRun]:
     settings = get_settings()
     engine = create_engine(settings.database_url)
@@ -1274,6 +1335,32 @@ def _run_ops_usage(_args: argparse.Namespace) -> int:
     return 0
 
 
+async def _ops_preflight_async(*, repository_full_name: str) -> PreflightOutcome:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            report = await run_preflight(session, settings=settings, repository_full_name=repository_full_name)
+    finally:
+        await engine.dispose()
+
+    for check in report.checks:
+        print(f"[{check.status.value.upper():4s}] {check.name}: {check.detail}")
+    print(f"\noutcome: {report.outcome.value.upper()}")
+    if report.outcome is not PreflightOutcome.BLOCKED:
+        print(
+            "(gates only -- this does not check provider/model/credential health; "
+            "run `patchfrog ops doctor` too before expecting a provider-backed review to succeed)"
+        )
+    return report.outcome
+
+
+def _run_ops_preflight(args: argparse.Namespace) -> int:
+    outcome = asyncio.run(_ops_preflight_async(repository_full_name=args.repository))
+    return 1 if outcome is PreflightOutcome.BLOCKED else 0
+
+
 async def _ops_installations_async() -> list[InstallationModel]:
     settings = get_settings()
     engine = create_engine(settings.database_url)
@@ -1356,6 +1443,10 @@ def _run_ops_installations(args: argparse.Namespace) -> int:
 def _run_ops(args: argparse.Namespace) -> int:
     if args.ops_command == "health":
         return _run_ops_health(args)
+    if args.ops_command == "doctor":
+        return _run_ops_doctor(args)
+    if args.ops_command == "preflight":
+        return _run_ops_preflight(args)
     if args.ops_command == "stale":
         return _run_ops_stale(args)
     if args.ops_command == "failed":
@@ -1900,12 +1991,34 @@ def main(argv: list[str] | None = None) -> int:
     )
     telemetry_review_parser.add_argument("--output", default=None, help="Also write the JSON export to this path")
 
+    telemetry_beta_summary_parser = telemetry_subparsers.add_parser(
+        "beta-summary", help="Read-only operator summary across review runs in a time window (external beta readiness)"
+    )
+    telemetry_beta_summary_parser.add_argument(
+        "--since", default="7d", help="ISO 8601 timestamp or relative window (7d, 24h, 30m) -- default 7d"
+    )
+    telemetry_beta_summary_parser.add_argument("--repository", default=None, help="e.g. 'owner/repo' (default: all)")
+
     ops_parser = subparsers.add_parser(
         "ops", help="Public-beta operations (patchfrog.ops) -- health, recovery, usage, installations"
     )
     ops_subparsers = ops_parser.add_subparsers(dest="ops_command", required=True)
 
     ops_subparsers.add_parser("health", help="Check DB/Redis/migration readiness")
+
+    ops_doctor_parser = ops_subparsers.add_parser(
+        "doctor", help="Comprehensive, secret-safe deployment diagnostic for a fresh beta operator"
+    )
+    ops_doctor_parser.add_argument(
+        "--no-github-check", action="store_true", help="Skip the optional live GET /app auth check"
+    )
+
+    ops_preflight_parser = ops_subparsers.add_parser(
+        "preflight",
+        help="Do this repository's eligibility/publication gates permit a PR to publish right now? "
+        "(read-only; run `ops doctor` too for provider/credential health)",
+    )
+    ops_preflight_parser.add_argument("--repository", required=True, help="e.g. 'owner/repo'")
 
     ops_stale_parser = ops_subparsers.add_parser(
         "stale", help="List review runs stuck RUNNING past the stale-run threshold"
@@ -2016,6 +2129,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_feedback(args)
     if args.command == "telemetry" and args.telemetry_command == "review":
         return _run_telemetry_review(args)
+    if args.command == "telemetry" and args.telemetry_command == "beta-summary":
+        return _run_telemetry_beta_summary(args)
     if args.command == "ops":
         return _run_ops(args)
     if args.command == "eval":

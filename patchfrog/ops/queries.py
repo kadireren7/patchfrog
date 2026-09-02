@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from patchfrog.persistence.models.installation import InstallationModel
 from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.persistence.models.review import ReviewRunModel
+from patchfrog.persistence.repositories import InstallationRepository
 from patchfrog.review.domain import ReviewRunStatus
 
 
@@ -127,3 +128,37 @@ async def list_installation_usage(
             )
         )
     return usage
+
+
+async def get_repository_and_installation_by_full_name(
+    session: AsyncSession, *, full_name: str
+) -> tuple[RepositoryModel, InstallationModel | None] | None:
+    """The repository row PatchFrog has for ``full_name`` (``owner/repo``)
+    plus its installation row, if PatchFrog knows about either -- used by
+    ``patchfrog ops preflight`` (external beta readiness) to answer "will
+    a PR against this repository actually publish" without requiring a
+    real webhook delivery to have arrived first.
+
+    Mirrors :func:`patchfrog.cli._resolve_repository_id`'s own
+    "prefer a real App-installed row over a synthetic CLI-local one, then
+    the most recently updated" tie-break for the same reason: ``full_name``
+    is not a unique key on ``repositories``. Returns ``None`` (not a
+    tuple) only when no repository row exists at all -- an existing
+    repository row with no matching installation still returns
+    ``(repository, None)``, itself a meaningful preflight signal.
+    """
+
+    repos = (
+        await session.execute(
+            select(RepositoryModel)
+            .where(RepositoryModel.full_name == full_name)
+            .order_by((RepositoryModel.installation_id != 0).desc(), RepositoryModel.updated_at.desc())
+        )
+    ).scalars().all()
+    if not repos:
+        return None
+    repository = repos[0]
+    installation = await InstallationRepository().get_by_github_id(
+        session, github_installation_id=repository.installation_id
+    )
+    return repository, installation

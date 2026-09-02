@@ -37,7 +37,11 @@ from uuid import UUID
 from patchfrog.analysis.domain import Confidence, Severity
 from patchfrog.diff.models import DiffFile
 from patchfrog.domain.pull_request import ChangedFile
-from patchfrog.publishing.body import format_inline_comment_body, format_summary_body
+from patchfrog.publishing.body import (
+    format_clean_review_body,
+    format_inline_comment_body,
+    format_summary_body,
+)
 from patchfrog.publishing.config import PublicationConfig
 from patchfrog.publishing.diff_mapper import map_finding_to_diff_position
 from patchfrog.publishing.domain import (
@@ -108,13 +112,32 @@ class PublicationPlanner:
                 ),
             )
 
-        if not findings:
-            return ReviewPublicationPlan(
-                snapshot=snapshot,
-                mode=mode,
-                status=ReviewPublicationStatus.SKIPPED_NO_FINDINGS,
-                reason="the review run produced zero findings",
-            )
+        # Captured once, from the literal input, *before* anything below
+        # derives a filtered/suppressed view of it -- "genuinely zero
+        # findings" (spec: external beta readiness, post_clean_summary)
+        # means Phase 5 (patchfrog.review.service, or Phase 7 carry-
+        # forward -- see patchfrog.publishing.queries.get_current_active_findings)
+        # produced nothing at all to consider, full stop. It must never
+        # be inferred from the *shape* of the final publishable output
+        # (empty inline_comments/summary_only), because that same empty
+        # shape also results from every already-reported finding being
+        # correctly suppressed. Critically, that includes a case the
+        # local `already_reported` loop below can *never* detect on its
+        # own: a Phase 7 zero-AI-call carried-forward finding that was
+        # already genuinely published earlier is deliberately excluded
+        # from `findings` itself by get_current_active_findings (never
+        # re-added, never duplicated -- see that function's own
+        # docstring) and surfaced *only* via the `already_reported_finding_ids`
+        # parameter -- so when `findings` is empty, the loop below never
+        # iterates at all and `already_reported_tuple` stays empty too,
+        # even though `already_reported_finding_ids` itself is not.
+        # Checking the raw parameter directly (not the derived tuple) is
+        # therefore required, not optional: conflating this case with
+        # "genuinely clean" would post a false "no publishable findings"
+        # summary over an active, already-known finding, and repeat that
+        # false claim on every subsequent synchronize while the finding
+        # keeps carrying forward with zero AI calls.
+        genuinely_zero_findings = not findings and not already_reported_finding_ids
 
         changed_by_path: Mapping[str, ChangedFile] = {f.path: f for f in changed_files}
         diff_by_path: Mapping[str, DiffFile] = {f.path: f for f in diff_files}
@@ -184,11 +207,39 @@ class PublicationPlanner:
         already_reported_tuple = tuple(sorted(already_reported, key=lambda c: self._presentation_key(c)))
 
         if not inline_comments and not summary_only:
-            reason = (
-                "all findings already reported in a previous review (Phase 7 suppression)"
-                if already_reported_tuple and not omitted_tuple
-                else "no findings met the publication threshold (all filtered or omitted)"
+            if genuinely_zero_findings and config.post_clean_summary:
+                # Opt-in only (PublicationConfig.post_clean_summary).
+                # genuinely_zero_findings is true here only when BOTH
+                # findings and already_reported_finding_ids were empty --
+                # see that flag's own definition above for exactly why
+                # already_reported_finding_ids must be checked directly,
+                # not the derived already_reported_tuple.
+                clean_status = (
+                    ReviewPublicationStatus.DRY_RUN if mode is ReviewPublicationMode.DRY_RUN else ReviewPublicationStatus.PLANNED
+                )
+                return ReviewPublicationPlan(
+                    snapshot=snapshot,
+                    mode=mode,
+                    status=clean_status,
+                    reason=None,
+                    summary_body=format_clean_review_body(publication_id=publication_id, frog_marker=config.frog_marker),
+                )
+
+            already_reported_only = (already_reported_tuple and not omitted_tuple) or (
+                # The exact carried-forward-already-published case: an
+                # empty `findings` input means the already_reported loop
+                # above never even ran, so already_reported_tuple is
+                # empty too -- the *only* signal this case left behind is
+                # the already_reported_finding_ids parameter itself.
+                not findings
+                and bool(already_reported_finding_ids)
             )
+            if genuinely_zero_findings:
+                reason = "the review run produced zero findings"
+            elif already_reported_only:
+                reason = "all findings already reported in a previous review (Phase 7 suppression)"
+            else:
+                reason = "no findings met the publication threshold (all filtered or omitted)"
             return ReviewPublicationPlan(
                 snapshot=snapshot,
                 mode=mode,
