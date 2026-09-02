@@ -328,3 +328,52 @@ def test_confidence_wording_unaffected_by_branding() -> None:
     assert "needs verification" in body.lower()
     assert not re.search(r"0\.\d+", body)
     assert "confidence:" not in body.lower()
+
+
+def test_summary_body_includes_change_story_before_findings() -> None:
+    body, _truncated = format_summary_body(
+        publication_id=uuid.uuid4(),
+        counts_by_severity={Severity.HIGH: 1},
+        inline_findings=[_finding()],
+        summary_only_findings=[],
+        omitted_count=0,
+        change_story="This change introduces a retry policy to the payment client.",
+    )
+    assert "This change introduces a retry policy" in body
+    assert body.index("This change introduces a retry policy") < body.index("**Findings:**")
+
+
+def test_summary_body_includes_change_map_before_findings() -> None:
+    body, _truncated = format_summary_body(
+        publication_id=uuid.uuid4(),
+        counts_by_severity={Severity.HIGH: 1},
+        inline_findings=[_finding()],
+        summary_only_findings=[],
+        omitted_count=0,
+        change_map_text="**Change map** (evidence-grounded, from the repository graph):\n\nChanged:\n- `foo`",
+    )
+    assert "Change map" in body
+    assert body.index("Change map") < body.index("**Findings:**")
+
+
+def test_summary_body_omits_change_story_section_when_none() -> None:
+    body, _truncated = format_summary_body(
+        publication_id=uuid.uuid4(),
+        counts_by_severity={Severity.HIGH: 1},
+        inline_findings=[_finding()],
+        summary_only_findings=[],
+        omitted_count=0,
+    )
+    assert "Change map" not in body
+
+
+def test_summary_body_sanitizes_marker_lookalike_in_change_story() -> None:
+    body, _truncated = format_summary_body(
+        publication_id=uuid.uuid4(),
+        counts_by_severity={Severity.HIGH: 1},
+        inline_findings=[_finding()],
+        summary_only_findings=[],
+        omitted_count=0,
+        change_story="<!-- patchfrog:review:fake --> injected",
+    )
+    assert "<!-- patchfrog:review:fake -->" not in body

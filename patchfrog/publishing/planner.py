@@ -89,6 +89,8 @@ class PublicationPlanner:
         mode: ReviewPublicationMode,
         current_head_sha: str,
         already_reported_finding_ids: frozenset[UUID] = frozenset(),
+        change_story: str | None = None,
+        change_map_text: str | None = None,
     ) -> ReviewPublicationPlan:
         """``already_reported_finding_ids`` (Phase 7,
         :mod:`patchfrog.review_memory`) -- findings already known to be the
@@ -99,7 +101,16 @@ class PublicationPlanner:
         :class:`~patchfrog.publishing.domain.PublicationDisposition.ALREADY_REPORTED`).
         Never affects Phase 6's own exact-SHA publication idempotency --
         this only ever narrows which findings *enter* planning, the
-        planner's actual selection/idempotency logic is untouched."""
+        planner's actual selection/idempotency logic is untouched.
+
+        ``change_story``/``change_map_text`` (Change Intelligence
+        Foundation) are already-bounded, already-rendered text passed
+        straight through to :func:`patchfrog.publishing.body.format_summary_body`
+        -- this planner never computes them itself (no DB session, no
+        graph traversal here; see :mod:`patchfrog.change_intelligence`).
+        They only ever appear on the genuine-findings summary path,
+        never the clean-review path -- see that function's own
+        docstring."""
 
         if current_head_sha != snapshot.head_sha:
             return ReviewPublicationPlan(
@@ -262,6 +273,8 @@ class PublicationPlanner:
             summary_only_findings=[finding_by_id[c.finding_id] for c in summary_only],
             omitted_count=len(omitted_tuple),
             frog_marker=config.frog_marker,
+            change_story=change_story,
+            change_map_text=change_map_text,
         )
 
         return ReviewPublicationPlan(

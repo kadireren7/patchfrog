@@ -65,8 +65,14 @@ CONFIG_SCHEMA_VERSION = 4
 #: with materially different scope instructions each. NOT bumped for the
 #: Quality + Cost Guard (Milestone F) -- no prompt text changed; tiering
 #: only changes which roles run and how strictly the critic verifies,
-#: never the prompt templates themselves.
-REVIEW_PROMPT_VERSION = 3
+#: never the prompt templates themselves. Bumped to 4 for Change
+#: Intelligence Foundation: a new optional `<change_intelligence>`
+#: user-prompt section (patchfrog.review.prompt._build_user_prompt),
+#: populated from patchfrog.change_intelligence.evidence when a
+#: candidate has real missing-companion evidence -- the template shape
+#: itself changed even though it's empty (and thus byte-identical to
+#: before) for most candidates.
+REVIEW_PROMPT_VERSION = 4
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final

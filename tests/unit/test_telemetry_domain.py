@@ -12,8 +12,14 @@ from patchfrog.telemetry.domain import (
 )
 
 
-def test_schema_version_is_1() -> None:
-    assert TELEMETRY_SCHEMA_VERSION == 1
+def test_schema_version_is_2() -> None:
+    """Bumped 1 -> 2 for Change Intelligence Foundation: ``ReviewTelemetrySnapshot``
+    gained the exported ``change_intelligence`` field -- see
+    :mod:`patchfrog.telemetry.domain`'s ``TELEMETRY_SCHEMA_VERSION``
+    docstring and ``tests/unit/test_telemetry_change_intelligence_versioning.py``
+    for the full before/after export-shape proof."""
+
+    assert TELEMETRY_SCHEMA_VERSION == 2
 
 
 def test_validation_rejected_classifies_correctly() -> None:

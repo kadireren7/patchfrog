@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from patchfrog.change_intelligence.telemetry import ChangeIntelligenceSummary
 from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import ReviewRunStatus
@@ -205,6 +206,7 @@ class ReviewRunRepository:
         retries_consumed: int = 0,
         reviewer_latency_ms: float = 0.0,
         calls_by_role: dict[AgentRole, int] | None = None,
+        change_intelligence: ChangeIntelligenceSummary | None = None,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -266,6 +268,16 @@ class ReviewRunRepository:
         model.reviewer_latency_ms = reviewer_latency_ms
         model.calls_by_role = json.dumps({role.value: count for role, count in (calls_by_role or {}).items()})
         model.duration_ms = duration_ms
+        if change_intelligence is not None:
+            model.change_unit_count = change_intelligence.change_unit_count
+            model.change_kind_counts = change_intelligence.change_kind_counts_json
+            model.affected_surface_count = change_intelligence.affected_surface_count
+            model.expected_companion_count = change_intelligence.expected_companion_count
+            model.missing_companion_candidate_count = change_intelligence.missing_companion_candidate_count
+            model.change_map_rendered = change_intelligence.change_map_rendered
+            model.change_map_node_count = change_intelligence.change_map_node_count
+            model.change_story = change_intelligence.change_story
+            model.change_map_text = change_intelligence.change_map_text
         model.completed_at = datetime.now(UTC)
         await session.flush()
         return model

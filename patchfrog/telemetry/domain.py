@@ -39,7 +39,7 @@ Mirrors every other engine's own ``domain.py`` role (see
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from uuid import UUID
 
@@ -64,7 +64,16 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 #: Bumped whenever the JSON export shape changes materially -- consumers
 #: (CI, future dashboards, ad-hoc scripts) key off this, never off
 #: parsing prose. See :mod:`patchfrog.telemetry.reporting`.
-TELEMETRY_SCHEMA_VERSION = 1
+#:
+#: Bumped 1 -> 2 for Change Intelligence Foundation: ``ReviewTelemetrySnapshot``
+#: gained the ``change_intelligence`` field
+#: (:class:`ChangeIntelligenceTelemetry`), and :func:`patchfrog.telemetry.reporting.snapshot_to_dict`
+#: exports every dataclass field via ``dataclasses.asdict`` -- so this is a
+#: real exported-JSON-shape change, not an internal-only addition, even
+#: though it's purely additive (no field removed/reinterpreted) and every
+#: historical row exports it with explicit zero/default values (see
+#: :func:`patchfrog.telemetry.collector.collect_review_telemetry`).
+TELEMETRY_SCHEMA_VERSION = 2
 
 
 class FindingLifecycleOutcome(StrEnum):
@@ -306,6 +315,29 @@ class ReviewFeedbackEventTelemetry:
 
 
 @dataclass(frozen=True, slots=True)
+class ChangeIntelligenceTelemetry:
+    """Bounded, privacy-safe counts from
+    :mod:`patchfrog.change_intelligence` for one review run (spec
+    section 20). Deliberately counts only -- no Change Story prose, no
+    Change Map text, no per-node evidence strings, even though those
+    already-bounded strings are separately persisted on ``review_runs``
+    for publication (:mod:`patchfrog.publishing`); telemetry is a
+    structured-metadata surface, never a second copy of rendered text.
+    """
+
+    change_unit_count: int
+    #: ``(kind_value, count)`` pairs, sorted by kind value -- a tuple,
+    #: not a dict, matching the immutability discipline of every other
+    #: collection field in this module.
+    change_kind_counts: tuple[tuple[str, int], ...]
+    affected_surface_count: int
+    expected_companion_count: int
+    missing_companion_candidate_count: int
+    change_map_rendered: bool
+    change_map_node_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewTelemetrySnapshot:
     """The complete, deterministic telemetry snapshot for one review run
     -- what :func:`patchfrog.telemetry.collector.collect_review_telemetry`
@@ -340,6 +372,21 @@ class ReviewTelemetrySnapshot:
     #: :func:`patchfrog.telemetry.aggregation.compute_feedback_coverage`
     #: (spec section 33/34).
     review_feedback: tuple[ReviewFeedbackEventTelemetry, ...] = ()
+    #: All-zero/empty for a run that predates Change Intelligence
+    #: Foundation -- same nullable-safe-default convention as
+    #: ``candidates_by_tier``/``calls_by_role`` above, never a separate
+    #: ``None`` sentinel. See :class:`ChangeIntelligenceTelemetry`.
+    change_intelligence: ChangeIntelligenceTelemetry = field(
+        default_factory=lambda: ChangeIntelligenceTelemetry(
+            change_unit_count=0,
+            change_kind_counts=(),
+            affected_surface_count=0,
+            expected_companion_count=0,
+            missing_companion_candidate_count=0,
+            change_map_rendered=False,
+            change_map_node_count=0,
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)

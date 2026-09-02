@@ -286,6 +286,7 @@ class AgentOrchestrator:
                 context_text=evidence.context_text,
                 diff_excerpt=evidence.diff_excerpt,
                 static_findings=evidence.static_findings,
+                change_intelligence_text=evidence.change_intelligence_text,
             )
             for role in selected_roles
         }

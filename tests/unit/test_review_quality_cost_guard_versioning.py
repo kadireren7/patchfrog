@@ -33,12 +33,16 @@ def test_review_engine_version_bumped_for_tiered_execution() -> None:
     assert REVIEW_ENGINE_VERSION > _PRE_GUARD_ENGINE_VERSION
 
 
-def test_review_prompt_version_unchanged_by_this_milestone() -> None:
-    """No prompt text changed for the Quality + Cost Guard -- tiering
-    only changes which roles run and how strictly the critic verifies,
-    never the prompt templates themselves (spec sections 30/37)."""
-
-    assert REVIEW_PROMPT_VERSION == 3
+# No prompt text changed for the Quality + Cost Guard itself -- tiering
+# only changed which roles run and how strictly the critic verifies,
+# never the prompt templates themselves (spec sections 30/37), so
+# REVIEW_PROMPT_VERSION stayed at the Agent Orchestration v1 value (3)
+# through the end of this milestone. A later milestone (Change
+# Intelligence Foundation) legitimately bumped it again, to 4, for a
+# real prompt template change (the new optional `<change_intelligence>`
+# section); see tests/unit/test_review_orchestration_versioning.py's own
+# comment for why the historical "still 3" pin that used to live here is
+# retired rather than kept permanently false.
 
 
 def test_quality_cost_policy_version_introduced() -> None:

@@ -33,3 +33,10 @@ class CandidateEvidencePackage:
     static_findings: tuple[StaticFindingSummary, ...]
     allowed_file_paths: frozenset[str]
     context_bundle_id: UUID | None
+    #: Bounded (see :mod:`patchfrog.change_intelligence.evidence`) evidence
+    #: from the Change Intelligence Foundation -- empty string when this
+    #: candidate has no missing-companion evidence tied to it. Already
+    #: small enough (at most a few lines, one candidate's own companions
+    #: only) to apply uniformly across effort tiers without threatening
+    #: the Quality + Cost Guard's LIGHT-tier budget.
+    change_intelligence_text: str = ""
