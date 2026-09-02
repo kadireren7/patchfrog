@@ -12,14 +12,16 @@ from patchfrog.telemetry.domain import (
 )
 
 
-def test_schema_version_is_2() -> None:
-    """Bumped 1 -> 2 for Change Intelligence Foundation: ``ReviewTelemetrySnapshot``
-    gained the exported ``change_intelligence`` field -- see
-    :mod:`patchfrog.telemetry.domain`'s ``TELEMETRY_SCHEMA_VERSION``
-    docstring and ``tests/unit/test_telemetry_change_intelligence_versioning.py``
-    for the full before/after export-shape proof."""
+def test_schema_version_is_a_positive_int() -> None:
+    """Milestone-specific bumps are pinned relatively (``> pre-milestone
+    value``, with a reason) in each milestone's own versioning test --
+    e.g. ``tests/unit/test_contract_intelligence_versioning.py`` -- so
+    this test only guards the type/sign here and never needs updating on
+    every future additive-field bump. See :mod:`patchfrog.telemetry.domain`'s
+    ``TELEMETRY_SCHEMA_VERSION`` docstring for the full history."""
 
-    assert TELEMETRY_SCHEMA_VERSION == 2
+    assert isinstance(TELEMETRY_SCHEMA_VERSION, int)
+    assert TELEMETRY_SCHEMA_VERSION > 0
 
 
 def test_validation_rejected_classifies_correctly() -> None:

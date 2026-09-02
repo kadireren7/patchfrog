@@ -103,16 +103,25 @@ class CompanionStatus(StrEnum):
 
 
 class CompanionReasonCode(StrEnum):
-    """Always exactly one of these -- see
-    :mod:`patchfrog.change_intelligence.companions` for precisely which
-    graph evidence produces each. Deliberately only two: every dependent-
-    surface-not-updated example in the spec (serializer, loader,
-    consumer, handler, negative test) reduces to one of these two
-    *structural* signals at the evidence level this repository graph
-    actually provides -- see ``docs/change-intelligence.md``."""
+    """Always exactly one of these. ``CALLER_NOT_UPDATED``/
+    ``TEST_NOT_UPDATED`` are produced by
+    :mod:`patchfrog.change_intelligence.companions` -- every dependent-
+    surface-not-updated example in the Milestone J spec (serializer,
+    loader, consumer, handler, negative test) reduces to one of these
+    two *structural* signals at the evidence level this repository
+    graph actually provides -- see ``docs/change-intelligence.md``.
+
+    ``CONTRACT_CONSUMER_NOT_UPDATED`` (Milestone K,
+    :mod:`patchfrog.contract_intelligence`) is deliberately the *same*
+    type reused rather than a parallel candidate model (spec section 9)
+    -- produced only when a real, structurally-detected *breaking*
+    function-contract delta exists **and** a real caller of that
+    function was not itself touched in the diff; see
+    ``docs/contract-intelligence.md``."""
 
     CALLER_NOT_UPDATED = "caller_not_updated"
     TEST_NOT_UPDATED = "test_not_updated"
+    CONTRACT_CONSUMER_NOT_UPDATED = "contract_consumer_not_updated"
 
 
 @dataclass(frozen=True, slots=True)

@@ -195,6 +195,22 @@ class ReviewRunModel(Base):
     change_story: Mapped[str | None] = mapped_column(Text, nullable=True)
     change_map_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    #: Contract & Blast Radius Intelligence (:mod:`patchfrog.contract_intelligence`)
+    #: run-level summary -- the bounded output of
+    #: :func:`patchfrog.contract_intelligence.telemetry.summarize_for_persistence`.
+    #: No separate contract-story/contract-map text columns: the Contract
+    #: Story addendum is folded into ``change_story`` above, and the
+    #: Contract Map reuses ``change_map_text``/``change_map_rendered``/
+    #: ``change_map_node_count`` above (the *same* map, not a second one)
+    #: -- see ``docs/contract-intelligence.md``'s Persistence section.
+    #: All default to 0/``"{}"`` -- nullable-safe for rows predating this
+    #: milestone.
+    contract_delta_count: Mapped[int] = mapped_column(Integer, default=0)
+    contract_kind_counts: Mapped[str] = mapped_column(Text, default="{}")
+    potentially_breaking_delta_count: Mapped[int] = mapped_column(Integer, default=0)
+    impacted_consumer_count: Mapped[int] = mapped_column(Integer, default=0)
+    stale_consumer_candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+
 
 class ReviewCandidateModel(Base):
     """One symbol- (or module-region-) centered candidate considered for

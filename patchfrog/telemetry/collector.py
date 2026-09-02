@@ -55,6 +55,7 @@ from patchfrog.telemetry.domain import (
     CandidateTelemetry,
     ChangeIntelligenceTelemetry,
     ContextTelemetry,
+    ContractIntelligenceTelemetry,
     FeedbackScope,
     FeedbackTelemetry,
     FindingLifecycleTelemetry,
@@ -325,6 +326,15 @@ async def collect_review_telemetry(
         change_map_node_count=run.change_map_node_count,
     )
 
+    contract_kind_counts_raw = _load_json_dict(run.contract_kind_counts)
+    contract_intelligence = ContractIntelligenceTelemetry(
+        contract_delta_count=run.contract_delta_count,
+        contract_kind_counts=tuple(sorted(contract_kind_counts_raw.items())),
+        potentially_breaking_delta_count=run.potentially_breaking_delta_count,
+        impacted_consumer_count=run.impacted_consumer_count,
+        stale_consumer_candidate_count=run.stale_consumer_candidate_count,
+    )
+
     return ReviewTelemetrySnapshot(
         schema_version=TELEMETRY_SCHEMA_VERSION,
         review_run_id=run.id,
@@ -347,4 +357,5 @@ async def collect_review_telemetry(
         feedback=feedback_telemetry,
         review_feedback=review_feedback_telemetry,
         change_intelligence=change_intelligence,
+        contract_intelligence=contract_intelligence,
     )

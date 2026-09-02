@@ -71,8 +71,14 @@ CONFIG_SCHEMA_VERSION = 4
 #: populated from patchfrog.change_intelligence.evidence when a
 #: candidate has real missing-companion evidence -- the template shape
 #: itself changed even though it's empty (and thus byte-identical to
-#: before) for most candidates.
-REVIEW_PROMPT_VERSION = 4
+#: before) for most candidates. Bumped to 5 for Contract & Blast Radius
+#: Intelligence: a second new optional `<contract_intelligence>`
+#: user-prompt section, populated from
+#: patchfrog.contract_intelligence.evidence only for the exact candidate
+#: that is the source of a real, structurally-detected contract delta --
+#: empty (and thus byte-identical) for every other candidate, but the
+#: template shape itself changed again.
+REVIEW_PROMPT_VERSION = 5
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final

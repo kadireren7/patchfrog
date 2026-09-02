@@ -73,7 +73,7 @@ def test_no_telemetry_dataclass_carries_a_forbidden_content_field() -> None:
 
 def test_json_export_contains_schema_version() -> None:
     payload = snapshot_to_dict(_snapshot())
-    assert payload["schema_version"] == TELEMETRY_SCHEMA_VERSION == 2
+    assert payload["schema_version"] == TELEMETRY_SCHEMA_VERSION
 
 
 def test_json_export_shape_explicitly_contains_change_intelligence_object() -> None:
@@ -93,6 +93,22 @@ def test_json_export_shape_explicitly_contains_change_intelligence_object() -> N
         "missing_companion_candidate_count": 0,
         "change_map_rendered": False,
         "change_map_node_count": 0,
+    }
+
+
+def test_json_export_shape_explicitly_contains_contract_intelligence_object() -> None:
+    """Same proof as the Change Intelligence test above, for Contract &
+    Blast Radius Intelligence -- this is exactly the fact that made
+    ``TELEMETRY_SCHEMA_VERSION`` 2 -> 3 mandatory."""
+
+    payload = snapshot_to_dict(_snapshot())
+    assert "contract_intelligence" in payload
+    assert payload["contract_intelligence"] == {
+        "contract_delta_count": 0,
+        "contract_kind_counts": [],
+        "potentially_breaking_delta_count": 0,
+        "impacted_consumer_count": 0,
+        "stale_consumer_candidate_count": 0,
     }
 
 
