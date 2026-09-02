@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.change_intelligence.telemetry import ChangeIntelligenceSummary
 from patchfrog.context.domain import ContextTargetType
+from patchfrog.contract_intelligence.telemetry import ContractIntelligenceSummary
 from patchfrog.feedback.domain import (
     ActorIdentity,
     ExplicitCommand,
@@ -326,6 +327,11 @@ async def _persist_scenario(session_factory: async_sessionmaker[AsyncSession]) -
                 change_map_rendered=True, change_map_node_count=4,
                 change_story="This change introduces a retry policy.",
                 change_map_text="**Change map** ...",
+            ),
+            contract_intelligence=ContractIntelligenceSummary(
+                version=1, contract_delta_count=1, contract_kind_counts_json='{"function": 1}',
+                potentially_breaking_delta_count=1, impacted_consumer_count=2,
+                stale_consumer_candidate_count=1,
             ),
         )
 
@@ -672,7 +678,7 @@ async def test_historical_nullable_rows_are_supported(session_factory: async_ses
 
 async def test_change_intelligence_counts_are_captured(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Case A (telemetry schema version bugfix follow-up): a real
-    Milestone J run exports ``schema_version == 2`` and the
+    Milestone J run exports the current ``schema_version`` and the
     ``change_intelligence`` field with correct counts, both on the
     dataclass and through the actual JSON export path."""
 
@@ -680,7 +686,7 @@ async def test_change_intelligence_counts_are_captured(session_factory: async_se
     async with session_factory() as session:
         snapshot = await collect_review_telemetry(session, review_run_id=scenario.review_run_id)
     assert snapshot is not None
-    assert snapshot.schema_version == TELEMETRY_SCHEMA_VERSION == 2
+    assert snapshot.schema_version == TELEMETRY_SCHEMA_VERSION
     ci = snapshot.change_intelligence
     assert ci.change_unit_count == 2
     assert ci.change_kind_counts == (("behavior", 1), ("contract", 1))
@@ -691,7 +697,7 @@ async def test_change_intelligence_counts_are_captured(session_factory: async_se
     assert ci.change_map_node_count == 4
 
     payload = snapshot_to_dict(snapshot)
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == TELEMETRY_SCHEMA_VERSION
     assert payload["change_intelligence"] == {
         "change_unit_count": 2,
         "change_kind_counts": [["behavior", 1], ["contract", 1]],
@@ -703,13 +709,49 @@ async def test_change_intelligence_counts_are_captured(session_factory: async_se
     }
 
 
-async def test_historical_row_without_change_intelligence_exports_defaults_under_schema_2(
+async def test_contract_intelligence_counts_are_captured(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    scenario = await _persist_scenario(session_factory)
+    async with session_factory() as session:
+        snapshot = await collect_review_telemetry(session, review_run_id=scenario.review_run_id)
+    assert snapshot is not None
+    coi = snapshot.contract_intelligence
+    assert coi.contract_delta_count == 1
+    assert coi.contract_kind_counts == (("function", 1),)
+    assert coi.potentially_breaking_delta_count == 1
+    assert coi.impacted_consumer_count == 2
+    assert coi.stale_consumer_candidate_count == 1
+
+    payload = snapshot_to_dict(snapshot)
+    assert payload["contract_intelligence"] == {
+        "contract_delta_count": 1,
+        "contract_kind_counts": [["function", 1]],
+        "potentially_breaking_delta_count": 1,
+        "impacted_consumer_count": 2,
+        "stale_consumer_candidate_count": 1,
+    }
+
+
+def test_contract_intelligence_telemetry_never_carries_signature_or_story_text() -> None:
+    """Mirrors ``test_change_intelligence_telemetry_never_carries_story_or_map_prose``:
+    counts only -- no signature text, no Contract Story prose (that's
+    folded into ``change_story``, covered by the Change Intelligence
+    telemetry's own privacy note)."""
+
+    from patchfrog.telemetry.domain import ContractIntelligenceTelemetry
+
+    field_names = set(ContractIntelligenceTelemetry.__dataclass_fields__)
+    assert "contract_story" not in field_names
+    assert "before_signature" not in field_names
+    assert "after_signature" not in field_names
+
+
+async def test_historical_row_without_change_intelligence_exports_defaults(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Case B: a run persisted the way every pre-Milestone-J run was
     (``mark_succeeded`` called with no ``change_intelligence`` argument
     at all -- exactly what every historical row in production looks
-    like) still exports cleanly under the new ``schema_version == 2``,
+    like) still exports cleanly under the current ``schema_version``,
     with the ``change_intelligence`` object present and every field at
     its explicit zero/default value. Never a fabricated Change Story or
     Change Map for a run that never computed one."""
@@ -746,7 +788,7 @@ async def test_historical_row_without_change_intelligence_exports_defaults_under
     async with session_factory() as session:
         snapshot = await collect_review_telemetry(session, review_run_id=review_run_id)
     assert snapshot is not None
-    assert snapshot.schema_version == 2
+    assert snapshot.schema_version == TELEMETRY_SCHEMA_VERSION
     ci = snapshot.change_intelligence
     assert ci.change_unit_count == 0
     assert ci.change_kind_counts == ()
@@ -756,8 +798,15 @@ async def test_historical_row_without_change_intelligence_exports_defaults_under
     assert ci.change_map_rendered is False
     assert ci.change_map_node_count == 0
 
+    coi = snapshot.contract_intelligence
+    assert coi.contract_delta_count == 0
+    assert coi.contract_kind_counts == ()
+    assert coi.potentially_breaking_delta_count == 0
+    assert coi.impacted_consumer_count == 0
+    assert coi.stale_consumer_candidate_count == 0
+
     payload = snapshot_to_dict(snapshot)
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == TELEMETRY_SCHEMA_VERSION
     assert "change_intelligence" in payload
     assert payload["change_intelligence"] == {
         "change_unit_count": 0,
@@ -767,6 +816,13 @@ async def test_historical_row_without_change_intelligence_exports_defaults_under
         "missing_companion_candidate_count": 0,
         "change_map_rendered": False,
         "change_map_node_count": 0,
+    }
+    assert payload["contract_intelligence"] == {
+        "contract_delta_count": 0,
+        "contract_kind_counts": [],
+        "potentially_breaking_delta_count": 0,
+        "impacted_consumer_count": 0,
+        "stale_consumer_candidate_count": 0,
     }
     # Never a fabricated Change Story/Change Map for a historical run --
     # those fields don't even exist on ChangeIntelligenceTelemetry (see
@@ -800,7 +856,7 @@ async def test_json_export_contains_no_secret_or_content_sentinel(
     assert _CONTEXT_SECRET_SENTINEL not in dumped
     assert "reasoning" not in dumped.lower()  # no reasoning_summary field anywhere
     assert "quoted_text" not in dumped
-    assert payload["schema_version"] == TELEMETRY_SCHEMA_VERSION == 2
+    assert payload["schema_version"] == TELEMETRY_SCHEMA_VERSION
 
 
 async def test_collector_query_count_does_not_scale_linearly_with_proposal_count(

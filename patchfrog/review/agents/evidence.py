@@ -40,3 +40,9 @@ class CandidateEvidencePackage:
     #: only) to apply uniformly across effort tiers without threatening
     #: the Quality + Cost Guard's LIGHT-tier budget.
     change_intelligence_text: str = ""
+    #: Bounded (see :mod:`patchfrog.contract_intelligence.evidence`)
+    #: evidence from Contract & Blast Radius Intelligence -- empty
+    #: string unless this exact candidate is the source of a real,
+    #: structurally-detected contract delta. Same size discipline as
+    #: ``change_intelligence_text`` above.
+    contract_intelligence_text: str = ""

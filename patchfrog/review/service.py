@@ -34,13 +34,24 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patchfrog.analysis.queries import AnalysisQueryService
+from patchfrog.change_intelligence.change_map import render_change_map, select_change_map_unit
 from patchfrog.change_intelligence.domain import ChangeIntelligenceReport
 from patchfrog.change_intelligence.evidence import evidence_text_for_candidate
 from patchfrog.change_intelligence.service import build_change_intelligence_report
-from patchfrog.change_intelligence.telemetry import summarize_for_persistence
+from patchfrog.change_intelligence.telemetry import (
+    summarize_for_persistence as summarize_change_intelligence,
+)
 from patchfrog.context.config import AdaptiveContextConfig, ContextConfig
 from patchfrog.context.domain import ContextTargetType
 from patchfrog.context.service import ContextService
+from patchfrog.contract_intelligence.domain import ContractIntelligenceReport
+from patchfrog.contract_intelligence.evidence import (
+    evidence_text_for_candidate as contract_evidence_text_for_candidate,
+)
+from patchfrog.contract_intelligence.service import build_contract_intelligence_report
+from patchfrog.contract_intelligence.telemetry import (
+    summarize_for_persistence as summarize_contract_intelligence,
+)
 from patchfrog.diff.models import DiffFile, DiffHunk
 from patchfrog.intelligence.queries import RepositoryQueryService
 from patchfrog.persistence.models.analysis import FindingModel
@@ -290,10 +301,19 @@ class PullRequestReviewService:
         candidate_filter: Callable[[ReviewCandidate], bool] | None = None,
         incremental_context_fingerprint: str | None = None,
         context_config_override: ContextConfig | None = None,
+        base_sha: str | None = None,
     ) -> ReviewRunSummary:
         """Review a repository already checked out on disk (CLI / dogfood
         use). Context is built against the same local checkout via
         :meth:`ContextService.build_context_local`.
+
+        ``base_sha`` (Contract & Blast Radius Intelligence,
+        :mod:`patchfrog.contract_intelligence`) is the PR's base commit,
+        used only to fetch base-commit content for the small, bounded
+        set of contract-eligible changed files (never a second index,
+        never the whole repository) -- see that package's own docstring.
+        ``None`` (the default) is "this milestone doesn't run" behavior,
+        identical to every review before it.
 
         ``config`` is expected to already be resolved by the caller (see
         :func:`patchfrog.review.config_resolution.resolve_repository_review_config`,
@@ -341,6 +361,7 @@ class PullRequestReviewService:
             candidate_filter=candidate_filter,
             incremental_context_fingerprint=incremental_context_fingerprint,
             context_config_override=context_config_override,
+            base_sha=base_sha,
         )
 
     async def review_pull_request(
@@ -357,12 +378,13 @@ class PullRequestReviewService:
         candidate_filter: Callable[[ReviewCandidate], bool] | None = None,
         incremental_context_fingerprint: str | None = None,
         context_config_override: ContextConfig | None = None,
+        base_sha: str | None = None,
     ) -> ReviewRunSummary:
         """Review a repository fetched from ``clone_url`` (production /
         Celery-task use). ``config`` is expected to already be resolved by
         the caller -- see :meth:`review_local`'s docstring, including for
         ``candidate_filter``/``incremental_context_fingerprint``/
-        ``context_config_override``."""
+        ``context_config_override``/``base_sha``."""
 
         return await self._run(
             repository_id=repository_id,
@@ -376,6 +398,7 @@ class PullRequestReviewService:
             candidate_filter=candidate_filter,
             incremental_context_fingerprint=incremental_context_fingerprint,
             context_config_override=context_config_override,
+            base_sha=base_sha,
         )
 
     async def _require_matching_index(self, *, repository_id: uuid.UUID, commit_sha: str) -> uuid.UUID:
@@ -397,6 +420,7 @@ class PullRequestReviewService:
         candidate_filter: Callable[[ReviewCandidate], bool] | None = None,
         incremental_context_fingerprint: str | None = None,
         context_config_override: ContextConfig | None = None,
+        base_sha: str | None = None,
     ) -> ReviewRunSummary:
         start = time.monotonic()
         log = logger.bind(repository_id=str(repository_id), commit_sha=commit_sha)
@@ -454,6 +478,7 @@ class PullRequestReviewService:
                 candidate_filter=candidate_filter,
                 incremental_context_fingerprint=run.incremental_context_fingerprint,
                 context_config_override=context_config_override,
+                base_sha=base_sha,
             )
         except Exception as exc:
             async with self._session_factory() as session:
@@ -483,6 +508,7 @@ class PullRequestReviewService:
         candidate_filter: Callable[[ReviewCandidate], bool] | None = None,
         incremental_context_fingerprint: str,
         context_config_override: ContextConfig | None = None,
+        base_sha: str | None = None,
     ) -> ReviewRunSummary:
         async with self._session_factory() as session:
             static_findings = []
@@ -512,6 +538,48 @@ class PullRequestReviewService:
             change_intelligence_report = await build_change_intelligence_report(
                 session, candidates=list(candidates)
             )
+
+            # Contract & Blast Radius Intelligence (patchfrog.contract_intelligence):
+            # extends Change Intelligence, computed right after it, on the
+            # same full pre-narrowing candidate set and reusing its
+            # already-built ChangeUnits for change_unit_id attribution.
+            # A no-op (empty report, zero I/O beyond the eligibility
+            # check) when base_sha is None -- see that package's
+            # docstring. Purely deterministic, zero provider calls.
+            contract_intelligence_report = await build_contract_intelligence_report(
+                session,
+                candidates=list(candidates),
+                change_units=change_intelligence_report.change_units,
+                base_sha=base_sha,
+                local=local,
+                root_path=context_kwargs.get("root_path") if local else None,  # type: ignore[arg-type]
+                clone_url=context_kwargs.get("clone_url") if not local else None,  # type: ignore[arg-type]
+                token=context_kwargs.get("token") if not local else None,  # type: ignore[arg-type]
+            )
+
+            # Fold the Contract Story addendum into the existing Change
+            # Story text, and (only when there's real contract stale-
+            # consumer evidence to add) re-render the *same* Change Map
+            # with the combined companion set -- never a second diagram
+            # system (spec section 10). See docs/contract-intelligence.md.
+            if contract_intelligence_report.contract_story or contract_intelligence_report.stale_consumers:
+                combined_story = " ".join(
+                    s for s in (change_intelligence_report.change_story, contract_intelligence_report.contract_story) if s
+                )
+                combined_map = change_intelligence_report.change_map
+                if contract_intelligence_report.stale_consumers:
+                    map_unit = select_change_map_unit(change_intelligence_report.change_units)
+                    if map_unit is not None:
+                        combined_map = render_change_map(
+                            map_unit,
+                            expected_companions=(
+                                change_intelligence_report.expected_companions
+                                + contract_intelligence_report.stale_consumers
+                            ),
+                        )
+                change_intelligence_report = replace(
+                    change_intelligence_report, change_story=combined_story, change_map=combined_map
+                )
 
         if candidate_filter is not None:
             # Phase 7 (patchfrog.review_memory) narrowing candidates down
@@ -556,6 +624,7 @@ class PullRequestReviewService:
                     context_config_override=context_config_override,
                     orchestrator=orchestrator,
                     change_intelligence_report=change_intelligence_report,
+                    contract_intelligence_report=contract_intelligence_report,
                 )
 
         await asyncio.gather(*(_process(o) for o in outcomes))
@@ -798,7 +867,8 @@ class PullRequestReviewService:
                 reviewer_latency_ms=reviewer_latency_ms_total,
                 calls_by_role=calls_by_role,
                 duration_ms=duration_ms,
-                change_intelligence=summarize_for_persistence(change_intelligence_report),
+                change_intelligence=summarize_change_intelligence(change_intelligence_report),
+                contract_intelligence=summarize_contract_intelligence(contract_intelligence_report),
             )
             await session.commit()
 
@@ -854,6 +924,7 @@ class PullRequestReviewService:
         log: structlog.stdlib.BoundLogger,
         orchestrator: AgentOrchestrator,
         change_intelligence_report: ChangeIntelligenceReport,
+        contract_intelligence_report: ContractIntelligenceReport,
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
@@ -946,6 +1017,9 @@ class PullRequestReviewService:
             allowed_file_paths=allowed_file_paths,
             context_bundle_id=outcome.context_bundle_id,
             change_intelligence_text=evidence_text_for_candidate(change_intelligence_report, candidate),
+            contract_intelligence_text=contract_evidence_text_for_candidate(
+                contract_intelligence_report, candidate
+            ),
         )
 
         # Stage 2: finalize the effort decision now that the context

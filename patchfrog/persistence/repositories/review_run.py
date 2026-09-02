@@ -9,6 +9,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from patchfrog.change_intelligence.telemetry import ChangeIntelligenceSummary
+from patchfrog.contract_intelligence.telemetry import ContractIntelligenceSummary
 from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import ReviewRunStatus
@@ -207,6 +208,7 @@ class ReviewRunRepository:
         reviewer_latency_ms: float = 0.0,
         calls_by_role: dict[AgentRole, int] | None = None,
         change_intelligence: ChangeIntelligenceSummary | None = None,
+        contract_intelligence: ContractIntelligenceSummary | None = None,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -278,6 +280,12 @@ class ReviewRunRepository:
             model.change_map_node_count = change_intelligence.change_map_node_count
             model.change_story = change_intelligence.change_story
             model.change_map_text = change_intelligence.change_map_text
+        if contract_intelligence is not None:
+            model.contract_delta_count = contract_intelligence.contract_delta_count
+            model.contract_kind_counts = contract_intelligence.contract_kind_counts_json
+            model.potentially_breaking_delta_count = contract_intelligence.potentially_breaking_delta_count
+            model.impacted_consumer_count = contract_intelligence.impacted_consumer_count
+            model.stale_consumer_candidate_count = contract_intelligence.stale_consumer_candidate_count
         model.completed_at = datetime.now(UTC)
         await session.flush()
         return model

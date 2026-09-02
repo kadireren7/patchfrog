@@ -73,7 +73,15 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 #: though it's purely additive (no field removed/reinterpreted) and every
 #: historical row exports it with explicit zero/default values (see
 #: :func:`patchfrog.telemetry.collector.collect_review_telemetry`).
-TELEMETRY_SCHEMA_VERSION = 2
+#:
+#: Bumped 2 -> 3 for Contract & Blast Radius Intelligence: the same
+#: reasoning again -- ``ReviewTelemetrySnapshot`` gained the
+#: ``contract_intelligence`` field (:class:`ContractIntelligenceTelemetry`),
+#: a real additional key in the ``dataclasses.asdict``-exported JSON.
+#: Historical rows again export it with explicit zero/default values --
+#: this milestone does not repeat Milestone J's initial oversight of
+#: skipping the bump.
+TELEMETRY_SCHEMA_VERSION = 3
 
 
 class FindingLifecycleOutcome(StrEnum):
@@ -338,6 +346,25 @@ class ChangeIntelligenceTelemetry:
 
 
 @dataclass(frozen=True, slots=True)
+class ContractIntelligenceTelemetry:
+    """Bounded, privacy-safe counts from
+    :mod:`patchfrog.contract_intelligence` for one review run (spec
+    section 19). Deliberately counts only -- no signature text, no
+    Contract Story prose (folded into the Change Story already covered
+    by :class:`ChangeIntelligenceTelemetry`'s own privacy note), no
+    per-consumer evidence strings.
+    """
+
+    contract_delta_count: int
+    #: ``(kind_value, count)`` pairs, sorted by kind value -- mirrors
+    #: ``ChangeIntelligenceTelemetry.change_kind_counts`` exactly.
+    contract_kind_counts: tuple[tuple[str, int], ...]
+    potentially_breaking_delta_count: int
+    impacted_consumer_count: int
+    stale_consumer_candidate_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewTelemetrySnapshot:
     """The complete, deterministic telemetry snapshot for one review run
     -- what :func:`patchfrog.telemetry.collector.collect_review_telemetry`
@@ -385,6 +412,18 @@ class ReviewTelemetrySnapshot:
             missing_companion_candidate_count=0,
             change_map_rendered=False,
             change_map_node_count=0,
+        )
+    )
+    #: All-zero/empty for a run that predates Contract & Blast Radius
+    #: Intelligence -- same nullable-safe-default convention as
+    #: ``change_intelligence`` above. See :class:`ContractIntelligenceTelemetry`.
+    contract_intelligence: ContractIntelligenceTelemetry = field(
+        default_factory=lambda: ContractIntelligenceTelemetry(
+            contract_delta_count=0,
+            contract_kind_counts=(),
+            potentially_breaking_delta_count=0,
+            impacted_consumer_count=0,
+            stale_consumer_candidate_count=0,
         )
     )
 
