@@ -240,13 +240,18 @@ def build_agent_prompt(
     context_text: str,
     diff_excerpt: str,
     static_findings: tuple[StaticFindingSummary, ...],
+    change_intelligence_text: str = "",
 ) -> tuple[str, str]:
     """Returns ``(system_prompt, user_prompt)`` for one candidate review by
     one specialist role."""
 
     system_prompt = f"{_ROLE_FOCUS[role]}\n\n{_SHARED_RULES}"
     return system_prompt, _build_user_prompt(
-        candidate=candidate, context_text=context_text, diff_excerpt=diff_excerpt, static_findings=static_findings
+        candidate=candidate,
+        context_text=context_text,
+        diff_excerpt=diff_excerpt,
+        static_findings=static_findings,
+        change_intelligence_text=change_intelligence_text,
     )
 
 
@@ -256,6 +261,7 @@ def _build_user_prompt(
     context_text: str,
     diff_excerpt: str,
     static_findings: tuple[StaticFindingSummary, ...],
+    change_intelligence_text: str = "",
 ) -> str:
     target_label = candidate.qualified_name or candidate.symbol_name or candidate.file_path
     lines = [
@@ -280,6 +286,9 @@ def _build_user_prompt(
                 f"{f.category.value}: {f.title} (lines {f.start_line}-{f.end_line}) -- {f.message}"
             )
         lines.append("</static_analyzer_findings>")
+
+    if change_intelligence_text.strip():
+        lines += ["", "<change_intelligence>", change_intelligence_text.strip(), "</change_intelligence>"]
 
     return "\n".join(lines)
 

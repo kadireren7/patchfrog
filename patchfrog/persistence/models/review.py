@@ -177,6 +177,24 @@ class ReviewRunModel(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    #: Change Intelligence Foundation (:mod:`patchfrog.change_intelligence`)
+    #: run-level summary -- the bounded output of
+    #: :func:`patchfrog.change_intelligence.telemetry.summarize_for_persistence`,
+    #: never the full report (no raw evidence text, no per-node reasoning
+    #: beyond the already-bounded Change Story/Change Map text). All
+    #: default to 0/``"{}"``/``False``/``None`` -- nullable-safe for
+    #: historical rows predating this milestone, which never computed
+    #: Change Intelligence at all.
+    change_unit_count: Mapped[int] = mapped_column(Integer, default=0)
+    change_kind_counts: Mapped[str] = mapped_column(Text, default="{}")
+    affected_surface_count: Mapped[int] = mapped_column(Integer, default=0)
+    expected_companion_count: Mapped[int] = mapped_column(Integer, default=0)
+    missing_companion_candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    change_map_rendered: Mapped[bool] = mapped_column(Boolean, default=False)
+    change_map_node_count: Mapped[int] = mapped_column(Integer, default=0)
+    change_story: Mapped[str | None] = mapped_column(Text, nullable=True)
+    change_map_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 
 class ReviewCandidateModel(Base):
     """One symbol- (or module-region-) centered candidate considered for

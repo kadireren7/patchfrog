@@ -127,6 +127,8 @@ def format_summary_body(
     summary_only_findings: Sequence[PublishableFinding],
     omitted_count: int,
     frog_marker: bool = True,
+    change_story: str | None = None,
+    change_map_text: str | None = None,
 ) -> tuple[str, bool]:
     """Render the deterministic top-level review summary. Returns
     ``(body, truncated)``.
@@ -136,10 +138,27 @@ def format_summary_body(
     once here (the one place this module names the product), never
     repeated elsewhere in the body, and never with marketing copy
     alongside it (see docs/brand.md).
-    """
+
+    ``change_story``/``change_map_text`` (Change Intelligence Foundation,
+    :mod:`patchfrog.change_intelligence`) are already-bounded, already-
+    deterministic text -- this function never generates or alters them,
+    only places them per the suggested order (spec section 16: Change
+    story, Change map, then findings). Both are ``None`` for a run that
+    predates this milestone or produced neither; this whole block is
+    then simply omitted, so the body is byte-identical to before. Never
+    used on the *clean*-review path (:func:`format_clean_review_body`)
+    -- see that function's own docstring for why."""
 
     heading = f"## {FROG_MARKER} PatchFrog review" if frog_marker else "## PatchFrog review"
     lines = [heading, ""]
+
+    if change_story:
+        lines.append(sanitize_untrusted_text(change_story.strip()))
+        lines.append("")
+
+    if change_map_text:
+        lines.append(sanitize_untrusted_text(change_map_text.strip()))
+        lines.append("")
 
     severity_line = " · ".join(
         f"{counts_by_severity[s]} {s.value}" for s in _SEVERITY_ORDER if counts_by_severity.get(s, 0) > 0

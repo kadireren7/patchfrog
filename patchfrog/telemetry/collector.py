@@ -53,6 +53,7 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 from patchfrog.telemetry.domain import (
     TELEMETRY_SCHEMA_VERSION,
     CandidateTelemetry,
+    ChangeIntelligenceTelemetry,
     ContextTelemetry,
     FeedbackScope,
     FeedbackTelemetry,
@@ -313,6 +314,17 @@ async def collect_review_telemetry(
         session, review_run_id=review_run_id, findings=findings
     )
 
+    change_kind_counts_raw = _load_json_dict(run.change_kind_counts)
+    change_intelligence = ChangeIntelligenceTelemetry(
+        change_unit_count=run.change_unit_count,
+        change_kind_counts=tuple(sorted(change_kind_counts_raw.items())),
+        affected_surface_count=run.affected_surface_count,
+        expected_companion_count=run.expected_companion_count,
+        missing_companion_candidate_count=run.missing_companion_candidate_count,
+        change_map_rendered=run.change_map_rendered,
+        change_map_node_count=run.change_map_node_count,
+    )
+
     return ReviewTelemetrySnapshot(
         schema_version=TELEMETRY_SCHEMA_VERSION,
         review_run_id=run.id,
@@ -334,4 +346,5 @@ async def collect_review_telemetry(
         context=context_telemetry,
         feedback=feedback_telemetry,
         review_feedback=review_feedback_telemetry,
+        change_intelligence=change_intelligence,
     )

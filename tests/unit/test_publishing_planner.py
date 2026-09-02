@@ -77,6 +77,8 @@ def _build(
     mode: ReviewPublicationMode = ReviewPublicationMode.DRY_RUN,
     current_head_sha: str = _HEAD_SHA,
     publication_id: uuid.UUID | None = None,
+    change_story: str | None = None,
+    change_map_text: str | None = None,
 ) -> ReviewPublicationPlan:
     changed_files, diff_files = _whole_file_changed_files()
     planner = PublicationPlanner()
@@ -89,6 +91,8 @@ def _build(
         config=config or PublicationConfig(min_severity=Severity.INFO),
         mode=mode,
         current_head_sha=current_head_sha,
+        change_story=change_story,
+        change_map_text=change_map_text,
     )
 
 
@@ -147,6 +151,31 @@ def test_all_findings_already_reported_never_posts_a_clean_summary_even_when_ena
     )
     assert plan.status is ReviewPublicationStatus.SKIPPED_NO_FINDINGS
     assert plan.summary_body == ""
+
+
+def test_change_story_and_change_map_appear_in_summary_body_when_provided() -> None:
+    plan = _build(
+        [_finding()],
+        change_story="This change introduces a retry policy.",
+        change_map_text="**Change map** ...",
+    )
+    assert plan.is_publishable
+    assert "This change introduces a retry policy." in plan.summary_body
+    assert "Change map" in plan.summary_body
+
+
+def test_change_story_never_appears_on_clean_summary_path() -> None:
+    """Change Intelligence text is passed through by the caller only for
+    the genuine-findings path; even if a caller mistakenly supplied it
+    alongside post_clean_summary, the clean-review body (spec section
+    16: "do NOT automatically emit a full Change Map... unless normal
+    summary policy explicitly supports it") is a fixed, separate
+    template that never reads these parameters at all."""
+
+    config = PublicationConfig(min_severity=Severity.INFO, post_clean_summary=True)
+    plan = _build([], config=config, change_story="should never appear", change_map_text="should never appear either")
+    assert plan.status is ReviewPublicationStatus.DRY_RUN
+    assert "should never appear" not in plan.summary_body
 
 
 def test_stale_head_never_produces_comments() -> None:

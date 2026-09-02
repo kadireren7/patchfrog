@@ -34,6 +34,10 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patchfrog.analysis.queries import AnalysisQueryService
+from patchfrog.change_intelligence.domain import ChangeIntelligenceReport
+from patchfrog.change_intelligence.evidence import evidence_text_for_candidate
+from patchfrog.change_intelligence.service import build_change_intelligence_report
+from patchfrog.change_intelligence.telemetry import summarize_for_persistence
 from patchfrog.context.config import AdaptiveContextConfig, ContextConfig
 from patchfrog.context.domain import ContextTargetType
 from patchfrog.context.service import ContextService
@@ -499,6 +503,16 @@ class PullRequestReviewService:
                 max_candidates=config.max_candidates,
             )
 
+            # Change Intelligence Foundation (patchfrog.change_intelligence):
+            # computed once per run, on the full pre-narrowing candidate set
+            # (the same set Change Story/Change Map describe -- narrowing for
+            # Phase 7 incremental review below must not shrink what the PR is
+            # understood to *contain*, only what gets re-reviewed). Purely
+            # deterministic, zero provider calls -- see the package docstring.
+            change_intelligence_report = await build_change_intelligence_report(
+                session, candidates=list(candidates)
+            )
+
         if candidate_filter is not None:
             # Phase 7 (patchfrog.review_memory) narrowing candidates down
             # to only those genuinely changed since the previous review
@@ -541,6 +555,7 @@ class PullRequestReviewService:
                     log=log,
                     context_config_override=context_config_override,
                     orchestrator=orchestrator,
+                    change_intelligence_report=change_intelligence_report,
                 )
 
         await asyncio.gather(*(_process(o) for o in outcomes))
@@ -783,6 +798,7 @@ class PullRequestReviewService:
                 reviewer_latency_ms=reviewer_latency_ms_total,
                 calls_by_role=calls_by_role,
                 duration_ms=duration_ms,
+                change_intelligence=summarize_for_persistence(change_intelligence_report),
             )
             await session.commit()
 
@@ -837,6 +853,7 @@ class PullRequestReviewService:
         budget_state: dict[str, int],
         log: structlog.stdlib.BoundLogger,
         orchestrator: AgentOrchestrator,
+        change_intelligence_report: ChangeIntelligenceReport,
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
@@ -928,6 +945,7 @@ class PullRequestReviewService:
             static_findings=static_summaries,
             allowed_file_paths=allowed_file_paths,
             context_bundle_id=outcome.context_bundle_id,
+            change_intelligence_text=evidence_text_for_candidate(change_intelligence_report, candidate),
         )
 
         # Stage 2: finalize the effort decision now that the context

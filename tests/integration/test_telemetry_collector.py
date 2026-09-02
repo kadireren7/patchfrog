@@ -33,6 +33,7 @@ from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
+from patchfrog.change_intelligence.telemetry import ChangeIntelligenceSummary
 from patchfrog.context.domain import ContextTargetType
 from patchfrog.feedback.domain import (
     ActorIdentity,
@@ -319,6 +320,13 @@ async def _persist_scenario(session_factory: async_sessionmaker[AsyncSession]) -
                 ReviewEffortTier.LIGHT: 1, ReviewEffortTier.DEEP: 1,
             }, candidates_escalated=1, critic_calls=4, retries_consumed=2, reviewer_latency_ms=777.0,
             calls_by_role={AgentRole.CORRECTNESS: 3, AgentRole.SECURITY: 3}, duration_ms=250.0,
+            change_intelligence=ChangeIntelligenceSummary(
+                version=1, change_unit_count=2, change_kind_counts_json='{"behavior": 1, "contract": 1}',
+                affected_surface_count=5, expected_companion_count=3, missing_companion_candidate_count=1,
+                change_map_rendered=True, change_map_node_count=4,
+                change_story="This change introduces a retry policy.",
+                change_map_text="**Change map** ...",
+            ),
         )
 
         # Feedback: useful on the accepted finding, false-positive on the
@@ -660,6 +668,33 @@ async def test_historical_nullable_rows_are_supported(session_factory: async_ses
     # (simulating a pre-migration row) -- never fabricated back into a
     # real ValidationOutcome value.
     assert rejected_entry.validation_outcome is None
+
+
+async def test_change_intelligence_counts_are_captured(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    scenario = await _persist_scenario(session_factory)
+    async with session_factory() as session:
+        snapshot = await collect_review_telemetry(session, review_run_id=scenario.review_run_id)
+    assert snapshot is not None
+    ci = snapshot.change_intelligence
+    assert ci.change_unit_count == 2
+    assert ci.change_kind_counts == (("behavior", 1), ("contract", 1))
+    assert ci.affected_surface_count == 5
+    assert ci.expected_companion_count == 3
+    assert ci.missing_companion_candidate_count == 1
+    assert ci.change_map_rendered is True
+    assert ci.change_map_node_count == 4
+
+
+def test_change_intelligence_telemetry_never_carries_story_or_map_prose() -> None:
+    """Spec section 20: counts only -- Change Story/Change Map text are
+    persisted separately (on ``review_runs``, for publication) but never
+    duplicated into the telemetry surface."""
+
+    from patchfrog.telemetry.domain import ChangeIntelligenceTelemetry
+
+    field_names = set(ChangeIntelligenceTelemetry.__dataclass_fields__)
+    assert "change_story" not in field_names
+    assert "change_map_text" not in field_names
 
 
 async def test_json_export_contains_no_secret_or_content_sentinel(
