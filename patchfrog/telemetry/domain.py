@@ -64,7 +64,16 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 #: Bumped whenever the JSON export shape changes materially -- consumers
 #: (CI, future dashboards, ad-hoc scripts) key off this, never off
 #: parsing prose. See :mod:`patchfrog.telemetry.reporting`.
-TELEMETRY_SCHEMA_VERSION = 1
+#:
+#: Bumped 1 -> 2 for Change Intelligence Foundation: ``ReviewTelemetrySnapshot``
+#: gained the ``change_intelligence`` field
+#: (:class:`ChangeIntelligenceTelemetry`), and :func:`patchfrog.telemetry.reporting.snapshot_to_dict`
+#: exports every dataclass field via ``dataclasses.asdict`` -- so this is a
+#: real exported-JSON-shape change, not an internal-only addition, even
+#: though it's purely additive (no field removed/reinterpreted) and every
+#: historical row exports it with explicit zero/default values (see
+#: :func:`patchfrog.telemetry.collector.collect_review_telemetry`).
+TELEMETRY_SCHEMA_VERSION = 2
 
 
 class FindingLifecycleOutcome(StrEnum):

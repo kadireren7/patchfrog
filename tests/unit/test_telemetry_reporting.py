@@ -73,7 +73,27 @@ def test_no_telemetry_dataclass_carries_a_forbidden_content_field() -> None:
 
 def test_json_export_contains_schema_version() -> None:
     payload = snapshot_to_dict(_snapshot())
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == TELEMETRY_SCHEMA_VERSION == 2
+
+
+def test_json_export_shape_explicitly_contains_change_intelligence_object() -> None:
+    """Case C (telemetry schema version bugfix follow-up): proves, via
+    the actual ``dataclasses.asdict`` export path (not just the
+    in-memory dataclass), that ``change_intelligence`` is a real key in
+    the exported JSON shape -- this is exactly the fact that made
+    ``TELEMETRY_SCHEMA_VERSION`` 1 -> 2 mandatory rather than optional."""
+
+    payload = snapshot_to_dict(_snapshot())
+    assert "change_intelligence" in payload
+    assert payload["change_intelligence"] == {
+        "change_unit_count": 0,
+        "change_kind_counts": [],
+        "affected_surface_count": 0,
+        "expected_companion_count": 0,
+        "missing_companion_candidate_count": 0,
+        "change_map_rendered": False,
+        "change_map_node_count": 0,
+    }
 
 
 def test_json_export_uses_plain_strings_not_python_reprs() -> None:

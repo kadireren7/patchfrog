@@ -76,7 +76,7 @@ from patchfrog.telemetry.aggregation import (
     compute_tier_funnel,
 )
 from patchfrog.telemetry.collector import collect_review_telemetry
-from patchfrog.telemetry.domain import FindingLifecycleOutcome
+from patchfrog.telemetry.domain import TELEMETRY_SCHEMA_VERSION, FindingLifecycleOutcome
 from patchfrog.telemetry.reporting import snapshot_to_dict
 from tests.support.publishing import scripted_findings_response, setup_reviewed_pull_request
 
@@ -671,10 +671,16 @@ async def test_historical_nullable_rows_are_supported(session_factory: async_ses
 
 
 async def test_change_intelligence_counts_are_captured(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """Case A (telemetry schema version bugfix follow-up): a real
+    Milestone J run exports ``schema_version == 2`` and the
+    ``change_intelligence`` field with correct counts, both on the
+    dataclass and through the actual JSON export path."""
+
     scenario = await _persist_scenario(session_factory)
     async with session_factory() as session:
         snapshot = await collect_review_telemetry(session, review_run_id=scenario.review_run_id)
     assert snapshot is not None
+    assert snapshot.schema_version == TELEMETRY_SCHEMA_VERSION == 2
     ci = snapshot.change_intelligence
     assert ci.change_unit_count == 2
     assert ci.change_kind_counts == (("behavior", 1), ("contract", 1))
@@ -683,6 +689,90 @@ async def test_change_intelligence_counts_are_captured(session_factory: async_se
     assert ci.missing_companion_candidate_count == 1
     assert ci.change_map_rendered is True
     assert ci.change_map_node_count == 4
+
+    payload = snapshot_to_dict(snapshot)
+    assert payload["schema_version"] == 2
+    assert payload["change_intelligence"] == {
+        "change_unit_count": 2,
+        "change_kind_counts": [["behavior", 1], ["contract", 1]],
+        "affected_surface_count": 5,
+        "expected_companion_count": 3,
+        "missing_companion_candidate_count": 1,
+        "change_map_rendered": True,
+        "change_map_node_count": 4,
+    }
+
+
+async def test_historical_row_without_change_intelligence_exports_defaults_under_schema_2(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Case B: a run persisted the way every pre-Milestone-J run was
+    (``mark_succeeded`` called with no ``change_intelligence`` argument
+    at all -- exactly what every historical row in production looks
+    like) still exports cleanly under the new ``schema_version == 2``,
+    with the ``change_intelligence`` object present and every field at
+    its explicit zero/default value. Never a fabricated Change Story or
+    Change Map for a run that never computed one."""
+
+    async with session_factory() as session:
+        repo_row = await RepositoryRepository().upsert(
+            session, github_repository_id=uuid.uuid4().int & 0x7FFFFFFFFFFFFFFF, owner="t",
+            name="telemetry-historical", full_name="t/telemetry-historical", installation_id=0,
+        )
+        index_row = RepositoryIndexModel(
+            repository_id=repo_row.id, commit_sha="b" * 40, index_version=1, status=IndexStatus.SUCCEEDED,
+            is_active=True, started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
+        )
+        session.add(index_row)
+        await session.flush()
+
+        run_model, _ = await ReviewRunRepository().get_or_create_running(
+            session, repository_id=repo_row.id, repository_index_id=index_row.id, commit_sha="b" * 40,
+            config_fingerprint="cfg-historical", model_fingerprint="model-historical",
+            reviewer_provider="fake", reviewer_model="fake-1", critic_provider="fake", critic_model="fake-critic",
+        )
+        review_run_id = run_model.id
+
+        # No `change_intelligence=` kwarg -- exactly the historical-row shape.
+        await ReviewRunRepository().mark_succeeded(
+            session, run_id=review_run_id, status=ReviewRunStatus.SUCCEEDED, candidate_count=0,
+            candidates_reviewed=0, candidates_failed=0, candidates_skipped_budget=0, proposals_count=0,
+            accepted_count=0, rejected_count=0, suppressed_duplicate_count=0,
+            reviewer_input_tokens=0, reviewer_output_tokens=0, critic_input_tokens=0, critic_output_tokens=0,
+            duration_ms=10.0,
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        snapshot = await collect_review_telemetry(session, review_run_id=review_run_id)
+    assert snapshot is not None
+    assert snapshot.schema_version == 2
+    ci = snapshot.change_intelligence
+    assert ci.change_unit_count == 0
+    assert ci.change_kind_counts == ()
+    assert ci.affected_surface_count == 0
+    assert ci.expected_companion_count == 0
+    assert ci.missing_companion_candidate_count == 0
+    assert ci.change_map_rendered is False
+    assert ci.change_map_node_count == 0
+
+    payload = snapshot_to_dict(snapshot)
+    assert payload["schema_version"] == 2
+    assert "change_intelligence" in payload
+    assert payload["change_intelligence"] == {
+        "change_unit_count": 0,
+        "change_kind_counts": [],
+        "affected_surface_count": 0,
+        "expected_companion_count": 0,
+        "missing_companion_candidate_count": 0,
+        "change_map_rendered": False,
+        "change_map_node_count": 0,
+    }
+    # Never a fabricated Change Story/Change Map for a historical run --
+    # those fields don't even exist on ChangeIntelligenceTelemetry (see
+    # test_change_intelligence_telemetry_never_carries_story_or_map_prose).
+    assert "change_story" not in payload["change_intelligence"]
+    assert "change_map_text" not in payload["change_intelligence"]
 
 
 def test_change_intelligence_telemetry_never_carries_story_or_map_prose() -> None:
@@ -710,7 +800,7 @@ async def test_json_export_contains_no_secret_or_content_sentinel(
     assert _CONTEXT_SECRET_SENTINEL not in dumped
     assert "reasoning" not in dumped.lower()  # no reasoning_summary field anywhere
     assert "quoted_text" not in dumped
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == TELEMETRY_SCHEMA_VERSION == 2
 
 
 async def test_collector_query_count_does_not_scale_linearly_with_proposal_count(

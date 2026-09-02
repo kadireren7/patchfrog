@@ -258,3 +258,76 @@ All run against the real changes on this branch, 2026-09-02:
 Provider calls added by this milestone: **0** (structurally proven,
 `test_change_intelligence_never_calls_a_provider`). No Gemini call, no
 Anthropic call, no Cloud/dashboard work.
+
+## 5. Correction round (post-review, before READY)
+
+An external review of PR #42 (head `7b5c53b`) flagged that leaving
+`TELEMETRY_SCHEMA_VERSION` unchanged was inconsistent with the project's
+own schema-versioning rule, since `ReviewTelemetrySnapshot` gained a new
+exported field. Verified directly against the real export path
+(`patchfrog.telemetry.reporting.snapshot_to_dict` calls
+`dataclasses.asdict(snapshot)`, and `change_intelligence` is a real
+dataclass field on `ReviewTelemetrySnapshot`) -- the field genuinely
+appears in exported JSON, so the bump is mandatory, not optional.
+
+**Fix**: `TELEMETRY_SCHEMA_VERSION` 1 -> 2
+(`patchfrog/telemetry/domain.py`), with the reasoning recorded directly
+in the constant's docstring. The original "no bump needed, same
+precedent as `review_feedback`" reasoning in `docs/change-intelligence.md`
+was itself checked against git history and found to be wrong -- there
+was no real precedent: `review_feedback` was introduced in the *same*
+commit (`2ea2ad4`) that introduced `TELEMETRY_SCHEMA_VERSION = 1`
+itself, so no prior "additive field shipped without a bump" case ever
+actually existed to be a precedent. Docs corrected accordingly.
+
+**Historical compatibility**: proven, not just asserted --
+`tests/integration/test_telemetry_collector.py::test_historical_row_without_change_intelligence_exports_defaults_under_schema_2`
+persists a run via `ReviewRunRepository.mark_succeeded` with no
+`change_intelligence` argument at all (the exact shape of every
+pre-Milestone-J row), then asserts the exported JSON has
+`schema_version == 2` and a `change_intelligence` object with every
+field at its explicit zero/empty/`False` default -- never a fabricated
+Change Story or Change Map.
+
+**New/updated tests for cases A-D** (telemetry schema version tests,
+requested explicitly):
+- A (new Milestone J run, correct counts, real JSON export):
+  `test_change_intelligence_counts_are_captured` (extended)
+- B (historical/default row, schema 2, zero defaults, no fabricated text):
+  `test_historical_row_without_change_intelligence_exports_defaults_under_schema_2` (new)
+- C (serialization shape explicitly contains `change_intelligence`):
+  `test_json_export_shape_explicitly_contains_change_intelligence_object` (new, `tests/unit/test_telemetry_reporting.py`)
+- D (no raw source/context/prompt/evidence body added through this
+  field): already structurally proven for *every* telemetry dataclass,
+  `ChangeIntelligenceTelemetry` included, by the pre-existing
+  `test_no_telemetry_dataclass_carries_a_forbidden_content_field` (it
+  iterates every dataclass in the module dynamically, so it already
+  covered the new dataclass with no changes needed) -- cross-checked
+  live by `test_json_export_contains_no_secret_or_content_sentinel`. 2
+  new tests added, 3 existing tests extended/re-pinned (`test_schema_version_is_2`
+  in `tests/unit/test_telemetry_domain.py`, `test_json_export_contains_schema_version`
+  in `tests/unit/test_telemetry_reporting.py`, the secret-sentinel test above).
+
+**Persisted-text audit (`review_runs.change_story`/`change_map_text`)**:
+audited, kept, not redesigned. `patchfrog.publishing.service.ReviewPublicationService`
+reads `run.change_story`/`run.change_map_text` directly off the
+persisted `ReviewRunModel` row (`patchfrog/publishing/service.py`).
+Publication (`apps/worker/tasks/publish_review.py`, Celery task
+`patchfrog.publish_review_task`) is a genuinely separate, independently-
+retriable Celery task from review generation (`patchfrog.review_pull_request_task`)
+-- this has been the architecture since Phase 6, specifically so
+publish retries never re-run review generation. Recomputing Change
+Story/Change Map at publish time would mean either re-deriving the full
+candidate list and Change Intelligence report from scratch (real
+recomputation cost on every publish attempt/retry) or accepting publish
+and review disagreeing about "what changed" if repository state moved
+between the two tasks -- persisting the already-computed, already-
+bounded text is the correct choice, the same pattern every other
+publication-relevant field on `review_runs` already uses (findings,
+severities, counts). Confirmed no raw source/diff/prompt/provider
+response is ever in these two fields: both are built purely from
+`ChangeUnit.title`/`ChangeKind` labels/symbol qualified names/file paths
+(see `patchfrog/change_intelligence/change_story.py`,
+`patchfrog/change_intelligence/change_map.py`) -- never diff text,
+never file content, never an LLM response (this package makes zero
+provider calls at all). No new privacy exposure; nothing changed here.

@@ -395,12 +395,24 @@ patchfrog telemetry review <run-id> --format json       # full JSON to stdout
 patchfrog telemetry review <run-id> --output snapshot.json  # also write JSON to a file
 ```
 
-`TELEMETRY_SCHEMA_VERSION = 1` is included in every export
+`TELEMETRY_SCHEMA_VERSION` is included in every export
 (`patchfrog.telemetry.reporting.snapshot_to_dict`). Every `StrEnum`
 member serializes as its plain string value (never a Python repr);
 every `UUID` serializes as its string form. `patchfrog.telemetry.reporting.write_json`/
 `read_json` mirror `patchfrog.evaluation.reporting`'s exact file-artifact
 pattern (sorted keys, trailing newline).
+
+Bumped 1 -> 2 for Change Intelligence Foundation (`docs/change-intelligence.md`):
+`ReviewTelemetrySnapshot` gained the `change_intelligence` field
+(`ChangeIntelligenceTelemetry` -- counts only, never Change Story/Change
+Map prose), and `snapshot_to_dict` exports every dataclass field via
+`dataclasses.asdict`, so this is a real exported-JSON-shape change even
+though it's purely additive. Historical rows (persisted before this
+milestone, or any run whose `mark_succeeded` call predates passing
+`change_intelligence`) export `change_intelligence` with explicit
+zero/default values -- never a fabricated Change Story or count. See
+`tests/unit/test_telemetry_reporting.py::test_json_export_shape_explicitly_contains_change_intelligence_object`
+and `tests/integration/test_telemetry_collector.py::test_historical_row_without_change_intelligence_exports_defaults_under_schema_2`.
 
 ## Persistence strategy
 

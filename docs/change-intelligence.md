@@ -211,9 +211,22 @@ Change Story/Change Map text) persisted onto new nullable-default
 `review_runs` columns (migration `0018_change_intelligence`). The
 telemetry snapshot (`patchfrog.telemetry.domain.ChangeIntelligenceTelemetry`)
 carries only counts -- never Change Story/Change Map prose, which stays
-a publication-only concern. `TELEMETRY_SCHEMA_VERSION` was **not**
-bumped: this is a purely additive field, the same precedent already
-established for `review_feedback`.
+a publication-only concern.
+
+`TELEMETRY_SCHEMA_VERSION` **was** bumped, 1 -> 2. Initial correction:
+this doc originally reasoned by analogy to `review_feedback` ("purely
+additive, no bump needed"), but that analogy doesn't actually hold --
+`review_feedback` was introduced in the same commit that introduced
+`TELEMETRY_SCHEMA_VERSION = 1` itself (`patchfrog.telemetry.reporting.snapshot_to_dict`
+exports every `ReviewTelemetrySnapshot` field via `dataclasses.asdict`),
+so there was never a real precedent of an additive field shipping
+*without* a bump to compare against. `change_intelligence` genuinely
+changes the exported JSON shape (a new top-level key), which is exactly
+what the version docstring in `patchfrog.telemetry.domain` says the
+version tracks -- so it's bumped like any other shape change. Historical
+rows (persisted before this milestone) export `change_intelligence`
+with explicit zero/default values, never a fabricated Change Story or
+Change Map -- see `tests/integration/test_telemetry_collector.py::test_historical_row_without_change_intelligence_exports_defaults_under_schema_2`.
 
 `CHANGE_INTELLIGENCE_VERSION = 1` is introduced as this package's own
 semantic-identity version, separate from the review versions above --
