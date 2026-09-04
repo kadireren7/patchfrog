@@ -16,6 +16,7 @@ from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import ReviewRunStatus
 from patchfrog.review.effort_types import ReviewEffortTier
 from patchfrog.review_memory.config import NO_MEMORY_CONTEXT_FINGERPRINT
+from patchfrog.test_intelligence.telemetry import TestIntelligenceSummary
 
 
 class ReviewRunRepository:
@@ -211,6 +212,7 @@ class ReviewRunRepository:
         change_intelligence: ChangeIntelligenceSummary | None = None,
         contract_intelligence: ContractIntelligenceSummary | None = None,
         intent_verification: IntentVerificationSummary | None = None,
+        test_intelligence: TestIntelligenceSummary | None = None,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -295,6 +297,12 @@ class ReviewRunRepository:
             model.intent_gap_candidate_count = intent_verification.intent_gap_candidate_count
             model.intent_coverage_summary_rendered = intent_verification.intent_coverage_summary_rendered
             model.intent_coverage_summary_text = intent_verification.intent_coverage_summary_text
+        if test_intelligence is not None:
+            model.test_expectation_count = test_intelligence.test_expectation_count
+            model.test_reason_code_counts = test_intelligence.test_reason_code_counts_json
+            model.test_gap_candidate_count = test_intelligence.test_gap_candidate_count
+            model.test_coverage_summary_rendered = test_intelligence.test_coverage_summary_rendered
+            model.test_coverage_summary_text = test_intelligence.test_coverage_summary_text
         model.completed_at = datetime.now(UTC)
         await session.flush()
         return model

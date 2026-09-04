@@ -92,6 +92,7 @@ class PublicationPlanner:
         change_story: str | None = None,
         change_map_text: str | None = None,
         intent_coverage_summary: str | None = None,
+        test_coverage_summary: str | None = None,
     ) -> ReviewPublicationPlan:
         """``already_reported_finding_ids`` (Phase 7,
         :mod:`patchfrog.review_memory`) -- findings already known to be the
@@ -112,7 +113,9 @@ class PublicationPlanner:
         They only ever appear on the genuine-findings summary path,
         never the clean-review path -- see that function's own
         docstring. ``intent_coverage_summary`` (Intent Verification
-        Foundation) is the same kind of pass-through text."""
+        Foundation) is the same kind of pass-through text.
+        ``test_coverage_summary`` (Test Intelligence Foundation) is the
+        same kind of pass-through text."""
 
         if current_head_sha != snapshot.head_sha:
             return ReviewPublicationPlan(
@@ -278,6 +281,7 @@ class PublicationPlanner:
             change_story=change_story,
             change_map_text=change_map_text,
             intent_coverage_summary=intent_coverage_summary,
+            test_coverage_summary=test_coverage_summary,
         )
 
         return ReviewPublicationPlan(

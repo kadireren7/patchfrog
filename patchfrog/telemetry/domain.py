@@ -87,7 +87,14 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 #: ``intent_verification`` field (:class:`IntentVerificationTelemetry`),
 #: a real additional key in the exported JSON. Historical rows export it
 #: with explicit zero/default values.
-TELEMETRY_SCHEMA_VERSION = 4
+#:
+#: Bumped 4 -> 5 for Test Intelligence Foundation: the same reasoning a
+#: fourth time -- ``ReviewTelemetrySnapshot`` gained the
+#: ``test_intelligence`` field (:class:`TestIntelligenceTelemetry`), a
+#: real additional key in the exported JSON. Bumped proactively (applying
+#: the Milestone J correction / Milestone K/L precedent), not left for a
+#: later correction round.
+TELEMETRY_SCHEMA_VERSION = 5
 
 
 class FindingLifecycleOutcome(StrEnum):
@@ -391,6 +398,23 @@ class IntentVerificationTelemetry:
 
 
 @dataclass(frozen=True, slots=True)
+class TestIntelligenceTelemetry:
+    """Bounded, privacy-safe counts from
+    :mod:`patchfrog.test_intelligence` for one review run. Deliberately
+    counts only -- no evidence text, no Test Story/Test Coverage prose
+    (the latter is persisted separately on ``review_runs`` for
+    publication, exactly like ``intent_coverage_summary_text`` -- never
+    duplicated here)."""
+
+    test_expectation_count: int
+    #: ``(reason_code_value, count)`` pairs, sorted -- mirrors
+    #: ``ChangeIntelligenceTelemetry.change_kind_counts`` exactly.
+    test_reason_code_counts: tuple[tuple[str, int], ...]
+    test_gap_candidate_count: int
+    test_coverage_summary_rendered: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewTelemetrySnapshot:
     """The complete, deterministic telemetry snapshot for one review run
     -- what :func:`patchfrog.telemetry.collector.collect_review_telemetry`
@@ -463,6 +487,17 @@ class ReviewTelemetrySnapshot:
             mapped_intent_claim_count=0,
             intent_gap_candidate_count=0,
             intent_coverage_summary_rendered=False,
+        )
+    )
+    #: All-zero/empty for a run that predates Test Intelligence
+    #: Foundation -- same nullable-safe-default convention as
+    #: ``intent_verification`` above. See :class:`TestIntelligenceTelemetry`.
+    test_intelligence: TestIntelligenceTelemetry = field(
+        default_factory=lambda: TestIntelligenceTelemetry(
+            test_expectation_count=0,
+            test_reason_code_counts=(),
+            test_gap_candidate_count=0,
+            test_coverage_summary_rendered=False,
         )
     )
 

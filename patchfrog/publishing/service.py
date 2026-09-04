@@ -227,6 +227,9 @@ class ReviewPublicationService:
             intent_coverage_summary=(
                 run.intent_coverage_summary_text if run.intent_coverage_summary_rendered else None
             ),
+            test_coverage_summary=(
+                run.test_coverage_summary_text if run.test_coverage_summary_rendered else None
+            ),
         )
 
         await self._persist_plan_comments(publication_id, plan)

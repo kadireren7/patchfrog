@@ -230,6 +230,23 @@ class ReviewRunModel(Base):
     intent_coverage_summary_rendered: Mapped[bool] = mapped_column(Boolean, default=False)
     intent_coverage_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    #: Test Intelligence Foundation (:mod:`patchfrog.test_intelligence`)
+    #: run-level summary -- the bounded output of
+    #: :func:`patchfrog.test_intelligence.telemetry.summarize_for_persistence`.
+    #: No separate test-story text column: the Test Story prefix is
+    #: folded into ``change_story`` above, exactly like the Intent Story
+    #: prefix. ``test_coverage_summary_text`` IS a new, dedicated column
+    #: -- the conditional Test Coverage block (mirrors the Intent
+    #: Coverage block) is its own separate publication section, not a
+    #: re-render of an existing one. All default to 0/``"{}"``/
+    #: ``False``/``None`` -- nullable-safe for rows predating this
+    #: milestone.
+    test_expectation_count: Mapped[int] = mapped_column(Integer, default=0)
+    test_reason_code_counts: Mapped[str] = mapped_column(Text, default="{}")
+    test_gap_candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    test_coverage_summary_rendered: Mapped[bool] = mapped_column(Boolean, default=False)
+    test_coverage_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 
 class ReviewCandidateModel(Base):
     """One symbol- (or module-region-) centered candidate considered for
