@@ -43,13 +43,29 @@ MAX_CANDIDATES_CONSIDERED = 150
 
 class IntentSourceKind(StrEnum):
     """A small, intentionally non-exhaustive taxonomy (spec section 2).
-
     All five values are kept for forward extensibility/documentation,
-    but **this milestone's extraction logic only ever produces
-    `PR_TITLE`/`PR_BODY`/`TEST_CHANGE` evidence** -- see
-    ``validation/intent_verification/latest-summary.md`` section 1 for
-    exactly why `LINKED_ISSUE`/`COMMIT_MESSAGE` are deferred rather than
-    faked (no existing plumbing fetches either safely/cheaply today).
+    but **only `PR_TITLE`/`PR_BODY` are ever actually emitted as
+    `IntentEvidence` this milestone**:
+
+    - `PR_TITLE`/`PR_BODY` -- EXPLICIT, emitted by
+      :func:`patchfrog.intent_verification.extraction.extract_claims_from_pr_metadata`.
+    - `TEST_CHANGE` -- defined/reserved for a future milestone, **not
+      emitted this milestone**. The real "changed tests strengthen
+      coverage" signal this milestone actually provides is a different,
+      simpler mechanism: an already-existing `TEST_NOT_UPDATED`
+      :class:`~patchfrog.change_intelligence.domain.ExpectedCompanionChange`
+      (Change Intelligence's own test-relationship evidence) that
+      belongs to a claim's mapped `ChangeUnit` is referenced via
+      `IntentCoverage.relevant_companion_candidates` -- never a
+      `TEST_CHANGE`-kind `IntentEvidence` object, and never something
+      that independently creates a claim. Implementing a real,
+      standalone `TEST_CHANGE` evidence source (distinct bounded
+      per-test signal, not just a companion reference) is deferred
+      rather than half-built to satisfy the enum.
+    - `LINKED_ISSUE`/`COMMIT_MESSAGE` -- deferred, not emitted -- see
+      ``validation/intent_verification/latest-summary.md`` section 1
+      for exactly why (no existing plumbing fetches either safely/
+      cheaply today).
     """
 
     PR_TITLE = "pr_title"
@@ -61,10 +77,12 @@ class IntentSourceKind(StrEnum):
 
 class IntentStrength(StrEnum):
     """`EXPLICIT` sources (PR title/body) can independently establish an
-    :class:`IntentClaim`. `SUPPORTING` sources (test change) can only
-    ever strengthen or weaken an already-EXPLICIT claim's mapping --
-    they never independently create one (spec section 2's hard
-    requirement)."""
+    :class:`IntentClaim`. `SUPPORTING` is reserved for a future source
+    (see `IntentSourceKind.TEST_CHANGE`) that could strengthen/weaken an
+    already-EXPLICIT claim's mapping without ever independently creating
+    one (spec section 2's hard requirement) -- not actually assigned to
+    any `IntentEvidence` this milestone, since none is emitted at
+    `SUPPORTING` strength yet."""
 
     EXPLICIT = "explicit"
     SUPPORTING = "supporting"

@@ -22,9 +22,11 @@ from patchfrog.review.service import PullRequestReviewService
 from tests.support.git_repo import commit_all, init_git_repo
 
 _SERVICE = '''from repository import save
+from retry_worker import schedule_retry
 
 
 def process_payment(request):
+    schedule_retry(request)
     return save(request)
 '''
 
@@ -35,11 +37,8 @@ def handle_webhook(request):
     return process_payment(request)
 '''
 
-_RETRY_WORKER = '''from service import process_payment
-
-
-def run_retry(request):
-    return process_payment(request)
+_RETRY_WORKER = '''def schedule_retry(request):
+    return True
 '''
 
 _REPOSITORY = '''def save(request):
@@ -50,6 +49,13 @@ _REPOSITORY = '''def save(request):
 async def test_intent_verification_is_computed_and_persisted_through_review_local(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
+    """Uses a *callee* relationship deliberately (``process_payment``
+    calls ``schedule_retry``) -- see
+    ``test_intent_verification_corpus.py::test_case_one_real_affected_path_forgotten``
+    for why a caller relationship would be redundant with J's own
+    ``CALLER_NOT_UPDATED`` companion after the correction round's dedup
+    fix."""
+
     full_name = "test/iv-pipeline"
     root = tmp_path / "repo"
     root.mkdir()
@@ -62,8 +68,9 @@ async def test_intent_verification_is_computed_and_persisted_through_review_loca
 
     (root / "repository.py").write_text('def save(request):\n    return {"ok": True, "idempotent": True}\n')
     (root / "service.py").write_text(
-        'from repository import save\n\n\ndef process_payment(request):\n'
-        '    # idempotent now\n    return save(request)\n'
+        'from repository import save\nfrom retry_worker import schedule_retry\n\n\n'
+        'def process_payment(request):\n    if request.get("id") in _seen:\n        return None\n'
+        '    schedule_retry(request)\n    return save(request)\n\n\n_seen = set()\n'
     )
     head_sha = commit_all(root, "prevent duplicate retry payment processing")
 

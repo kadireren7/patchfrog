@@ -61,7 +61,29 @@ def derive_coverage_and_gaps(
             if candidate.qualified_name and candidate.qualified_name not in covered_surfaces:
                 covered_surfaces.append(candidate.qualified_name)
 
+        relevant_deltas.extend(d for d in contract_deltas if d.change_unit_id == unit.id)
+        unit_companions = [c for c in expected_companions if c.change_unit_id == unit.id]
+        relevant_companions.extend(unit_companions)
+
+        # Every node J/K already track via an ExpectedCompanionChange
+        # (regardless of OBSERVED/MISSING) is "owned" by that companion
+        # relationship -- never also re-flagged as a raw
+        # EXPECTED_SURFACE_UNCHANGED gap from the affected-surface loop
+        # below. Without this, a single real node (e.g. a K stale
+        # consumer that's *also* a J affected-surface caller edge, or a
+        # TEST-relation node J's own TEST_NOT_UPDATED companion already
+        # tracks by file path since TEST refs carry no qualified_name)
+        # could produce both a PotentialIntentGap *and* a companion
+        # reference for the exact same underlying surface -- precisely
+        # the duplicate-evidence risk spec section 14 warns against.
+        companion_owned_names = {c.expected_qualified_name for c in unit_companions}
+        companion_owned_paths = {c.expected_file_path for c in unit_companions}
+
         for ref in unit.affected_surface:
+            if ref.qualified_name is not None and ref.qualified_name in companion_owned_names:
+                continue
+            if ref.qualified_name is None and ref.file_path in companion_owned_paths:
+                continue
             ref_terms = meaningful_tokens(ref.qualified_name or "") | meaningful_tokens(ref.file_path)
             if not (ref_terms & claim_terms):
                 continue
@@ -78,9 +100,6 @@ def derive_coverage_and_gaps(
                     ),
                 )
             )
-
-        relevant_deltas.extend(d for d in contract_deltas if d.change_unit_id == unit.id)
-        relevant_companions.extend(c for c in expected_companions if c.change_unit_id == unit.id)
 
     has_missing_companion = any(c.status is CompanionStatus.MISSING for c in relevant_companions)
     if gaps or has_missing_companion:

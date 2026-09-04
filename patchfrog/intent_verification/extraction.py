@@ -116,6 +116,14 @@ _STOPWORDS = frozenset(
 
 _WORD_RE = re.compile(r"[a-z0-9']+")
 
+#: A deterministic, structural (never NLP) detector for an explicitly
+#: enumerated list of goals in a PR body -- a markdown bullet (``-``/``*``)
+#: or numbered (``1.``) line start. Splitting on this is "reliable
+#: deterministic extraction" in the sense spec section 7 requires before
+#: preserving more than one claim from a single source; prose without
+#: this structure is never split (see `_extract_enumerated_goals`).
+_BULLET_LINE_RE = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.+)$")
+
 
 def normalize_intent_text(text: str) -> str:
     """Whitespace-collapse, strip, and bound -- the *only* transformation
@@ -144,33 +152,63 @@ def is_intent_evidence_sufficient(text: str) -> bool:
     return len(content_words) >= threshold
 
 
+def _extract_enumerated_goals(body: str) -> list[str] | None:
+    """Deterministic, structure-only (never NLP) detection of an
+    explicitly enumerated list of goals in a PR body -- markdown bullet
+    or numbered lines, checked *before* whitespace-collapsing destroys
+    the line boundaries a bullet list depends on. Returns ``None`` (not
+    an empty list) whenever fewer than 2 bullet lines are found, so a
+    single stray ``- `` in otherwise-prose body text never triggers a
+    split."""
+
+    bullets = [m.group(1).strip() for line in body.splitlines() if (m := _BULLET_LINE_RE.match(line))]
+    return bullets if len(bullets) >= 2 else None
+
+
 def extract_claims_from_pr_metadata(*, title: str | None, body: str | None) -> tuple[IntentClaim, ...]:
-    """Explicit claims from PR title/body (spec sections 2/3/6/7).
+    """Explicit claims from PR title/body (spec sections 2/3/6/7), with a
+    single, deterministic, documented precedence rule for when both are
+    independently usable (spec section "title/body contradiction"):
+    **the PR body is authoritative whenever it is itself sufficient
+    evidence; the title is used only as a fallback when the body is
+    absent or insufficient.** This is a structural precedence policy,
+    never semantic contradiction detection (which would require
+    guessing) -- it also means title and body can never simultaneously
+    produce two separate, potentially-conflicting claims for the same
+    PR (spec section "multiple claims": "do not emit duplicate title+body
+    claims... unless there is a deterministic reason to preserve
+    separately enumerated goals").
 
-    Title and body are evaluated independently -- a sufficient title
-    always yields a claim even with a vague/empty body, and vice versa
-    (spec section 29 cases 12/13). Bounded to
-    :data:`~patchfrog.intent_verification.domain.MAX_INTENT_CLAIMS`,
-    though in practice only ever produces at most 2 (one per source)
-    -- the bound exists for forward-compatibility with a future,
-    still-deterministic multi-statement body split, not exercised by
-    this milestone's conservative single-claim-per-source extraction
-    (spec section 7: "Otherwise prefer one conservative combined
-    claim.")."""
+    The one deterministic reason to preserve more than one claim: the
+    body itself explicitly enumerates goals as a markdown bullet/numbered
+    list (see :func:`_extract_enumerated_goals`) -- each individually-
+    sufficient bullet becomes its own claim, bounded to
+    :data:`~patchfrog.intent_verification.domain.MAX_INTENT_CLAIMS`.
+    Prose without that explicit structure is never split (spec section
+    7: "Otherwise prefer one conservative combined claim.")."""
 
-    claims: list[IntentClaim] = []
+    title_normalized = normalize_intent_text(title) if title else ""
+    body_normalized = normalize_intent_text(body) if body else ""
+    body_sufficient = bool(body_normalized) and is_intent_evidence_sufficient(body_normalized)
+    title_sufficient = bool(title_normalized) and is_intent_evidence_sufficient(title_normalized)
 
-    if title:
-        normalized = normalize_intent_text(title)
-        if is_intent_evidence_sufficient(normalized):
-            claims.append(_build_claim(source_kind=IntentSourceKind.PR_TITLE, source_identifier="title", text=normalized))
+    if body_sufficient:
+        assert body is not None  # body_sufficient implies body_normalized is non-empty, so body is too
+        enumerated = _extract_enumerated_goals(body)
+        if enumerated is not None:
+            goal_claims = [
+                _build_claim(source_kind=IntentSourceKind.PR_BODY, source_identifier=f"body[{i}]", text=normalized)
+                for i, goal in enumerate(enumerated)
+                if is_intent_evidence_sufficient(normalized := normalize_intent_text(goal))
+            ]
+            if len(goal_claims) >= 2:
+                return tuple(goal_claims[:MAX_INTENT_CLAIMS])
+        return (_build_claim(source_kind=IntentSourceKind.PR_BODY, source_identifier="body", text=body_normalized),)
 
-    if body:
-        normalized = normalize_intent_text(body)
-        if is_intent_evidence_sufficient(normalized):
-            claims.append(_build_claim(source_kind=IntentSourceKind.PR_BODY, source_identifier="body", text=normalized))
+    if title_sufficient:
+        return (_build_claim(source_kind=IntentSourceKind.PR_TITLE, source_identifier="title", text=title_normalized),)
 
-    return tuple(claims[:MAX_INTENT_CLAIMS])
+    return ()
 
 
 def _build_claim(*, source_kind: IntentSourceKind, source_identifier: str, text: str) -> IntentClaim:

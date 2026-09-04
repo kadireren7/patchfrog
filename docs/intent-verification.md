@@ -27,16 +27,30 @@ can never independently create a claim.
 
 ## Supported intent sources
 
-- **PR title** -- EXPLICIT. Already fetched live for every real review
-  (the same `PullRequestMetadata` fetch Milestone K already used for
-  `base_sha`); no new GitHub call.
-- **PR body** -- EXPLICIT. Same fetch, same free reuse. Never persisted
-  durably elsewhere in this codebase before this milestone (`PullRequestModel`
+**Explicit sources (can independently establish an `IntentClaim`):**
+
+- **PR title** -- Already fetched live for every real review (the same
+  `PullRequestMetadata` fetch Milestone K already used for `base_sha`);
+  no new GitHub call.
+- **PR body** -- Same fetch, same free reuse. Never persisted durably
+  elsewhere in this codebase before this milestone (`PullRequestModel`
   has no `body` column) -- Intent Verification reads it live, at review
   time, exactly once per run.
-- **Changed tests** -- SUPPORTING. Reuses Change Intelligence's own
-  test-relationship evidence (`IndexedFileModel.is_test`,
-  `likely_tests_for_file`) -- zero new plumbing.
+
+**Supporting repository evidence (never independently creates a claim):**
+
+- **Test surfaces from Change Intelligence** -- not a distinct
+  `IntentEvidence` object. When an already-existing `TEST_NOT_UPDATED`
+  `ExpectedCompanionChange` (Change Intelligence's own test-relationship
+  evidence, via `IndexedFileModel.is_test`/`likely_tests_for_file`)
+  belongs to a claim's mapped `ChangeUnit`, it's referenced through
+  `IntentCoverage.relevant_companion_candidates` -- the same dedup
+  mechanism used for every other J/K companion (see "Reuse, not
+  duplication" below). `IntentSourceKind.TEST_CHANGE` is defined on the
+  enum for a future, more direct per-test signal but is **not emitted**
+  by this milestone's extraction path -- see
+  `patchfrog.intent_verification.domain.IntentSourceKind`'s own
+  docstring for the precise distinction.
 
 ### Deferred (and why)
 
@@ -51,8 +65,30 @@ can never independently create a claim.
 
 `IntentSourceKind` keeps all five values from the milestone brief for
 forward documentation, but this milestone's extraction logic only ever
-produces `PR_TITLE`/`PR_BODY`/`TEST_CHANGE` evidence. Full reasoning:
+emits `PR_TITLE`/`PR_BODY` `IntentEvidence`. Full reasoning:
 `validation/intent_verification/latest-summary.md` section 1.
+
+## Title/body precedence (never semantic contradiction detection)
+
+When both title and body are independently sufficient, **the PR body is
+authoritative** -- title is used only as a fallback when the body is
+absent or insufficient. This is a deliberate, deterministic structural
+policy (spec's own suggested Option B), not an attempt at semantic
+contradiction detection (which would require guessing whether two
+statements actually disagree). One consequence: title and body never
+simultaneously produce two separate, potentially-conflicting claims for
+the same PR -- see
+`test_extract_claims_body_precedence_resolves_disagreement` for a direct
+regression proof.
+
+The one deterministic exception that legitimately preserves more than
+one claim from a single source: the body explicitly enumerates goals as
+a markdown bullet/numbered list (checked structurally, before whitespace
+collapsing destroys the line boundaries a list depends on -- never NLP
+sentence splitting). Each individually-sufficient bullet becomes its own
+claim, bounded to `MAX_INTENT_CLAIMS = 3`; an insufficient bullet is
+dropped, never forced into a claim. Prose without that explicit
+structure is always treated as one conservative combined claim.
 
 ## The sufficiency gate
 
@@ -80,8 +116,9 @@ is usable even with an empty/vague body, and vice versa.
 summary**. `id` is `sha256(source_kind + normalized_statement)[:16]` --
 deterministic, so re-running the same review (or a Phase 7 incremental
 re-review) always produces the same claim id. Bounded to
-`MAX_INTENT_CLAIMS = 3`; in practice this milestone's conservative
-one-claim-per-source extraction produces at most 2.
+`MAX_INTENT_CLAIMS = 3`; in practice this is exactly 1 claim (body-or-
+title, per the precedence rule above) unless the body explicitly
+enumerates goals as a bullet/numbered list, in which case up to 3.
 
 ## Reuse, not duplication
 
@@ -130,13 +167,33 @@ Nothing here re-derives what changed or what it affects:
 
 Constructed only when a real `AffectedSymbolRef` (already computed by
 J, `DIRECTLY_DEPENDENT`/`INDIRECTLY_AFFECTED`) shares a meaningful
-lexical token with the claim and was not itself part of the diff.
-Reason code is always `EXPECTED_SURFACE_UNCHANGED`. The full spec
-section 11 taxonomy (`RELATED_PATH_UNCHANGED`, `CONTRACT_CONSUMER_STALE`,
-`EXPECTED_TEST_SURFACE_MISSING`) is kept on `IntentGapReasonCode` for
-documentation, but the latter three describe cases already covered by
-an existing J/K `ExpectedCompanionChange` (see Reuse section above) --
-**never auto-published**, exactly like every other J/K candidate.
+lexical token with the claim, was not itself part of the diff, **and is
+not already owned by an existing `ExpectedCompanionChange`** for the
+same unit (matched by `qualified_name` for symbol-level nodes, or by
+`file_path` for `TEST`-relation nodes, which carry no `qualified_name`
+at all). Reason code is always `EXPECTED_SURFACE_UNCHANGED`. The full
+spec section 11 taxonomy (`RELATED_PATH_UNCHANGED`,
+`CONTRACT_CONSUMER_STALE`, `EXPECTED_TEST_SURFACE_MISSING`) is kept on
+`IntentGapReasonCode` for documentation, but the latter three describe
+cases already covered by an existing J/K `ExpectedCompanionChange` (see
+Reuse section above) -- **never auto-published**, exactly like every
+other J/K candidate.
+
+**A consequence worth being explicit about**: J's own `CALLER_NOT_UPDATED`
+companion heuristic already tracks *every* real caller of *any* changed
+symbol, unconditionally -- so a `DIRECTLY_DEPENDENT` affected-surface
+node reached via a caller edge is, in practice, always already
+companion-owned, and never produces a `PotentialIntentGap`. The gap
+mechanism's genuinely novel contribution is therefore two-fold: (1) a
+*callee*-direction `DIRECTLY_DEPENDENT` node (something the changed
+symbol itself calls) -- J's companions only look at callers, never
+callees, so this is real, uncovered evidence; and (2) an
+`INDIRECTLY_AFFECTED` (2-hop) node, which J's own companion heuristic
+never reaches at all (it only inspects depth-1 callers of the exact
+changed symbol). Both are proven directly in the corpus
+(`test_case_one_real_affected_path_forgotten` uses a callee edge
+specifically, with a comment explaining why a caller edge would have
+been a redundant test).
 
 ## Intent contradiction (deferred)
 
