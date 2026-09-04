@@ -222,6 +222,8 @@ async def _review_pull_request(
             candidate_filter=prepared.candidate_filter,
             incremental_context_fingerprint=prepared.incremental_context_fingerprint,
             base_sha=current_metadata.base_sha,
+            title=current_metadata.title,
+            body=current_metadata.body,
         )
 
         if prepared.memory_tracking_active and pull_request_id is not None:

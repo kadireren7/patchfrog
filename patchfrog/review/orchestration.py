@@ -288,6 +288,7 @@ class AgentOrchestrator:
                 static_findings=evidence.static_findings,
                 change_intelligence_text=evidence.change_intelligence_text,
                 contract_intelligence_text=evidence.contract_intelligence_text,
+                intent_verification_text=evidence.intent_verification_text,
             )
             for role in selected_roles
         }

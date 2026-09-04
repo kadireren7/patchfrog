@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from patchfrog.change_intelligence.telemetry import ChangeIntelligenceSummary
 from patchfrog.contract_intelligence.telemetry import ContractIntelligenceSummary
+from patchfrog.intent_verification.telemetry import IntentVerificationSummary
 from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import ReviewRunStatus
@@ -209,6 +210,7 @@ class ReviewRunRepository:
         calls_by_role: dict[AgentRole, int] | None = None,
         change_intelligence: ChangeIntelligenceSummary | None = None,
         contract_intelligence: ContractIntelligenceSummary | None = None,
+        intent_verification: IntentVerificationSummary | None = None,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -286,6 +288,13 @@ class ReviewRunRepository:
             model.potentially_breaking_delta_count = contract_intelligence.potentially_breaking_delta_count
             model.impacted_consumer_count = contract_intelligence.impacted_consumer_count
             model.stale_consumer_candidate_count = contract_intelligence.stale_consumer_candidate_count
+        if intent_verification is not None:
+            model.intent_claim_count = intent_verification.intent_claim_count
+            model.intent_source_kind_counts = intent_verification.intent_source_kind_counts_json
+            model.mapped_intent_claim_count = intent_verification.mapped_intent_claim_count
+            model.intent_gap_candidate_count = intent_verification.intent_gap_candidate_count
+            model.intent_coverage_summary_rendered = intent_verification.intent_coverage_summary_rendered
+            model.intent_coverage_summary_text = intent_verification.intent_coverage_summary_text
         model.completed_at = datetime.now(UTC)
         await session.flush()
         return model

@@ -224,6 +224,9 @@ class ReviewPublicationService:
             already_reported_finding_ids=already_reported_finding_ids,
             change_story=run.change_story,
             change_map_text=run.change_map_text if run.change_map_rendered else None,
+            intent_coverage_summary=(
+                run.intent_coverage_summary_text if run.intent_coverage_summary_rendered else None
+            ),
         )
 
         await self._persist_plan_comments(publication_id, plan)

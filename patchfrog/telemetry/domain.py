@@ -81,7 +81,13 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 #: Historical rows again export it with explicit zero/default values --
 #: this milestone does not repeat Milestone J's initial oversight of
 #: skipping the bump.
-TELEMETRY_SCHEMA_VERSION = 3
+#:
+#: Bumped 3 -> 4 for Intent Verification Foundation: the same reasoning
+#: a third time -- ``ReviewTelemetrySnapshot`` gained the
+#: ``intent_verification`` field (:class:`IntentVerificationTelemetry`),
+#: a real additional key in the exported JSON. Historical rows export it
+#: with explicit zero/default values.
+TELEMETRY_SCHEMA_VERSION = 4
 
 
 class FindingLifecycleOutcome(StrEnum):
@@ -365,6 +371,26 @@ class ContractIntelligenceTelemetry:
 
 
 @dataclass(frozen=True, slots=True)
+class IntentVerificationTelemetry:
+    """Bounded, privacy-safe counts from
+    :mod:`patchfrog.intent_verification` for one review run (spec
+    section 27). Deliberately counts only -- no PR title/body text, no
+    claim statements, no Intent Story/Intent Coverage prose (the latter
+    is persisted separately on ``review_runs`` for publication, exactly
+    like ``change_map_text`` -- never duplicated here).
+    """
+
+    intent_evidence_available: bool
+    intent_claim_count: int
+    #: ``(source_kind_value, count)`` pairs, sorted -- mirrors
+    #: ``ChangeIntelligenceTelemetry.change_kind_counts`` exactly.
+    intent_source_kind_counts: tuple[tuple[str, int], ...]
+    mapped_intent_claim_count: int
+    intent_gap_candidate_count: int
+    intent_coverage_summary_rendered: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewTelemetrySnapshot:
     """The complete, deterministic telemetry snapshot for one review run
     -- what :func:`patchfrog.telemetry.collector.collect_review_telemetry`
@@ -424,6 +450,19 @@ class ReviewTelemetrySnapshot:
             potentially_breaking_delta_count=0,
             impacted_consumer_count=0,
             stale_consumer_candidate_count=0,
+        )
+    )
+    #: All-zero/empty for a run that predates Intent Verification
+    #: Foundation -- same nullable-safe-default convention as
+    #: ``contract_intelligence`` above. See :class:`IntentVerificationTelemetry`.
+    intent_verification: IntentVerificationTelemetry = field(
+        default_factory=lambda: IntentVerificationTelemetry(
+            intent_evidence_available=False,
+            intent_claim_count=0,
+            intent_source_kind_counts=(),
+            mapped_intent_claim_count=0,
+            intent_gap_candidate_count=0,
+            intent_coverage_summary_rendered=False,
         )
     )
 
