@@ -59,6 +59,7 @@ from patchfrog.telemetry.domain import (
     FeedbackScope,
     FeedbackTelemetry,
     FindingLifecycleTelemetry,
+    IntentVerificationTelemetry,
     ProviderRoleUsage,
     ProviderTelemetry,
     ReviewFeedbackEventTelemetry,
@@ -335,6 +336,16 @@ async def collect_review_telemetry(
         stale_consumer_candidate_count=run.stale_consumer_candidate_count,
     )
 
+    intent_source_kind_counts_raw = _load_json_dict(run.intent_source_kind_counts)
+    intent_verification = IntentVerificationTelemetry(
+        intent_evidence_available=run.intent_claim_count > 0,
+        intent_claim_count=run.intent_claim_count,
+        intent_source_kind_counts=tuple(sorted(intent_source_kind_counts_raw.items())),
+        mapped_intent_claim_count=run.mapped_intent_claim_count,
+        intent_gap_candidate_count=run.intent_gap_candidate_count,
+        intent_coverage_summary_rendered=run.intent_coverage_summary_rendered,
+    )
+
     return ReviewTelemetrySnapshot(
         schema_version=TELEMETRY_SCHEMA_VERSION,
         review_run_id=run.id,
@@ -358,4 +369,5 @@ async def collect_review_telemetry(
         review_feedback=review_feedback_telemetry,
         change_intelligence=change_intelligence,
         contract_intelligence=contract_intelligence,
+        intent_verification=intent_verification,
     )

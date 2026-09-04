@@ -77,8 +77,14 @@ CONFIG_SCHEMA_VERSION = 4
 #: patchfrog.contract_intelligence.evidence only for the exact candidate
 #: that is the source of a real, structurally-detected contract delta --
 #: empty (and thus byte-identical) for every other candidate, but the
-#: template shape itself changed again.
-REVIEW_PROMPT_VERSION = 5
+#: template shape itself changed again. Bumped to 6 for Intent
+#: Verification Foundation: a third new optional `<intent_verification>`
+#: user-prompt section, populated from
+#: patchfrog.intent_verification.evidence only for the exact candidate
+#: that is part of a mapped ChangeUnit for a real, sufficiently-explicit
+#: intent claim -- empty for every other candidate (including every
+#: candidate on a PR with no usable PR title/body intent at all).
+REVIEW_PROMPT_VERSION = 6
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final

@@ -211,6 +211,25 @@ class ReviewRunModel(Base):
     impacted_consumer_count: Mapped[int] = mapped_column(Integer, default=0)
     stale_consumer_candidate_count: Mapped[int] = mapped_column(Integer, default=0)
 
+    #: Intent Verification Foundation (:mod:`patchfrog.intent_verification`)
+    #: run-level summary. No separate intent-story text column: the
+    #: Intent Story prefix is folded into ``change_story`` above (spec
+    #: section 21). ``intent_coverage_summary_text`` IS a new, dedicated
+    #: column -- unlike the Change/Contract Map, the conditional Intent
+    #: Coverage block (spec section 22) is its own separate publication
+    #: section, not a re-render of an existing one, so it needs its own
+    #: bounded text for cross-task publication (same justification
+    #: precedent as ``change_map_text`` -- publication is a separate,
+    #: independently-retriable Celery task from review generation). All
+    #: default to 0/``"{}"``/``False``/``None`` -- nullable-safe for rows
+    #: predating this milestone.
+    intent_claim_count: Mapped[int] = mapped_column(Integer, default=0)
+    intent_source_kind_counts: Mapped[str] = mapped_column(Text, default="{}")
+    mapped_intent_claim_count: Mapped[int] = mapped_column(Integer, default=0)
+    intent_gap_candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    intent_coverage_summary_rendered: Mapped[bool] = mapped_column(Boolean, default=False)
+    intent_coverage_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 
 class ReviewCandidateModel(Base):
     """One symbol- (or module-region-) centered candidate considered for

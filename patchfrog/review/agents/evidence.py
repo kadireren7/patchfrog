@@ -46,3 +46,9 @@ class CandidateEvidencePackage:
     #: structurally-detected contract delta. Same size discipline as
     #: ``change_intelligence_text`` above.
     contract_intelligence_text: str = ""
+    #: Bounded (see :mod:`patchfrog.intent_verification.evidence`)
+    #: evidence from Intent Verification -- empty string unless this
+    #: exact candidate is part of a ChangeUnit mapped to a real,
+    #: sufficiently-explicit intent claim. Same size discipline as
+    #: ``change_intelligence_text``/``contract_intelligence_text`` above.
+    intent_verification_text: str = ""

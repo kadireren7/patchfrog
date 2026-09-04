@@ -54,6 +54,15 @@ from patchfrog.contract_intelligence.telemetry import (
 )
 from patchfrog.diff.models import DiffFile, DiffHunk
 from patchfrog.intelligence.queries import RepositoryQueryService
+from patchfrog.intent_verification.domain import IntentVerificationReport
+from patchfrog.intent_verification.evidence import (
+    evidence_text_for_candidate as intent_evidence_text_for_candidate,
+)
+from patchfrog.intent_verification.service import build_intent_verification_report
+from patchfrog.intent_verification.story import build_intent_story_prefix
+from patchfrog.intent_verification.telemetry import (
+    summarize_for_persistence as summarize_intent_verification,
+)
 from patchfrog.persistence.models.analysis import FindingModel
 from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.persistence.repositories import (
@@ -302,6 +311,8 @@ class PullRequestReviewService:
         incremental_context_fingerprint: str | None = None,
         context_config_override: ContextConfig | None = None,
         base_sha: str | None = None,
+        title: str | None = None,
+        body: str | None = None,
     ) -> ReviewRunSummary:
         """Review a repository already checked out on disk (CLI / dogfood
         use). Context is built against the same local checkout via
@@ -314,6 +325,13 @@ class PullRequestReviewService:
         never the whole repository) -- see that package's own docstring.
         ``None`` (the default) is "this milestone doesn't run" behavior,
         identical to every review before it.
+
+        ``title``/``body`` (Intent Verification Foundation,
+        :mod:`patchfrog.intent_verification`) are the PR's own title/body
+        text, already fetched by the caller (never a new GitHub call) --
+        used only to extract a small, bounded number of explicit intent
+        claims. ``None`` (the default, e.g. every CLI/local review that
+        omits them) is "this milestone doesn't run" behavior.
 
         ``config`` is expected to already be resolved by the caller (see
         :func:`patchfrog.review.config_resolution.resolve_repository_review_config`,
@@ -362,6 +380,8 @@ class PullRequestReviewService:
             incremental_context_fingerprint=incremental_context_fingerprint,
             context_config_override=context_config_override,
             base_sha=base_sha,
+            title=title,
+            body=body,
         )
 
     async def review_pull_request(
@@ -379,12 +399,14 @@ class PullRequestReviewService:
         incremental_context_fingerprint: str | None = None,
         context_config_override: ContextConfig | None = None,
         base_sha: str | None = None,
+        title: str | None = None,
+        body: str | None = None,
     ) -> ReviewRunSummary:
         """Review a repository fetched from ``clone_url`` (production /
         Celery-task use). ``config`` is expected to already be resolved by
         the caller -- see :meth:`review_local`'s docstring, including for
         ``candidate_filter``/``incremental_context_fingerprint``/
-        ``context_config_override``/``base_sha``."""
+        ``context_config_override``/``base_sha``/``title``/``body``."""
 
         return await self._run(
             repository_id=repository_id,
@@ -399,6 +421,8 @@ class PullRequestReviewService:
             incremental_context_fingerprint=incremental_context_fingerprint,
             context_config_override=context_config_override,
             base_sha=base_sha,
+            title=title,
+            body=body,
         )
 
     async def _require_matching_index(self, *, repository_id: uuid.UUID, commit_sha: str) -> uuid.UUID:
@@ -421,6 +445,8 @@ class PullRequestReviewService:
         incremental_context_fingerprint: str | None = None,
         context_config_override: ContextConfig | None = None,
         base_sha: str | None = None,
+        title: str | None = None,
+        body: str | None = None,
     ) -> ReviewRunSummary:
         start = time.monotonic()
         log = logger.bind(repository_id=str(repository_id), commit_sha=commit_sha)
@@ -479,6 +505,8 @@ class PullRequestReviewService:
                 incremental_context_fingerprint=run.incremental_context_fingerprint,
                 context_config_override=context_config_override,
                 base_sha=base_sha,
+                title=title,
+                body=body,
             )
         except Exception as exc:
             async with self._session_factory() as session:
@@ -509,6 +537,8 @@ class PullRequestReviewService:
         incremental_context_fingerprint: str,
         context_config_override: ContextConfig | None = None,
         base_sha: str | None = None,
+        title: str | None = None,
+        body: str | None = None,
     ) -> ReviewRunSummary:
         async with self._session_factory() as session:
             static_findings = []
@@ -557,26 +587,47 @@ class PullRequestReviewService:
                 token=context_kwargs.get("token") if not local else None,  # type: ignore[arg-type]
             )
 
-            # Fold the Contract Story addendum into the existing Change
-            # Story text, and (only when there's real contract stale-
-            # consumer evidence to add) re-render the *same* Change Map
-            # with the combined companion set -- never a second diagram
-            # system (spec section 10). See docs/contract-intelligence.md.
-            if contract_intelligence_report.contract_story or contract_intelligence_report.stale_consumers:
+            combined_companions = (
+                change_intelligence_report.expected_companions + contract_intelligence_report.stale_consumers
+            )
+
+            # Intent Verification Foundation (patchfrog.intent_verification):
+            # extends Change/Contract Intelligence, computed right after
+            # them, consuming their already-built ChangeUnits/ContractDeltas/
+            # ExpectedCompanionChanges directly -- no repository-graph
+            # query of its own, no DB session needed (see the package
+            # docstring). A no-op (empty report) when title/body carry no
+            # sufficiently-explicit intent, or when both are None.
+            intent_verification_report = build_intent_verification_report(
+                title=title,
+                body=body,
+                change_units=change_intelligence_report.change_units,
+                contract_deltas=contract_intelligence_report.deltas,
+                expected_companions=combined_companions,
+            )
+
+            # Fold the Contract Story addendum and the Intent Story
+            # prefix into the existing Change Story text, and (only when
+            # there's real contract stale-consumer evidence to add)
+            # re-render the *same* Change Map with the combined companion
+            # set -- never a second diagram system (spec section 10). See
+            # docs/contract-intelligence.md / docs/intent-verification.md.
+            intent_prefix = build_intent_story_prefix(intent_verification_report.claims)
+            if contract_intelligence_report.contract_story or contract_intelligence_report.stale_consumers or intent_prefix:
                 combined_story = " ".join(
-                    s for s in (change_intelligence_report.change_story, contract_intelligence_report.contract_story) if s
+                    s
+                    for s in (
+                        intent_prefix,
+                        change_intelligence_report.change_story,
+                        contract_intelligence_report.contract_story,
+                    )
+                    if s
                 )
                 combined_map = change_intelligence_report.change_map
                 if contract_intelligence_report.stale_consumers:
                     map_unit = select_change_map_unit(change_intelligence_report.change_units)
                     if map_unit is not None:
-                        combined_map = render_change_map(
-                            map_unit,
-                            expected_companions=(
-                                change_intelligence_report.expected_companions
-                                + contract_intelligence_report.stale_consumers
-                            ),
-                        )
+                        combined_map = render_change_map(map_unit, expected_companions=combined_companions)
                 change_intelligence_report = replace(
                     change_intelligence_report, change_story=combined_story, change_map=combined_map
                 )
@@ -625,6 +676,7 @@ class PullRequestReviewService:
                     orchestrator=orchestrator,
                     change_intelligence_report=change_intelligence_report,
                     contract_intelligence_report=contract_intelligence_report,
+                    intent_verification_report=intent_verification_report,
                 )
 
         await asyncio.gather(*(_process(o) for o in outcomes))
@@ -869,6 +921,7 @@ class PullRequestReviewService:
                 duration_ms=duration_ms,
                 change_intelligence=summarize_change_intelligence(change_intelligence_report),
                 contract_intelligence=summarize_contract_intelligence(contract_intelligence_report),
+                intent_verification=summarize_intent_verification(intent_verification_report),
             )
             await session.commit()
 
@@ -925,6 +978,7 @@ class PullRequestReviewService:
         orchestrator: AgentOrchestrator,
         change_intelligence_report: ChangeIntelligenceReport,
         contract_intelligence_report: ContractIntelligenceReport,
+        intent_verification_report: IntentVerificationReport,
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
@@ -1020,6 +1074,7 @@ class PullRequestReviewService:
             contract_intelligence_text=contract_evidence_text_for_candidate(
                 contract_intelligence_report, candidate
             ),
+            intent_verification_text=intent_evidence_text_for_candidate(intent_verification_report, candidate),
         )
 
         # Stage 2: finalize the effort decision now that the context

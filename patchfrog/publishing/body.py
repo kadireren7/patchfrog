@@ -129,6 +129,7 @@ def format_summary_body(
     frog_marker: bool = True,
     change_story: str | None = None,
     change_map_text: str | None = None,
+    intent_coverage_summary: str | None = None,
 ) -> tuple[str, bool]:
     """Render the deterministic top-level review summary. Returns
     ``(body, truncated)``.
@@ -145,9 +146,15 @@ def format_summary_body(
     only places them per the suggested order (spec section 16: Change
     story, Change map, then findings). Both are ``None`` for a run that
     predates this milestone or produced neither; this whole block is
-    then simply omitted, so the body is byte-identical to before. Never
-    used on the *clean*-review path (:func:`format_clean_review_body`)
-    -- see that function's own docstring for why."""
+    then simply omitted, so the body is byte-identical to before.
+    ``intent_coverage_summary`` (Intent Verification Foundation,
+    :mod:`patchfrog.intent_verification`) is the same kind of already-
+    bounded, already-deterministic text, placed after the Change Map
+    (spec section 22) -- ``None`` unless
+    :func:`patchfrog.intent_verification.summary.should_render_intent_coverage_summary`
+    determined it was eligible. Never used on the *clean*-review path
+    (:func:`format_clean_review_body`) -- see that function's own
+    docstring for why."""
 
     heading = f"## {FROG_MARKER} PatchFrog review" if frog_marker else "## PatchFrog review"
     lines = [heading, ""]
@@ -158,6 +165,10 @@ def format_summary_body(
 
     if change_map_text:
         lines.append(sanitize_untrusted_text(change_map_text.strip()))
+        lines.append("")
+
+    if intent_coverage_summary:
+        lines.append(sanitize_untrusted_text(intent_coverage_summary.strip()))
         lines.append("")
 
     severity_line = " · ".join(

@@ -242,6 +242,7 @@ def build_agent_prompt(
     static_findings: tuple[StaticFindingSummary, ...],
     change_intelligence_text: str = "",
     contract_intelligence_text: str = "",
+    intent_verification_text: str = "",
 ) -> tuple[str, str]:
     """Returns ``(system_prompt, user_prompt)`` for one candidate review by
     one specialist role."""
@@ -254,6 +255,7 @@ def build_agent_prompt(
         static_findings=static_findings,
         change_intelligence_text=change_intelligence_text,
         contract_intelligence_text=contract_intelligence_text,
+        intent_verification_text=intent_verification_text,
     )
 
 
@@ -265,6 +267,7 @@ def _build_user_prompt(
     static_findings: tuple[StaticFindingSummary, ...],
     change_intelligence_text: str = "",
     contract_intelligence_text: str = "",
+    intent_verification_text: str = "",
 ) -> str:
     target_label = candidate.qualified_name or candidate.symbol_name or candidate.file_path
     lines = [
@@ -295,6 +298,9 @@ def _build_user_prompt(
 
     if contract_intelligence_text.strip():
         lines += ["", "<contract_intelligence>", contract_intelligence_text.strip(), "</contract_intelligence>"]
+
+    if intent_verification_text.strip():
+        lines += ["", "<intent_verification>", intent_verification_text.strip(), "</intent_verification>"]
 
     return "\n".join(lines)
 
