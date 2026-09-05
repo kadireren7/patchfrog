@@ -10,13 +10,15 @@ import uuid
 from patchfrog.analysis.domain import FindingCategory
 from patchfrog.historical_regression_memory.domain import (
     HistoricalEvidenceStrength,
+    HistoricalMatchKind,
+    HistoricalRegressionReasonCode,
     HistoricalRegressionRecord,
+    PotentialHistoricalRegression,
 )
 from patchfrog.repository_learnings.domain import (
     REPOSITORY_LEARNINGS_VERSION,
     PotentialRepositoryLearningApplication,
     RepositoryLearning,
-    RepositoryLearningApplicationStatus,
     RepositoryLearningEvidence,
     RepositoryLearningPattern,
     RepositoryLearningPatternKind,
@@ -61,10 +63,16 @@ def _report_with_application(*, file_path: str, qualified_name: str) -> Reposito
         support_count=2, activated_at="2026-02-01T00:00:00+00:00",
         first_observed_at="2026-01-01T00:00:00+00:00", last_observed_at="2026-02-01T00:00:00+00:00",
     )
+    n_candidate = PotentialHistoricalRegression(
+        current_change_unit_id="u1", current_file_path=file_path, current_qualified_name=qualified_name,
+        historical_record=r2, match_kind=HistoricalMatchKind.SAME_SYMBOL,
+        reason_code=HistoricalRegressionReasonCode.PREVIOUS_FIXED_FINDING_SAME_SYMBOL, evidence="matched",
+    )
     application = PotentialRepositoryLearningApplication(
         learning=learning, current_change_unit_id="u1", current_file_path=file_path,
-        current_qualified_name=qualified_name, status=RepositoryLearningApplicationStatus.UNSATISFIED,
+        current_qualified_name=qualified_name,
         evidence="this exact surface has produced 2 independently trusted findings",
+        enriches_historical_regression=n_candidate,
     )
     return RepositoryLearningsReport(
         version=REPOSITORY_LEARNINGS_VERSION, learnings_considered=(learning,), applications=(application,),
@@ -83,6 +91,7 @@ def test_populated_for_the_exact_match_candidate() -> None:
     candidate = _candidate(file_path="service.py", qualified_name="process_payment")
     text = evidence_text_for_candidate(report, candidate)
     assert "repeated_same_surface_regression" in text
+    assert "correctness" in text
     assert "2 independent trusted findings" in text
 
 

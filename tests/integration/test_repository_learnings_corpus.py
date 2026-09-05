@@ -55,7 +55,6 @@ from patchfrog.repository_learnings.domain import (
     MAX_LEARNINGS_PER_RUN,
     MAX_SUPPORTING_EVENTS_PER_LEARNING,
     MIN_SUPPORTING_EVENTS,
-    RepositoryLearningApplicationStatus,
     RepositoryLearningPatternKind,
 )
 from patchfrog.repository_learnings.matching import derive_repository_learnings
@@ -681,18 +680,19 @@ async def test_case_current_pr_touches_learned_surface_produces_real_application
         )
 
     o_report = build_repository_learnings_report(
-        repository_id=repository_id, trusted_records=trusted_records,
-        change_units=change_report.change_units, historical_candidates=n_report.candidates,
+        repository_id=repository_id, trusted_records=trusted_records, historical_candidates=n_report.candidates,
     )
     assert o_report.learning_count == 1
     assert len(o_report.applications) == 1
     application = o_report.applications[0]
-    assert application.status is RepositoryLearningApplicationStatus.UNSATISFIED
     assert application.current_qualified_name == "apply_discount"
-    # N also fires on this exact same-symbol surface -- O must enrich, never duplicate.
+    # N also fires on this exact same-symbol surface -- O must enrich, never duplicate,
+    # and the application must reference that exact N candidate (mandatory, never optional).
     assert any(c.match_kind is HistoricalMatchKind.SAME_SYMBOL for c in n_report.candidates)
-    assert not application.stands_alone
-    assert "Repository learning" in o_report.repository_learning_story
+    assert application.enriches_historical_regression in n_report.candidates
+    assert not hasattr(application, "status")
+    assert "Repository history" in o_report.repository_learning_story
+    assert "unsatisfied" not in o_report.repository_learning_story.lower()
 
 
 # ---- 13. Full pipeline: current PR does NOT touch the learned surface -> no application ----
@@ -725,15 +725,19 @@ async def test_case_current_pr_does_not_touch_learned_surface_no_application(
     )
 
     async with session_factory() as session:
+        n_report = await build_historical_regression_report(
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units,
+        )
         trusted_records = await fetch_trusted_historical_records(
             session, repository_id=repository_id, as_of=datetime.now(UTC)
         )
 
+    assert n_report.candidates == ()  # N itself finds nothing relevant either
     o_report = build_repository_learnings_report(
-        repository_id=repository_id, trusted_records=trusted_records, change_units=change_report.change_units,
+        repository_id=repository_id, trusted_records=trusted_records, historical_candidates=n_report.candidates,
     )
     assert o_report.learning_count == 1  # the learning still exists...
-    assert o_report.applications == ()  # ...but nothing in the current PR is relevant to it
+    assert o_report.applications == ()  # ...but there is no current N candidate to enrich
     assert o_report.repository_learning_story == ""
 
 
@@ -766,12 +770,16 @@ async def test_case_renamed_symbol_never_matched(
     )
 
     async with session_factory() as session:
+        n_report = await build_historical_regression_report(
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units,
+        )
         trusted_records = await fetch_trusted_historical_records(
             session, repository_id=repository_id, as_of=datetime.now(UTC)
         )
 
+    assert n_report.candidates == ()  # renamed symbol never falls back to a match in N either
     o_report = build_repository_learnings_report(
-        repository_id=repository_id, trusted_records=trusted_records, change_units=change_report.change_units,
+        repository_id=repository_id, trusted_records=trusted_records, historical_candidates=n_report.candidates,
     )
     assert o_report.applications == ()
 
@@ -811,12 +819,16 @@ async def test_case_test_only_pr_never_triggers_application(
     )
 
     async with session_factory() as session:
+        n_report = await build_historical_regression_report(
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units,
+        )
         trusted_records = await fetch_trusted_historical_records(
             session, repository_id=repository_id, as_of=datetime.now(UTC)
         )
 
+    assert n_report.candidates == ()  # the TEST-kind ChangeUnit exclusion already applied inside N
     o_report = build_repository_learnings_report(
-        repository_id=repository_id, trusted_records=trusted_records, change_units=change_report.change_units,
+        repository_id=repository_id, trusted_records=trusted_records, historical_candidates=n_report.candidates,
     )
     assert o_report.applications == ()
 
@@ -1027,13 +1039,19 @@ async def test_case_zero_trusted_records_empty_report(
     assert o_report.repository_learning_story == ""
 
 
-# ---- 23. Application status is always UNSATISFIED for the only implemented pattern kind ----
+# ---- 23. A real application never carries an invariant status; it always enriches N ----
 
 
-async def test_case_application_status_always_unsatisfied(
+async def test_case_application_never_carries_an_invariant_status(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
-    full_name = "test/rl-always-unsatisfied"
+    """The core correction: REPEATED_SAME_SURFACE_REGRESSION is
+    historical-pattern evidence, not an invariant the current PR can
+    satisfy or violate -- there is no ``status`` field to check at
+    all, and a real application always references the exact N
+    candidate it enriches."""
+
+    full_name = "test/rl-no-invariant-status"
     root = _setup_base(tmp_path)
     (root / "pricing.py").write_text("def apply_discount(order):\n    return order['total']\n")
     base_sha = commit_all(root, "base")
@@ -1056,18 +1074,151 @@ async def test_case_application_status_always_unsatisfied(
     )
 
     async with session_factory() as session:
+        n_report = await build_historical_regression_report(
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units,
+        )
         trusted_records = await fetch_trusted_historical_records(
             session, repository_id=repository_id, as_of=datetime.now(UTC)
         )
     o_report = build_repository_learnings_report(
-        repository_id=repository_id, trusted_records=trusted_records, change_units=change_report.change_units,
+        repository_id=repository_id, trusted_records=trusted_records, historical_candidates=n_report.candidates,
     )
     assert len(o_report.applications) == 1
-    assert all(a.status is RepositoryLearningApplicationStatus.UNSATISFIED for a in o_report.applications)
-    assert not any(
-        a.status in (RepositoryLearningApplicationStatus.SATISFIED, RepositoryLearningApplicationStatus.INSUFFICIENT_EVIDENCE)
-        for a in o_report.applications
+    application = o_report.applications[0]
+    assert not hasattr(application, "status")
+    assert not hasattr(application, "stands_alone")
+    assert application.enriches_historical_regression in n_report.candidates
+
+
+# ---- 23b. Active learning with NO current N candidate produces NO standalone application ----
+
+
+async def test_case_active_learning_without_n_candidate_produces_no_standalone_application(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Even when a real, active, >=2-independent-event learning exists
+    for a surface, O must never construct a standalone application
+    when (for whatever controlled reason) no current N candidate
+    exists for that exact surface this run -- passing an empty
+    ``historical_candidates`` tuple directly proves this without
+    depending on any particular N-side scenario."""
+
+    full_name = "test/rl-no-standalone-without-n"
+    root = _setup_base(tmp_path)
+    (root / "pricing.py").write_text("def apply_discount(order):\n    return order['total']\n")
+    commit_all(root, "base")
+    repository_id = await _make_repo(session_factory, full_name)
+    index_id = await _index_once(session_factory, repository_id=repository_id, root=root, full_name=full_name)
+
+    await _stage_and_trust(
+        session_factory, repository_id=repository_id, repository_index_id=index_id,
+        file_path="pricing.py", qualified_name="apply_discount", command=ExplicitCommand.FIXED,
     )
+    await _stage_and_trust(
+        session_factory, repository_id=repository_id, repository_index_id=index_id,
+        file_path="pricing.py", qualified_name="apply_discount", command=ExplicitCommand.USEFUL,
+    )
+
+    async with session_factory() as session:
+        trusted_records = await fetch_trusted_historical_records(
+            session, repository_id=repository_id, as_of=datetime.now(UTC)
+        )
+    # Deliberately no historical_candidates passed -- a real, active learning exists,
+    # but with no N candidate this run, O must produce nothing standalone.
+    o_report = build_repository_learnings_report(repository_id=repository_id, trusted_records=trusted_records)
+    assert o_report.learning_count == 1
+    assert o_report.applications == ()
+
+
+# ---- 23c. SECURITY + CORRECTNESS same surface never combine into one learning ----
+
+
+async def test_case_mixed_category_same_surface_no_combined_learning(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    full_name = "test/rl-mixed-category"
+    root = _setup_base(tmp_path)
+    (root / "auth.py").write_text("def check_token(token):\n    return True\n")
+    commit_all(root, "base")
+    repository_id = await _make_repo(session_factory, full_name)
+    index_id = await _index_once(session_factory, repository_id=repository_id, root=root, full_name=full_name)
+
+    await _stage_and_trust(
+        session_factory, repository_id=repository_id, repository_index_id=index_id,
+        file_path="auth.py", qualified_name="check_token", command=ExplicitCommand.FIXED,
+        category=FindingCategory.SECURITY,
+    )
+    await _stage_and_trust(
+        session_factory, repository_id=repository_id, repository_index_id=index_id,
+        file_path="auth.py", qualified_name="check_token", command=ExplicitCommand.FIXED,
+        category=FindingCategory.CORRECTNESS,
+    )
+
+    async with session_factory() as session:
+        trusted_records = await fetch_trusted_historical_records(
+            session, repository_id=repository_id, as_of=datetime.now(UTC)
+        )
+    assert len(trusted_records) == 2  # both individually trusted...
+    learnings = derive_repository_learnings(trusted_records=trusted_records, repository_id=repository_id)
+    assert learnings == ()  # ...but never combined into one repeated pattern
+
+
+# ---- 23d. Two independent SECURITY events on one surface -> one SECURITY learning ----
+
+
+async def test_case_two_security_events_same_surface_activate_security_learning(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    full_name = "test/rl-two-security"
+    root = _setup_base(tmp_path)
+    (root / "auth.py").write_text("def check_token(token):\n    return True\n")
+    commit_all(root, "base")
+    repository_id = await _make_repo(session_factory, full_name)
+    index_id = await _index_once(session_factory, repository_id=repository_id, root=root, full_name=full_name)
+
+    for _ in range(2):
+        await _stage_and_trust(
+            session_factory, repository_id=repository_id, repository_index_id=index_id,
+            file_path="auth.py", qualified_name="check_token", command=ExplicitCommand.FIXED,
+            category=FindingCategory.SECURITY,
+        )
+
+    async with session_factory() as session:
+        trusted_records = await fetch_trusted_historical_records(
+            session, repository_id=repository_id, as_of=datetime.now(UTC)
+        )
+    learnings = derive_repository_learnings(trusted_records=trusted_records, repository_id=repository_id)
+    assert len(learnings) == 1
+    assert learnings[0].pattern.finding_category is FindingCategory.SECURITY
+
+
+# ---- 23e. Two independent CORRECTNESS events on one surface -> one CORRECTNESS learning ----
+
+
+async def test_case_two_correctness_events_same_surface_activate_correctness_learning(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    full_name = "test/rl-two-correctness"
+    root = _setup_base(tmp_path)
+    (root / "auth.py").write_text("def check_token(token):\n    return True\n")
+    commit_all(root, "base")
+    repository_id = await _make_repo(session_factory, full_name)
+    index_id = await _index_once(session_factory, repository_id=repository_id, root=root, full_name=full_name)
+
+    for _ in range(2):
+        await _stage_and_trust(
+            session_factory, repository_id=repository_id, repository_index_id=index_id,
+            file_path="auth.py", qualified_name="check_token", command=ExplicitCommand.FIXED,
+            category=FindingCategory.CORRECTNESS,
+        )
+
+    async with session_factory() as session:
+        trusted_records = await fetch_trusted_historical_records(
+            session, repository_id=repository_id, as_of=datetime.now(UTC)
+        )
+    learnings = derive_repository_learnings(trusted_records=trusted_records, repository_id=repository_id)
+    assert len(learnings) == 1
+    assert learnings[0].pattern.finding_category is FindingCategory.CORRECTNESS
 
 
 # ---- 24. Companion/contract/test learning kinds are never constructed (deferred, v1 scope) ----

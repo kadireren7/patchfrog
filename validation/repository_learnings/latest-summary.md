@@ -294,3 +294,105 @@ immediately after the Historical Regression Memory report (last in
 the J->K->L->M->N->O sequence), consuming N's own already-fetched
 trusted records where possible to avoid a second identical SQL query
 in the same run -- see implementation section on exact reuse.
+
+## 17. External-review correction round (before merge)
+
+PR #47's first shape had two real semantic gaps, both found in
+external review before merge, neither caught by the (passing) 60-test
+first-build corpus -- because both were errors in what the tests
+*asserted as correct*, not gaps the tests failed to cover.
+
+### 17a. `UNSATISFIED` wrongly modeled repeated history as an invariant
+
+The original `PotentialRepositoryLearningApplication` carried
+`status: RepositoryLearningApplicationStatus`, and every real
+application for `REPEATED_SAME_SURFACE_REGRESSION` was constructed
+with `status = UNSATISFIED`. This is semantically wrong: "this exact
+surface has produced trusted findings across multiple independent
+reviews" is historical-pattern *evidence*, not a requirement the
+current PR can satisfy or violate. `UNSATISFIED` reads as "the current
+PR fails something" -- it does not; the anchor being touched again *is*
+the entire signal, and O must not describe mere recurrence as a
+violated repository invariant.
+
+**Fix**: removed `status` from `PotentialRepositoryLearningApplication`
+entirely. `RepositoryLearningApplicationStatus` (`SATISFIED`/
+`UNSATISFIED`/`INSUFFICIENT_EVIDENCE`) is kept on the domain module for
+forward documentation only -- reserved for a genuinely relational
+future pattern kind (anchor -> required companion) with a real
+presence check to evaluate against -- and is never referenced by the
+application dataclass in v1. All Change Story/prompt-evidence wording
+was re-audited to remove any "unsatisfied"/"violates"/"missing"
+framing; corpus assertions now check `not hasattr(application,
+"status")` directly.
+
+### 17b. O could stand alone -- became a second historical-regression detector
+
+The original `derive_repository_learning_applications` took its own
+`change_units` parameter and independently re-derived current-PR
+relevance (its own `ChangeKind.TEST` walk over `changed_candidates`),
+constructing a standalone application whenever a learning's anchor was
+directly touched -- with `enriches_historical_regression` merely
+*optional*. This made O a second, independent historical-regression
+detector: it could fire even when Milestone N itself found nothing
+relevant for the current PR, directly violating the spec's own "O must
+not simply wrap N under another label... O must never independently
+rediscover historical relevance."
+
+**Fix**: `derive_repository_learning_applications` no longer takes
+`change_units` at all. It requires an existing Milestone N
+`PotentialHistoricalRegression` candidate on the *exact* same surface
+this run -- `enriches_historical_regression` is now mandatory, not
+optional, and a learning with no matching N candidate produces no
+application at all (the `stands_alone` property was removed as dead
+code). This also means every current-relevance rule N itself already
+established (direct-change vs. affected-surface, the `ChangeKind.TEST`
+exclusion, N's own dedup ownership against J/K/L) is inherited for
+free -- O never re-implements any of it.
+
+A related, narrower gap was fixed alongside 17b: `RepositoryLearning`
+pattern identity took `finding_category` from an arbitrary (earliest)
+supporting record while grouping purely on `(file_path,
+qualified_name)`. Two trusted findings on the same symbol but a
+genuinely different category (e.g. a SECURITY and an unrelated
+CORRECTNESS finding) could silently combine into one fabricated
+"repeated pattern." **Fix**: `finding_category` is now part of the
+grouping key and the deterministic `learning_id` hash -- two findings
+only support the same learning when they share it. New corpus
+scenarios prove: SECURITY + CORRECTNESS on one surface never combine
+(`test_case_mixed_category_same_surface_no_combined_learning`); two
+SECURITY events activate a SECURITY learning; two CORRECTNESS events
+activate a CORRECTNESS learning; a real, active learning with no
+current N candidate produces no standalone application
+(`test_case_active_learning_without_n_candidate_produces_no_standalone_application`).
+
+### 17c. Publication-level dedup: no separate summary block in v1
+
+Because every real application now enriches an existing N candidate on
+the exact same surface, the original standalone `### Repository
+learning` publication block (`summary.py`, plus
+`repository_learning_summary_rendered`/`_text` columns and the
+matching `publishing/body.py`/`planner.py`/`service.py` parameter)
+would render immediately next to N's own `### Historical context`
+block about that very surface -- saying, in effect, the same thing
+twice. **Fix**: removed `summary.py` and the standalone block entirely;
+this package's v1 user-facing footprint is limited to the bounded
+Change Story addendum (reworded: "Repository history: ... has produced
+trusted findings across N independent reviews," never "unsatisfied"),
+bounded per-candidate `<repository_learning>` prompt evidence, and
+count-only telemetry/persistence (two columns, not four -- no rendered
+-text column at all). Migration `0023_repository_learnings` was edited
+in place (never merged, so no new migration needed) to add only the
+two count columns.
+
+### 17d. Corrected corpus and gates
+
+30 behavioral corpus scenarios (25 original + 5 new: mixed-category
+negative, two category-specific positive controls, no-standalone
+-without-N proof, no-invariant-status proof replacing the removed
+always-unsatisfied test) + 34 unit tests, all passing. Full suite
+1739/1739 (see final report). `REPOSITORY_LEARNINGS_VERSION` stays `1`
+(never bumped mid-correction, since unmerged); `REVIEW_PROMPT_VERSION`
+9 and `TELEMETRY_SCHEMA_VERSION` 7 both stand -- the `<repository_learning>`
+prompt section and the `repository_learnings` telemetry field are both
+still real, genuine additions, just with a corrected internal shape.

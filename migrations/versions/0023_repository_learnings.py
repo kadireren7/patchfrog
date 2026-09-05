@@ -26,15 +26,8 @@ def upgrade() -> None:
         "review_runs",
         sa.Column("repository_learning_application_count", sa.Integer(), nullable=False, server_default="0"),
     )
-    op.add_column(
-        "review_runs",
-        sa.Column("repository_learning_summary_rendered", sa.Boolean(), nullable=False, server_default=sa.false()),
-    )
-    op.add_column("review_runs", sa.Column("repository_learning_summary_text", sa.Text(), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column("review_runs", "repository_learning_summary_text")
-    op.drop_column("review_runs", "repository_learning_summary_rendered")
     op.drop_column("review_runs", "repository_learning_application_count")
     op.drop_column("review_runs", "repository_learning_active_count")

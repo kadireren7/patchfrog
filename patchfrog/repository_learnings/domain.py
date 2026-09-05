@@ -105,22 +105,24 @@ class RepositoryLearningStatus(StrEnum):
 
 
 class RepositoryLearningApplicationStatus(StrEnum):
-    """``SATISFIED``/``INSUFFICIENT_EVIDENCE`` are reserved for a
-    future pattern kind with a real companion/consumer/test presence
-    check (the only implemented kind,
-    ``REPEATED_SAME_SURFACE_REGRESSION``, has no companion target to
-    satisfy -- the anchor being touched again *is* the entire signal).
-    See ``validation/repository_learnings/latest-summary.md`` section
-    9. Never publish ``SATISFIED`` as praise/noise (spec section 22):
-    an application object is only ever constructed when there is real,
-    actionable context to add."""
+    """**Never referenced by :class:`PotentialRepositoryLearningApplication`
+    in v1** -- kept on the enum purely for forward documentation,
+    exactly like ``HistoricalMatchKind.SAME_FILE`` in Milestone N.
 
-    #: The only value ever constructed in v1: the learned surface is
-    #: directly touched by the current PR again.
-    UNSATISFIED = "unsatisfied"
-    #: Reserved, never constructed in v1.
+    ``REPEATED_SAME_SURFACE_REGRESSION`` (the only implemented pattern
+    kind) has no companion/consumer/test target to check for presence
+    -- "this exact surface has repeatedly produced trusted findings" is
+    historical-pattern *evidence*, not an expectation the current PR
+    can satisfy or violate. An external-review correction round found
+    the original v1 shape wrongly modeled this as ``UNSATISFIED``,
+    implying the current PR fails some requirement -- it does not.
+    ``SATISFIED``/``UNSATISFIED``/``INSUFFICIENT_EVIDENCE`` are
+    reserved for a genuinely relational future pattern kind (anchor ->
+    required companion) that encodes a real expectation to check. See
+    ``validation/repository_learnings/latest-summary.md`` section 9b."""
+
     SATISFIED = "satisfied"
-    #: Reserved, never constructed in v1.
+    UNSATISFIED = "unsatisfied"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
 
 
@@ -137,12 +139,27 @@ class RepositoryLearningEvidence:
 class RepositoryLearningPattern:
     """Structural identity of a learning -- never semantic, never NLP/
     embedding-derived. Identity is
-    ``(repository_id, pattern_kind, anchor_file_path, anchor_qualified_name)``;
+    ``(repository_id, pattern_kind, anchor_file_path, anchor_qualified_name, finding_category)``;
     ``anchor_qualified_name`` is never ``None`` for the only
     implemented kind (a finding with no stable symbol identity cannot
     participate -- falling back to file-only identity would reintroduce
     exactly the over-broad match N's own correction round already
-    ruled out for ``SAME_FILE``)."""
+    ruled out for ``SAME_FILE``).
+
+    **``finding_category`` is part of identity, not metadata** -- an
+    external-review correction round found the original v1 shape took
+    category from an arbitrary (earliest) supporting record while
+    grouping purely on ``(file_path, qualified_name)``, which could
+    silently combine two unrelated trusted findings on the same symbol
+    (e.g. a SECURITY constant-time-comparison finding and an unrelated
+    CORRECTNESS None-handling finding) into one fabricated "repeated
+    pattern." Since no richer root-cause identity is persisted
+    anywhere this package can safely read, category is the one
+    additional structural signal available to avoid that -- two
+    findings only support the same learning when they share it. This
+    is conservative, not merely convenient: it can only ever *split* a
+    would-be learning into two (or suppress it), never invent a false
+    one."""
 
     repository_id: UUID
     pattern_kind: RepositoryLearningPatternKind
@@ -178,26 +195,35 @@ class RepositoryLearning:
 
 @dataclass(frozen=True, slots=True)
 class PotentialRepositoryLearningApplication:
-    """One current-PR application of an active learning -- never a
-    published finding on its own, exactly like every other J/K/L/M/N
-    candidate type. ``enriches_historical_regression`` references an
-    existing N candidate *by instance* (never copied) when the same
-    surface is already flagged there -- see the audit's "Dedup
-    ownership" section: for the only implemented pattern kind this is,
-    in practice, always set, but the check is never hard-coded to
-    assume so."""
+    """Bounded **enrichment** of an existing Milestone N
+    :class:`~patchfrog.historical_regression_memory.domain.PotentialHistoricalRegression`
+    with repeated, independently-trusted historical context -- never a
+    standalone O warning, never a published finding on its own.
+
+    **``enriches_historical_regression`` is mandatory, not optional.**
+    An external-review correction round found the original v1 shape
+    let this stand alone whenever the anchor was merely touched again,
+    with no existing N candidate required -- that made O a second,
+    independent historical-regression detector, exactly what it must
+    never be (spec: "O must not simply wrap N under another label...
+    O must never independently rediscover historical relevance").
+    Fixed by requiring an existing N candidate on the *exact* same
+    surface before any application is constructed at all: when no such
+    N candidate exists this run, the learning simply produces no
+    application (see :mod:`patchfrog.repository_learnings.matching`).
+
+    Carries **no** ``status`` field -- ``REPEATED_SAME_SURFACE_REGRESSION``
+    is historical-pattern evidence, not an invariant the current PR can
+    satisfy or violate (see :class:`RepositoryLearningApplicationStatus`'s
+    own docstring for why that enum is reserved, never referenced
+    here)."""
 
     learning: RepositoryLearning
     current_change_unit_id: str
     current_file_path: str
     current_qualified_name: str | None
-    status: RepositoryLearningApplicationStatus
     evidence: str
-    enriches_historical_regression: PotentialHistoricalRegression | None = None
-
-    @property
-    def stands_alone(self) -> bool:
-        return self.enriches_historical_regression is None
+    enriches_historical_regression: PotentialHistoricalRegression
 
 
 @dataclass(frozen=True, slots=True)

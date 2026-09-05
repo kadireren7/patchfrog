@@ -1,8 +1,8 @@
 """Unit tests for :mod:`patchfrog.repository_learnings.matching` --
 deterministic, pure derivation. Every case is a hand-built
 :class:`~patchfrog.historical_regression_memory.domain.HistoricalRegressionRecord`/
-:class:`~patchfrog.change_intelligence.domain.ChangeUnit`, no database,
-no LLM -- mirrors
+:class:`~patchfrog.historical_regression_memory.domain.PotentialHistoricalRegression`,
+no database, no LLM -- mirrors
 tests/unit/test_historical_regression_memory_matching.py's own
 discipline exactly.
 """
@@ -12,7 +12,6 @@ from __future__ import annotations
 import uuid
 
 from patchfrog.analysis.domain import FindingCategory
-from patchfrog.change_intelligence.domain import ChangeKind, ChangeUnit
 from patchfrog.historical_regression_memory.domain import (
     HistoricalEvidenceStrength,
     HistoricalMatchKind,
@@ -22,7 +21,6 @@ from patchfrog.historical_regression_memory.domain import (
 )
 from patchfrog.repository_learnings.domain import (
     MIN_SUPPORTING_EVENTS,
-    RepositoryLearningApplicationStatus,
     RepositoryLearningPatternKind,
     RepositoryLearningStatus,
 )
@@ -30,7 +28,6 @@ from patchfrog.repository_learnings.matching import (
     derive_repository_learning_applications,
     derive_repository_learnings,
 )
-from patchfrog.review.domain import ReviewCandidate, ReviewCandidateReason
 
 _REPO_ID = uuid.uuid4()
 
@@ -53,19 +50,19 @@ def _record(
     )
 
 
-def _candidate(*, file_path: str, qualified_name: str | None) -> ReviewCandidate:
-    return ReviewCandidate(
-        file_path=file_path, symbol_id=uuid.uuid4() if qualified_name else None,
-        symbol_name=qualified_name.rsplit(".", 1)[-1] if qualified_name else None,
-        qualified_name=qualified_name, start_line=1, end_line=5, changed_lines=(1,),
-        static_finding_ids=(), reason=ReviewCandidateReason.CHANGED_SYMBOL,
-    )
-
-
-def _unit(*, file_path: str, qualified_name: str | None, kind: ChangeKind = ChangeKind.BEHAVIOR) -> ChangeUnit:
-    return ChangeUnit(
-        id="u1", title="payment", change_kind=kind,
-        changed_candidates=(_candidate(file_path=file_path, qualified_name=qualified_name),),
+def _n_candidate(
+    *,
+    file_path: str = "service.py",
+    qualified_name: str | None = "process_payment",
+    record: HistoricalRegressionRecord | None = None,
+    change_unit_id: str = "u1",
+) -> PotentialHistoricalRegression:
+    return PotentialHistoricalRegression(
+        current_change_unit_id=change_unit_id, current_file_path=file_path, current_qualified_name=qualified_name,
+        historical_record=record or _record(file_path=file_path, qualified_name=qualified_name),
+        match_kind=HistoricalMatchKind.SAME_SYMBOL,
+        reason_code=HistoricalRegressionReasonCode.PREVIOUS_FIXED_FINDING_SAME_SYMBOL,
+        evidence="a previous fixed finding involved this surface",
     )
 
 
@@ -143,39 +140,57 @@ def test_different_surfaces_never_pooled_together() -> None:
     assert learnings == ()
 
 
-def test_application_requires_anchor_directly_changed_in_current_pr() -> None:
+def test_mixed_category_same_surface_never_activates_a_learning() -> None:
+    """Two trusted findings on the same symbol but a genuinely
+    different category are not necessarily one repeated technical
+    pattern -- category is part of pattern identity, not metadata."""
+
+    records = (
+        _record(review_run_id=uuid.uuid4(), observed_at="2026-01-01T00:00:00+00:00", category=FindingCategory.SECURITY),
+        _record(review_run_id=uuid.uuid4(), observed_at="2026-02-01T00:00:00+00:00", category=FindingCategory.CORRECTNESS),
+    )
+    learnings = derive_repository_learnings(trusted_records=records, repository_id=_REPO_ID)
+    assert learnings == ()
+
+
+def test_two_security_events_activate_a_security_learning() -> None:
+    records = (
+        _record(review_run_id=uuid.uuid4(), observed_at="2026-01-01T00:00:00+00:00", category=FindingCategory.SECURITY),
+        _record(review_run_id=uuid.uuid4(), observed_at="2026-02-01T00:00:00+00:00", category=FindingCategory.SECURITY),
+    )
+    learnings = derive_repository_learnings(trusted_records=records, repository_id=_REPO_ID)
+    assert len(learnings) == 1
+    assert learnings[0].pattern.finding_category is FindingCategory.SECURITY
+
+
+def test_two_correctness_events_activate_a_correctness_learning() -> None:
+    records = (
+        _record(review_run_id=uuid.uuid4(), observed_at="2026-01-01T00:00:00+00:00", category=FindingCategory.CORRECTNESS),
+        _record(review_run_id=uuid.uuid4(), observed_at="2026-02-01T00:00:00+00:00", category=FindingCategory.CORRECTNESS),
+    )
+    learnings = derive_repository_learnings(trusted_records=records, repository_id=_REPO_ID)
+    assert len(learnings) == 1
+    assert learnings[0].pattern.finding_category is FindingCategory.CORRECTNESS
+
+
+def test_application_requires_an_existing_n_candidate_on_the_same_surface() -> None:
+    """The core correction: O must never stand alone -- an active
+    learning whose surface has no current N candidate produces no
+    application at all."""
+
     records = (
         _record(review_run_id=uuid.uuid4(), observed_at="2026-01-01T00:00:00+00:00"),
         _record(review_run_id=uuid.uuid4(), observed_at="2026-02-01T00:00:00+00:00"),
     )
     learnings = derive_repository_learnings(trusted_records=records, repository_id=_REPO_ID)
 
-    unrelated_unit = _unit(file_path="other.py", qualified_name="unrelated_fn")
-    applications = derive_repository_learning_applications(learnings=learnings, change_units=(unrelated_unit,))
+    # No N candidates passed at all -- no standalone O application.
+    applications = derive_repository_learning_applications(learnings=learnings)
     assert applications == ()
 
-    matching_unit = _unit(file_path="service.py", qualified_name="process_payment")
-    applications = derive_repository_learning_applications(learnings=learnings, change_units=(matching_unit,))
-    assert len(applications) == 1
-    application = applications[0]
-    assert application.status is RepositoryLearningApplicationStatus.UNSATISFIED
-    assert application.stands_alone
-    assert application.current_change_unit_id == "u1"
-
-
-def test_test_only_change_unit_never_triggers_an_application() -> None:
-    """Mirrors N's own TEST-kind ChangeUnit exclusion exactly -- a
-    test-only PR that merely calls a learned-risky symbol must never
-    trigger an application."""
-
-    records = (
-        _record(review_run_id=uuid.uuid4(), observed_at="2026-01-01T00:00:00+00:00"),
-        _record(review_run_id=uuid.uuid4(), observed_at="2026-02-01T00:00:00+00:00"),
-    )
-    learnings = derive_repository_learnings(trusted_records=records, repository_id=_REPO_ID)
-
-    test_unit = _unit(file_path="service.py", qualified_name="process_payment", kind=ChangeKind.TEST)
-    applications = derive_repository_learning_applications(learnings=learnings, change_units=(test_unit,))
+    # An N candidate on a completely different surface -- still nothing.
+    unrelated = _n_candidate(file_path="other.py", qualified_name="unrelated_fn")
+    applications = derive_repository_learning_applications(learnings=learnings, historical_candidates=(unrelated,))
     assert applications == ()
 
 
@@ -185,50 +200,31 @@ def test_application_enriches_existing_n_candidate_on_same_surface() -> None:
         _record(review_run_id=uuid.uuid4(), observed_at="2026-02-01T00:00:00+00:00"),
     )
     learnings = derive_repository_learnings(trusted_records=records, repository_id=_REPO_ID)
-    unit = _unit(file_path="service.py", qualified_name="process_payment")
 
-    n_candidate = PotentialHistoricalRegression(
-        current_change_unit_id="u1", current_file_path="service.py", current_qualified_name="process_payment",
-        historical_record=records[-1], match_kind=HistoricalMatchKind.SAME_SYMBOL,
-        reason_code=HistoricalRegressionReasonCode.PREVIOUS_FIXED_FINDING_SAME_SYMBOL,
-        evidence="a previous fixed finding involved 'process_payment'",
-    )
-
-    applications = derive_repository_learning_applications(
-        learnings=learnings, change_units=(unit,), historical_candidates=(n_candidate,)
-    )
+    n_candidate = _n_candidate(record=records[-1])
+    applications = derive_repository_learning_applications(learnings=learnings, historical_candidates=(n_candidate,))
     assert len(applications) == 1
     application = applications[0]
-    assert not application.stands_alone
     assert application.enriches_historical_regression is n_candidate
+    assert application.current_change_unit_id == n_candidate.current_change_unit_id
+    assert application.current_file_path == n_candidate.current_file_path
+    assert application.current_qualified_name == n_candidate.current_qualified_name
+    assert not hasattr(application, "status")
+    assert not hasattr(application, "stands_alone")
 
 
-def test_application_stands_alone_when_no_n_candidate_passed() -> None:
-    records = (
-        _record(review_run_id=uuid.uuid4(), observed_at="2026-01-01T00:00:00+00:00"),
-        _record(review_run_id=uuid.uuid4(), observed_at="2026-02-01T00:00:00+00:00"),
+def test_learning_id_includes_category_in_identity() -> None:
+    security_records = (
+        _record(review_run_id=uuid.uuid4(), observed_at="2026-01-01T00:00:00+00:00", category=FindingCategory.SECURITY),
+        _record(review_run_id=uuid.uuid4(), observed_at="2026-02-01T00:00:00+00:00", category=FindingCategory.SECURITY),
     )
-    learnings = derive_repository_learnings(trusted_records=records, repository_id=_REPO_ID)
-    unit = _unit(file_path="service.py", qualified_name="process_payment")
-
-    applications = derive_repository_learning_applications(learnings=learnings, change_units=(unit,))
-    assert len(applications) == 1
-    assert applications[0].stands_alone
-
-
-def test_earliest_finding_category_names_the_pattern() -> None:
-    records = (
-        _record(
-            review_run_id=uuid.uuid4(), observed_at="2026-01-01T00:00:00+00:00",
-            category=FindingCategory.SECURITY,
-        ),
-        _record(
-            review_run_id=uuid.uuid4(), observed_at="2026-02-01T00:00:00+00:00",
-            category=FindingCategory.CORRECTNESS,
-        ),
+    correctness_records = (
+        _record(review_run_id=uuid.uuid4(), observed_at="2026-03-01T00:00:00+00:00", category=FindingCategory.CORRECTNESS),
+        _record(review_run_id=uuid.uuid4(), observed_at="2026-04-01T00:00:00+00:00", category=FindingCategory.CORRECTNESS),
     )
-    learnings = derive_repository_learnings(trusted_records=records, repository_id=_REPO_ID)
-    assert learnings[0].pattern.finding_category is FindingCategory.SECURITY
+    security_learning = derive_repository_learnings(trusted_records=security_records, repository_id=_REPO_ID)[0]
+    correctness_learning = derive_repository_learnings(trusted_records=correctness_records, repository_id=_REPO_ID)[0]
+    assert security_learning.learning_id != correctness_learning.learning_id
 
 
 def test_learning_id_is_deterministic_for_same_pattern_identity() -> None:

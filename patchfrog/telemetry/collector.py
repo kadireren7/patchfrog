@@ -368,7 +368,6 @@ async def collect_review_telemetry(
     repository_learnings = RepositoryLearningsTelemetry(
         repository_learning_active_count=run.repository_learning_active_count,
         repository_learning_application_count=run.repository_learning_application_count,
-        repository_learning_summary_rendered=run.repository_learning_summary_rendered,
     )
 
     return ReviewTelemetrySnapshot(

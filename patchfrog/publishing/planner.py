@@ -94,7 +94,6 @@ class PublicationPlanner:
         intent_coverage_summary: str | None = None,
         test_coverage_summary: str | None = None,
         historical_context_summary: str | None = None,
-        repository_learning_summary: str | None = None,
     ) -> ReviewPublicationPlan:
         """``already_reported_finding_ids`` (Phase 7,
         :mod:`patchfrog.review_memory`) -- findings already known to be the
@@ -119,8 +118,10 @@ class PublicationPlanner:
         ``test_coverage_summary`` (Test Intelligence Foundation) is the
         same kind of pass-through text. ``historical_context_summary``
         (Historical Regression Memory Foundation) is the same kind of
-        pass-through text. ``repository_learning_summary`` (Repository
-        Learnings Foundation) is the same kind of pass-through text."""
+        pass-through text. Repository Learnings Foundation has no
+        separate summary parameter here -- it has no standalone
+        publication block in v1 (see that package's own ``__init__.py``
+        docstring)."""
 
         if current_head_sha != snapshot.head_sha:
             return ReviewPublicationPlan(
@@ -288,7 +289,6 @@ class PublicationPlanner:
             intent_coverage_summary=intent_coverage_summary,
             test_coverage_summary=test_coverage_summary,
             historical_context_summary=historical_context_summary,
-            repository_learning_summary=repository_learning_summary,
         )
 
         return ReviewPublicationPlan(

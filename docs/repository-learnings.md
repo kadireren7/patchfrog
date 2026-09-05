@@ -41,12 +41,23 @@ trust model to keep in sync.
 
 ## Pattern identity: structural, never semantic
 
-`(repository_id, pattern_kind, anchor_file_path, anchor_qualified_name)`.
+`(repository_id, pattern_kind, anchor_file_path, anchor_qualified_name, finding_category)`.
 No NLP, no embeddings, no fuzzy text similarity anywhere. A record with
 no `qualified_name` (e.g. a module-level finding) never participates --
 falling back to file-only identity would reintroduce exactly the
 over-broad match Milestone N's own correction round already ruled out
 for `SAME_FILE`.
+
+**`finding_category` is part of identity, not metadata.** Two trusted
+findings on the exact same symbol but a genuinely different category
+(e.g. a SECURITY constant-time-comparison finding and an unrelated
+CORRECTNESS None-handling finding) are not necessarily one repeated
+technical pattern -- no richer root-cause identity is persisted
+anywhere this package can safely read, so category is the one
+additional structural signal available to avoid silently combining
+them. This is conservative by construction: it can only ever *split* a
+would-be learning into two (or suppress it below the support
+threshold), never invent a false one.
 
 ## Only one pattern kind is implemented in v1
 
@@ -99,32 +110,39 @@ drops below the gate, the `RepositoryLearning` is simply not
 constructed on the next run. The corpus proves this directly
 (`test_case_invalidation_falls_out_of_live_rederivation`).
 
-## Current-PR application and dedup with N
+## Current-PR application: enrichment only, never a standalone O warning
 
-An active learning applies to the current PR only when its exact
-anchor `(file_path, qualified_name)` is **directly changed** by a
-non-`TEST` `ChangeUnit` -- mirrors N's own `ChangeKind.TEST` exclusion
-exactly, so a test-only PR that merely calls a learned-risky symbol
-never triggers an application.
+**This package never re-derives current-PR relevance on its own.** An
+external-review correction round found the original v1 shape
+independently checked whether a learning's anchor was directly changed
+(its own `ChangeUnit`/`ChangeKind.TEST` walk) and constructed a
+standalone application whenever it was -- making this package a
+*second*, independent historical-regression detector, exactly what it
+must never be. Fixed: `derive_repository_learning_applications` takes
+no `change_units` at all. It only enriches an existing Milestone N
+`PotentialHistoricalRegression` candidate on the *exact* same surface,
+using that candidate's own already-correct current-PR identity. A
+learning whose surface has no current N candidate this run produces
+**no application at all** -- `enriches_historical_regression` is
+mandatory, never optional, and there is no `stands_alone` case in v1.
 
-Every real application is constructed with
-`status = RepositoryLearningApplicationStatus.UNSATISFIED`.
-`SATISFIED`/`INSUFFICIENT_EVIDENCE` are reserved for a future pattern
-kind with a real companion/consumer/test presence check to report
-against -- `REPEATED_SAME_SURFACE_REGRESSION` has no companion target
-to satisfy; the anchor being touched again *is* the entire signal.
-`SATISFIED` is never published as praise/noise.
+This also means every current-relevance rule N itself established (the
+direct-change vs. affected-surface distinction, the `ChangeKind.TEST`
+exclusion, N's own dedup ownership against J/K/L) is inherited for
+free, with nothing duplicated here.
 
-Whenever this package's own precondition holds for an anchor (>= 2
-independent trusted findings), N's own reused query necessarily also
-has a trusted record for that same surface, and N's own matching will
-independently construct its own `SAME_SYMBOL` candidate for it. So in
-practice a real application always has an existing N candidate to
-enrich (`enriches_historical_regression`) -- this package never
-publishes a second, competing warning. The check is not hard-coded to
-assume this, however: it looks for a same-surface N candidate the same
-defensive way N looks for a same-surface J/K/L match, falling back to
-`stands_alone = True` if none is passed in.
+**A real application carries no `status` field at all.**
+"This exact surface has repeatedly produced trusted findings" is
+historical-pattern *evidence*, not an invariant the current PR can
+satisfy or violate -- an earlier v1 shape wrongly modeled it as
+`UNSATISFIED`, which reads as "the current PR fails a requirement." It
+does not; the anchor being touched again *is* the entire signal.
+`RepositoryLearningApplicationStatus` (`SATISFIED`/`UNSATISFIED`/
+`INSUFFICIENT_EVIDENCE`) is kept on the domain module purely for
+forward documentation -- reserved for a genuinely relational future
+pattern kind (anchor -> required companion) with a real presence check
+to evaluate -- and is never referenced by
+`PotentialRepositoryLearningApplication` in v1.
 
 ## Repository isolation, renames/moves, security findings
 
@@ -140,13 +158,11 @@ path.
 **No new table at all** -- one level further than N's own "zero new
 history database": `RepositoryLearning` is never persisted as its own
 row, always re-derived live from data N's query already reads. The
-only new persisted state is five bounded summary columns on
+only new persisted state is two bounded summary *count* columns on
 `review_runs` (migration `0023_repository_learnings`):
 `repository_learning_active_count`,
-`repository_learning_application_count`,
-`repository_learning_summary_rendered`,
-`repository_learning_summary_text` -- the same cross-task-publication
-pattern J/K/L/M/N established.
+`repository_learning_application_count`. No rendered-text column at
+all -- see "Change Story, and no separate summary block" below for why.
 
 ## Review pipeline integration
 
@@ -155,20 +171,33 @@ Computed last, right after Historical Regression Memory, consuming
 `historical_regression_report.candidates` directly -- no second trust
 query. A sixth optional `<repository_learning>` prompt section
 (`REVIEW_PROMPT_VERSION` 8 -> 9), attached only to the exact candidate
-matching a real, active learning application. `REVIEW_POLICY_VERSION`/
-`REVIEW_ENGINE_VERSION`/every prior Intelligence package's own version
-are **not** bumped. No new agent role, no new LLM calls anywhere in
-this package (structurally proven -- no `LLMProvider` import).
+matching a real, active learning application -- bounded evidence
+(pattern kind, category, support count, first/last trusted timestamps)
+attached only to the candidate N's own report already justified.
+`REVIEW_POLICY_VERSION`/`REVIEW_ENGINE_VERSION`/every prior
+Intelligence package's own version are **not** bumped. No new agent
+role, no new LLM calls anywhere in this package (structurally proven
+-- no `LLMProvider` import).
 
-## Change Story and conditional summary
+## Change Story, and no separate summary block
 
 `build_repository_learning_story_prefix` produces at most one bounded
-sentence ("Repository learning: ... has repeatedly produced trusted
-regressions across N independent reviews."), only when a real
-current-PR application exists. The conditional `### Repository
-learning` publication block uses the same eligibility bar. Neither
-ever renders a percentage or gamified badge -- only the plain
-independent-occurrence count.
+sentence ("Repository history: ... has produced trusted findings
+across N independent reviews."), folded into the same combined Change
+Story text every other Intelligence package's own prefix joins, only
+when a real current-PR application exists. Never phrased as an
+invariant violation -- no "unsatisfied," no "missing," no "violates."
+
+**Unlike every prior Intelligence package, there is no standalone
+`### Repository learning` publication block in v1 at all** (no
+`summary.py` module in this package). An external-review correction
+round found that because a real application always enriches an
+existing N candidate on the exact same surface, a second top-level
+section would render immediately next to N's own `### Historical
+context` block about that very surface -- saying, in effect, the same
+thing twice. This package's entire user-facing footprint in v1 is
+therefore the single Change Story addendum above, plus bounded
+per-candidate prompt evidence, plus count-only telemetry.
 
 ## Limitations
 
@@ -176,6 +205,11 @@ independent-occurrence count.
   contract/test-requirement learning kinds are deferred (see above).
 - Rename/move continuity is deferred, inherited from N.
 - Cross-repository / cross-fork memory is deferred, inherited from N.
+- Because a real application requires an existing N candidate, a
+  learning whose surface N does not currently flag (e.g. a symbol only
+  affected, not directly changed, in a way N's own hierarchy doesn't
+  match) never produces an application either -- this package is
+  strictly narrower than N's own current-relevance reach by design.
 - A learning is heuristic evidence, not proof -- an application must
   still survive the existing reviewer/critic pipeline like any other
   piece of evidence before ever influencing a published finding.

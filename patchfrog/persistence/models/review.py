@@ -268,18 +268,18 @@ class ReviewRunModel(Base):
     #: (:mod:`patchfrog.repository_learnings`) run-level summary -- the
     #: bounded output of
     #: :func:`patchfrog.repository_learnings.telemetry.summarize_for_persistence`.
-    #: No separate story text column: the Repository Learning Story
-    #: prefix is folded into ``change_story`` above, exactly like the
-    #: Intent/Test/Historical Story prefixes.
-    #: ``repository_learning_summary_text`` IS a new, dedicated column --
-    #: the conditional Repository Learning block is its own separate
-    #: publication section, not a re-render of an existing one. All
-    #: default to 0/``False``/``None`` -- nullable-safe for rows
-    #: predating this milestone.
+    #: Counts only -- no separate summary/story text column at all:
+    #: this package has no standalone publication block in v1 (it only
+    #: ever enriches an existing Historical Regression Memory candidate
+    #: on the exact same surface, so a second block would duplicate
+    #: ``historical_summary_text`` above for that surface -- see
+    #: ``patchfrog.repository_learnings``'s own ``__init__.py``
+    #: docstring). Its Story addendum is folded into ``change_story``
+    #: above, exactly like the Intent/Test/Historical Story prefixes.
+    #: Both default to 0 -- nullable-safe for rows predating this
+    #: milestone.
     repository_learning_active_count: Mapped[int] = mapped_column(Integer, default=0)
     repository_learning_application_count: Mapped[int] = mapped_column(Integer, default=0)
-    repository_learning_summary_rendered: Mapped[bool] = mapped_column(Boolean, default=False)
-    repository_learning_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ReviewCandidateModel(Base):

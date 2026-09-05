@@ -446,14 +446,17 @@ class HistoricalRegressionMemoryTelemetry:
 class RepositoryLearningsTelemetry:
     """Bounded, privacy-safe counts from
     :mod:`patchfrog.repository_learnings` for one review run.
-    Deliberately counts only -- no learning evidence text, no
-    Repository Learning Story/summary prose (the latter is persisted
-    separately on ``review_runs`` for publication, exactly like
-    ``historical_summary_text`` -- never duplicated here)."""
+    Deliberately counts only -- no learning evidence text. Unlike
+    every prior Intelligence package's own telemetry type, there is no
+    ``*_summary_rendered`` field here at all: this package has no
+    standalone publication block in v1 (it only ever enriches an
+    existing Historical Regression Memory candidate on the same
+    surface -- see ``patchfrog.repository_learnings``'s own
+    ``__init__.py`` docstring), so there is nothing to report as
+    rendered or not."""
 
     repository_learning_active_count: int
     repository_learning_application_count: int
-    repository_learning_summary_rendered: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -560,7 +563,6 @@ class ReviewTelemetrySnapshot:
         default_factory=lambda: RepositoryLearningsTelemetry(
             repository_learning_active_count=0,
             repository_learning_application_count=0,
-            repository_learning_summary_rendered=False,
         )
     )
 

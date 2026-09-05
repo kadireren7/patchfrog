@@ -28,6 +28,7 @@ def evidence_text_for_candidate(report: RepositoryLearningsReport, candidate: Re
     lines: list[str] = []
     for a in relevant[:_MAX_LISTED]:
         lines.append(f"pattern: {a.learning.pattern.pattern_kind.value}")
+        lines.append(f"category: {a.learning.pattern.finding_category.value}")
         lines.append(f"support: {a.learning.support_count} independent trusted findings")
         lines.append(f"evidence: {a.evidence}")
     return "\n".join(lines)

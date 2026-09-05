@@ -320,8 +320,6 @@ class ReviewRunRepository:
             model.repository_learning_application_count = (
                 repository_learnings.repository_learning_application_count
             )
-            model.repository_learning_summary_rendered = repository_learnings.repository_learning_summary_rendered
-            model.repository_learning_summary_text = repository_learnings.repository_learning_summary_text
         model.completed_at = datetime.now(UTC)
         await session.flush()
         return model

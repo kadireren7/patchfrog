@@ -674,18 +674,20 @@ class PullRequestReviewService:
             # Repository Learnings Foundation
             # (patchfrog.repository_learnings): extends Historical
             # Regression Memory, computed last, consuming N's own
-            # already-fetched trusted records directly -- never a
-            # second, duplicate trust query for the same data. See the
-            # package docstring and
-            # validation/repository_learnings/latest-summary.md for why
-            # a *single* trusted historical event (N's own domain) is
+            # already-fetched trusted records *and* N's own
+            # already-computed candidates directly -- never a second,
+            # duplicate trust query, and never a second, independent
+            # current-relevance check (this package takes no
+            # change_units at all; see its own matching.py docstring).
+            # A *single* trusted historical event (N's own domain) is
             # never enough here: this package only ever activates on
             # >= MIN_SUPPORTING_EVENTS independent, distinct-review-run
-            # occurrences on the exact same surface.
+            # occurrences on the exact same (surface, category), and
+            # only ever *enriches* an existing N candidate -- it never
+            # stands alone.
             repository_learnings_report = build_repository_learnings_report(
                 repository_id=repository_id,
                 trusted_records=historical_regression_report.trusted_records_considered,
-                change_units=change_intelligence_report.change_units,
                 historical_candidates=historical_regression_report.candidates,
             )
 

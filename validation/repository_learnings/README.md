@@ -19,9 +19,12 @@ N's own already-fetched `HistoricalRegressionRecord`s
 there is no second trust query, no second temporal model, and
 `patchfrog/repository_learnings/` has no `queries.py` module at all.
 
-**No new table was added** -- only five nullable-default summary
-columns on `review_runs` (migration `0023_repository_learnings`), the
-same pattern every prior Intelligence milestone established.
+**No new table was added** -- only two nullable-default summary *count*
+columns on `review_runs` (migration `0023_repository_learnings`), no
+rendered-text column at all: this package has no standalone
+publication block in v1 (an external-review correction round found
+that one would duplicate Historical Regression Memory's own block for
+the same surface -- see `latest-summary.md` section 9b/16b).
 `RepositoryLearning` itself is never persisted as its own row --
 always re-derived live, per review run, from data N's own query
 already reads.
