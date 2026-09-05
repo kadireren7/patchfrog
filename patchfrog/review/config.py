@@ -98,8 +98,14 @@ CONFIG_SCHEMA_VERSION = 4
 #: section, populated from patchfrog.repository_learnings.evidence only
 #: for the exact candidate that matches a real, repeated (>= 2
 #: independently trusted historical review runs) pattern -- empty for
-#: every other candidate.
-REVIEW_PROMPT_VERSION = 9
+#: every other candidate. Bumped to 10 for Trajectory Intelligence
+#: Foundation: a seventh new optional `<trajectory_intelligence>`
+#: user-prompt section, populated from
+#: patchfrog.trajectory_intelligence.evidence only for the exact
+#: candidate whose surface has undergone repeated structural change
+#: across the current PR's own verified lineage -- empty for every
+#: other candidate.
+REVIEW_PROMPT_VERSION = 10
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final
@@ -133,8 +139,15 @@ REVIEW_ENGINE_VERSION = 3
 #: REVIEW_ENGINE_VERSION/REVIEW_POLICY_VERSION so a future change to only
 #: the tiering thresholds/signals themselves (e.g. adjusting
 #: `_LARGE_CHANGED_SYMBOL_LINES`) can invalidate canonical-run reuse
-#: without needing a broader engine- or policy-version bump.
-QUALITY_COST_POLICY_VERSION = 1
+#: without needing a broader engine- or policy-version bump. Bumped 1 -> 2
+#: for Trajectory Intelligence Foundation: `ReviewEffortPolicy.decide_provisional`
+#: gained a new `trajectory_signal_present` structural signal
+#: (`ReviewEffortReason.TRAJECTORY_SIGNAL_PRESENT`) that can raise the
+#: provisional tier *and* unconditionally force mandatory critic
+#: verification for the exact candidate it applies to -- a real tiering
+#: -policy semantics change, defaulting to `False` (byte-identical
+#: behavior for any run with no trajectory signal).
+QUALITY_COST_POLICY_VERSION = 2
 
 DEFAULT_MAX_CANDIDATES = 40
 DEFAULT_MAX_INPUT_TOKENS_PER_CANDIDATE = 12_000

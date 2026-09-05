@@ -281,6 +281,21 @@ class ReviewRunModel(Base):
     repository_learning_active_count: Mapped[int] = mapped_column(Integer, default=0)
     repository_learning_application_count: Mapped[int] = mapped_column(Integer, default=0)
 
+    #: Trajectory Intelligence Foundation
+    #: (:mod:`patchfrog.trajectory_intelligence`) run-level summary --
+    #: the bounded output of
+    #: :func:`patchfrog.trajectory_intelligence.telemetry.summarize_for_persistence`.
+    #: Counts only -- no story/summary text column at all: this package
+    #: never publishes a standalone user-facing section (spec section
+    #: 21) and its Change Story is never touched either. All default to
+    #: 0 -- nullable-safe for rows predating this milestone.
+    trajectory_head_count: Mapped[int] = mapped_column(Integer, default=0)
+    trajectory_event_count: Mapped[int] = mapped_column(Integer, default=0)
+    trajectory_signal_count: Mapped[int] = mapped_column(Integer, default=0)
+    trajectory_repeated_surface_churn_count: Mapped[int] = mapped_column(Integer, default=0)
+    trajectory_require_critic_count: Mapped[int] = mapped_column(Integer, default=0)
+    trajectory_deepen_context_count: Mapped[int] = mapped_column(Integer, default=0)
+
 
 class ReviewCandidateModel(Base):
     """One symbol- (or module-region-) centered candidate considered for

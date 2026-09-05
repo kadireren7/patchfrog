@@ -350,3 +350,53 @@ def test_effort_decision_never_carries_provider_model_or_credentials() -> None:
         "tier", "reasons", "selected_roles", "context_token_fraction", "context_adaptive_enabled",
         "critic_expectation", "retry_limit", "per_role_output_token_fraction", "escalated", "escalation_reason",
     }
+
+
+# -- Trajectory Intelligence integration (Milestone P) ----------------------
+
+
+def test_trajectory_signal_absent_by_default_is_byte_identical() -> None:
+    """A run with no trajectory signal at all (the default) behaves
+    exactly as before this milestone -- no reason, no tier change."""
+
+    decision = _decide(_candidate())
+    assert decision.tier is ReviewEffortTier.LIGHT
+    assert ReviewEffortReason.TRAJECTORY_SIGNAL_PRESENT not in decision.reasons
+    assert decision.critic_expectation is CriticExpectation.OPTIONAL
+
+
+def test_trajectory_signal_present_escalates_light_to_standard_and_forces_mandatory_critic() -> None:
+    decision = _POLICY.decide_provisional(
+        _candidate(), static_findings=(), max_retries=_MAX_RETRIES, trajectory_signal_present=True
+    )
+    assert decision.tier is ReviewEffortTier.STANDARD
+    assert ReviewEffortReason.TRAJECTORY_SIGNAL_PRESENT in decision.reasons
+    assert decision.critic_expectation is CriticExpectation.MANDATORY
+
+
+def test_trajectory_signal_combines_with_another_signal_toward_deep() -> None:
+    """Trajectory contributes to the existing MULTIPLE_STRUCTURAL_SIGNALS
+    corroboration rule exactly like any other structural signal -- never
+    a separate escalation path."""
+
+    decision = _POLICY.decide_provisional(
+        _candidate(), static_findings=(_static_finding(category=FindingCategory.PERFORMANCE),),
+        max_retries=_MAX_RETRIES, trajectory_signal_present=True,
+    )
+    assert decision.tier is ReviewEffortTier.DEEP
+    assert ReviewEffortReason.MULTIPLE_STRUCTURAL_SIGNALS in decision.reasons
+    assert decision.critic_expectation is CriticExpectation.MANDATORY
+
+
+def test_trajectory_signal_forces_mandatory_critic_even_at_deep() -> None:
+    """A candidate already DEEP for an unrelated reason (e.g. a real
+    security signal) still gets MANDATORY critic either way -- the
+    override is never a downgrade, just confirms the invariant holds
+    when both paths agree."""
+
+    decision = _POLICY.decide_provisional(
+        _candidate(), static_findings=(_static_finding(category=FindingCategory.SECURITY, severity=Severity.HIGH),),
+        max_retries=_MAX_RETRIES, trajectory_signal_present=True,
+    )
+    assert decision.tier is ReviewEffortTier.DEEP
+    assert decision.critic_expectation is CriticExpectation.MANDATORY

@@ -19,6 +19,7 @@ from patchfrog.review.domain import ReviewRunStatus
 from patchfrog.review.effort_types import ReviewEffortTier
 from patchfrog.review_memory.config import NO_MEMORY_CONTEXT_FINGERPRINT
 from patchfrog.test_intelligence.telemetry import TestIntelligenceSummary
+from patchfrog.trajectory_intelligence.telemetry import TrajectoryIntelligenceSummary
 
 
 class ReviewRunRepository:
@@ -217,6 +218,7 @@ class ReviewRunRepository:
         test_intelligence: TestIntelligenceSummary | None = None,
         historical_regression_memory: HistoricalRegressionMemorySummary | None = None,
         repository_learnings: RepositoryLearningsSummary | None = None,
+        trajectory_intelligence: TrajectoryIntelligenceSummary | None = None,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -320,6 +322,13 @@ class ReviewRunRepository:
             model.repository_learning_application_count = (
                 repository_learnings.repository_learning_application_count
             )
+        if trajectory_intelligence is not None:
+            model.trajectory_head_count = trajectory_intelligence.trajectory_head_count
+            model.trajectory_event_count = trajectory_intelligence.trajectory_event_count
+            model.trajectory_signal_count = trajectory_intelligence.trajectory_signal_count
+            model.trajectory_repeated_surface_churn_count = trajectory_intelligence.repeated_surface_churn_count
+            model.trajectory_require_critic_count = trajectory_intelligence.trajectory_require_critic_count
+            model.trajectory_deepen_context_count = trajectory_intelligence.trajectory_deepen_context_count
         model.completed_at = datetime.now(UTC)
         await session.flush()
         return model

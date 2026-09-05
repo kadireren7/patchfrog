@@ -73,3 +73,9 @@ class CandidateEvidencePackage:
     #: ``intent_verification_text``/``test_intelligence_text``/
     #: ``historical_regression_text`` above.
     repository_learning_text: str = ""
+    #: Bounded (see :mod:`patchfrog.trajectory_intelligence.evidence`)
+    #: evidence from Trajectory Intelligence -- empty string unless this
+    #: exact candidate's surface has undergone repeated structural
+    #: change across the current PR's own verified lineage. Same size
+    #: discipline as every other Intelligence text field above.
+    trajectory_intelligence_text: str = ""

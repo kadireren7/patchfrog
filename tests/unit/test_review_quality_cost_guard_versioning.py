@@ -46,7 +46,14 @@ def test_review_engine_version_bumped_for_tiered_execution() -> None:
 
 
 def test_quality_cost_policy_version_introduced() -> None:
-    assert QUALITY_COST_POLICY_VERSION == 1
+    """Introduced at 1 by this milestone. A later milestone (Trajectory
+    Intelligence) legitimately bumped it again for an unrelated reason
+    (see tests/unit/test_trajectory_intelligence_versioning.py) -- this
+    only pins that it was never *removed* or reset below its introduction
+    value, mirroring the ``>``-based pattern every ever-incrementing
+    version constant in this codebase already uses."""
+
+    assert QUALITY_COST_POLICY_VERSION >= 1
 
 
 def test_pre_guard_model_identity_never_reused_post_guard() -> None:

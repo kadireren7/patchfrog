@@ -35,6 +35,13 @@ class ReviewEffortReason(StrEnum):
     LARGE_CHANGED_SYMBOL = "large_changed_symbol"
     MANY_CHANGED_LINES = "many_changed_lines"
     MULTIPLE_STRUCTURAL_SIGNALS = "multiple_structural_signals"
+    #: Trajectory Intelligence (:mod:`patchfrog.trajectory_intelligence`)
+    #: found this exact candidate's surface has undergone repeated
+    #: structural change across the current PR's own verified lineage
+    #: (``TrajectoryReviewHint.REQUIRE_CRITIC``) -- counted as a
+    #: structural signal exactly like every other reason above, never a
+    #: separate escalation path. Trajectory evidence, never a finding.
+    TRAJECTORY_SIGNAL_PRESENT = "trajectory_signal_present"
     #: Escalation-only: the provisional tier was raised *before* any
     #: specialist provider call because adaptive context expansion
     #: actually occurred (see
