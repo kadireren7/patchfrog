@@ -52,3 +52,9 @@ class CandidateEvidencePackage:
     #: sufficiently-explicit intent claim. Same size discipline as
     #: ``change_intelligence_text``/``contract_intelligence_text`` above.
     intent_verification_text: str = ""
+    #: Bounded (see :mod:`patchfrog.test_intelligence.evidence`) evidence
+    #: from Test Intelligence -- empty string unless this exact candidate
+    #: is the source file of a real, structurally-detected test gap. Same
+    #: size discipline as ``change_intelligence_text``/
+    #: ``contract_intelligence_text``/``intent_verification_text`` above.
+    test_intelligence_text: str = ""

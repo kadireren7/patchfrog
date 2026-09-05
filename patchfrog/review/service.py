@@ -98,6 +98,15 @@ from patchfrog.review.effort_types import ReviewEffortTier
 from patchfrog.review.orchestration import CRITIC_BUDGET_EXHAUSTED, AgentOrchestrator
 from patchfrog.review.provider import LLMProvider
 from patchfrog.review.redaction import redact_secrets
+from patchfrog.test_intelligence.domain import TestIntelligenceReport
+from patchfrog.test_intelligence.evidence import (
+    evidence_text_for_candidate as test_evidence_text_for_candidate,
+)
+from patchfrog.test_intelligence.service import build_test_intelligence_report
+from patchfrog.test_intelligence.story import build_test_story_prefix
+from patchfrog.test_intelligence.telemetry import (
+    summarize_for_persistence as summarize_test_intelligence,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -606,20 +615,40 @@ class PullRequestReviewService:
                 expected_companions=combined_companions,
             )
 
-            # Fold the Contract Story addendum and the Intent Story
-            # prefix into the existing Change Story text, and (only when
-            # there's real contract stale-consumer evidence to add)
-            # re-render the *same* Change Map with the combined companion
-            # set -- never a second diagram system (spec section 10). See
-            # docs/contract-intelligence.md / docs/intent-verification.md.
+            # Test Intelligence Foundation (patchfrog.test_intelligence):
+            # extends Change Intelligence, computed right after Intent
+            # Verification, consuming the already-built ChangeUnits/
+            # ExpectedCompanionChanges and the PR's own already-parsed
+            # diff_files directly -- no repository-graph query of its
+            # own, no DB session needed (see the package docstring).
+            test_intelligence_report = build_test_intelligence_report(
+                change_units=change_intelligence_report.change_units,
+                expected_companions=combined_companions,
+                diff_files=tuple(diff_files),
+            )
+
+            # Fold the Contract Story addendum, the Intent Story prefix,
+            # and the Test Story prefix into the existing Change Story
+            # text, and (only when there's real contract stale-consumer
+            # evidence to add) re-render the *same* Change Map with the
+            # combined companion set -- never a second diagram system
+            # (spec section 10). See docs/contract-intelligence.md /
+            # docs/intent-verification.md / docs/test-intelligence.md.
             intent_prefix = build_intent_story_prefix(intent_verification_report.claims)
-            if contract_intelligence_report.contract_story or contract_intelligence_report.stale_consumers or intent_prefix:
+            test_prefix = build_test_story_prefix(test_intelligence_report.gaps)
+            if (
+                contract_intelligence_report.contract_story
+                or contract_intelligence_report.stale_consumers
+                or intent_prefix
+                or test_prefix
+            ):
                 combined_story = " ".join(
                     s
                     for s in (
                         intent_prefix,
                         change_intelligence_report.change_story,
                         contract_intelligence_report.contract_story,
+                        test_prefix,
                     )
                     if s
                 )
@@ -677,6 +706,7 @@ class PullRequestReviewService:
                     change_intelligence_report=change_intelligence_report,
                     contract_intelligence_report=contract_intelligence_report,
                     intent_verification_report=intent_verification_report,
+                    test_intelligence_report=test_intelligence_report,
                 )
 
         await asyncio.gather(*(_process(o) for o in outcomes))
@@ -922,6 +952,7 @@ class PullRequestReviewService:
                 change_intelligence=summarize_change_intelligence(change_intelligence_report),
                 contract_intelligence=summarize_contract_intelligence(contract_intelligence_report),
                 intent_verification=summarize_intent_verification(intent_verification_report),
+                test_intelligence=summarize_test_intelligence(test_intelligence_report),
             )
             await session.commit()
 
@@ -979,6 +1010,7 @@ class PullRequestReviewService:
         change_intelligence_report: ChangeIntelligenceReport,
         contract_intelligence_report: ContractIntelligenceReport,
         intent_verification_report: IntentVerificationReport,
+        test_intelligence_report: TestIntelligenceReport,
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
@@ -1075,6 +1107,7 @@ class PullRequestReviewService:
                 contract_intelligence_report, candidate
             ),
             intent_verification_text=intent_evidence_text_for_candidate(intent_verification_report, candidate),
+            test_intelligence_text=test_evidence_text_for_candidate(test_intelligence_report, candidate),
         )
 
         # Stage 2: finalize the effort decision now that the context

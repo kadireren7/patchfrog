@@ -84,7 +84,12 @@ CONFIG_SCHEMA_VERSION = 4
 #: that is part of a mapped ChangeUnit for a real, sufficiently-explicit
 #: intent claim -- empty for every other candidate (including every
 #: candidate on a PR with no usable PR title/body intent at all).
-REVIEW_PROMPT_VERSION = 6
+#: Bumped to 7 for Test Intelligence Foundation: a fourth new optional
+#: `<test_intelligence>` user-prompt section, populated from
+#: patchfrog.test_intelligence.evidence only for the exact candidate
+#: that is the source file of a real, structurally-detected test gap --
+#: empty for every other candidate.
+REVIEW_PROMPT_VERSION = 7
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final

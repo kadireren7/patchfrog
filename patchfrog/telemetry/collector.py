@@ -64,6 +64,7 @@ from patchfrog.telemetry.domain import (
     ProviderTelemetry,
     ReviewFeedbackEventTelemetry,
     ReviewTelemetrySnapshot,
+    TestIntelligenceTelemetry,
     classify_lifecycle_outcome,
 )
 
@@ -346,6 +347,14 @@ async def collect_review_telemetry(
         intent_coverage_summary_rendered=run.intent_coverage_summary_rendered,
     )
 
+    test_reason_code_counts_raw = _load_json_dict(run.test_reason_code_counts)
+    test_intelligence = TestIntelligenceTelemetry(
+        test_expectation_count=run.test_expectation_count,
+        test_reason_code_counts=tuple(sorted(test_reason_code_counts_raw.items())),
+        test_gap_candidate_count=run.test_gap_candidate_count,
+        test_coverage_summary_rendered=run.test_coverage_summary_rendered,
+    )
+
     return ReviewTelemetrySnapshot(
         schema_version=TELEMETRY_SCHEMA_VERSION,
         review_run_id=run.id,
@@ -370,4 +379,5 @@ async def collect_review_telemetry(
         change_intelligence=change_intelligence,
         contract_intelligence=contract_intelligence,
         intent_verification=intent_verification,
+        test_intelligence=test_intelligence,
     )
