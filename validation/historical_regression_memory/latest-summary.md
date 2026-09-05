@@ -81,10 +81,11 @@ sound SQL predicate: `explicit_false_positive = 0 AND explicit_ignore
 ### Is there enough data for same-symbol / same-file recurrence?
 
 Yes for same-symbol (exact `(file_path, qualified_name)` match, see
-above). Same-file recurrence is likewise directly queryable
-(`file_path` alone) but is explicitly the *weakest* tier in the
-matching hierarchy (section 5) precisely because `qualified_name`
-carries no confirmation the specific old symbol still exists.
+above). Same-file-alone recurrence is likewise directly queryable, but
+**a correction round concluded it is too weak to ever independently
+seed a candidate** -- see section 5 and the correction narrative in
+section 13b: v1 never constructs a bare same-file match at all
+(precision over taxonomy coverage).
 
 ### Can related-surface recurrence use the repository graph safely?
 
@@ -122,14 +123,16 @@ calls -- reusing J/K/L exactly as spec section 4 requires.
 It doesn't touch Phase 7's `review_memory_findings`/
 `review_memory_transitions` tables at all (those are PR-scoped
 incremental-review carry-forward state, a different concern). Instead
-it reuses Phase 9's `feedback_assessments` (trust) joined with the
-existing `ai_findings`/`review_candidates`/`review_runs` chain
-(surface identity + repository/commit anchoring) -- **zero new
-tables**. The only new persistence is five nullable-default summary
-columns on `review_runs` (migration `0022_historical_regression_memory`),
-exactly mirroring J/K/L/M's own `change_story`-adjacent persistence
-pattern, needed because publication runs as a separate,
-independently-retriable Celery task from review generation.
+it reuses Phase 9's raw `feedback_events` (trust, computed point-in-time
+-- see the correction in section 13b for why the *persisted*
+`feedback_assessments` snapshot is the wrong source) joined with the
+existing `ai_findings`/`review_candidates`/`review_runs` chain (surface
+identity + repository/commit anchoring) -- **zero new tables**. The
+only new persistence is five nullable-default summary columns on
+`review_runs` (migration `0022_historical_regression`), exactly
+mirroring J/K/L/M's own `change_story`-adjacent persistence pattern,
+needed because publication runs as a separate, independently-retriable
+Celery task from review generation.
 
 ## 2. Historical evidence trust model
 
@@ -176,7 +179,10 @@ HistoricalRegressionRecord:
 `bounded_evidence_fingerprint` is a short, already-bounded string (the
 finding's own `title`, truncated -- never `message`/`reasoning_summary`/
 `suggested_fix`/`impact`/raw evidence quotes). No raw source body, no
-hidden reasoning, no full historical finding prose.
+hidden reasoning, no full historical finding prose. `observed_at`
+holds the point-in-time-computed `trusted_at` (the earliest qualifying
+`fixed`/`useful` event's own `occurred_at`, per section 9/13b) -- not
+the finding's `created_at` and not the assessment row's `computed_at`.
 
 ## 4. Current surface pool (reused, not re-derived)
 
@@ -207,18 +213,20 @@ enrichment, never a separate match path.
    of the files directly touched this PR -- the historical symbol is
    present (as context/affected, not itself edited) in a file that
    *is* being changed.
-3. **`SAME_FILE`**: the historical `file_path` is one of the files
-   *directly changed* this PR, but no pool entry matches its
-   `qualified_name` at all. Deliberately the weakest tier -- required
-   extra evidence (spec section 9) is satisfied by construction: this
-   tier only ever fires for a file with a real edit in it this PR
-   (never a merely-affected-but-untouched file), which is itself the
-   "additional evidence" beyond bare file identity.
-4. **`GRAPH_RELATED_SURFACE`**: exact match against a pool entry with
+3. **`GRAPH_RELATED_SURFACE`**: exact match against a pool entry with
    `is_directly_changed=False` whose `file_path` is **not** one of the
    files directly touched this PR -- reached purely through J/K/L's own
    real graph relation (a call edge, a blast-radius edge, an intent-gap
    surface), never a new traversal.
+
+**`SAME_FILE` is never constructed in v1** -- see the correction round
+in section 13b. It remains defined on `HistoricalMatchKind` (and
+`PREVIOUS_FIXED_FINDING_SAME_FILE` on `HistoricalRegressionReasonCode`)
+for forward documentation only. Every real match above requires an
+*exact* `(file_path, qualified_name)` hit against the current surface
+pool -- a file matching alone, with no symbol identity confirmed, is
+never enough (spec's own correction: "the safe fallback is: SAME_FILE
+-> no candidate").
 
 No embeddings, no fuzzy matching, no NLP over old finding prose
 anywhere in this hierarchy.
@@ -229,14 +237,10 @@ anywhere in this hierarchy.
 |---|---|---|
 | SAME_SYMBOL / SAME_QUALIFIED_NAME_IN_SAME_FILE | CONFIRMED_FIXED | `PREVIOUS_FIXED_FINDING_SAME_SYMBOL` |
 | SAME_SYMBOL / SAME_QUALIFIED_NAME_IN_SAME_FILE | CONFIRMED_USEFUL | `PREVIOUS_USEFUL_FINDING_SAME_SYMBOL` |
-| SAME_FILE | CONFIRMED_FIXED | `PREVIOUS_FIXED_FINDING_SAME_FILE` |
 | GRAPH_RELATED_SURFACE | either | `PREVIOUS_REGRESSION_RELATED_SURFACE` |
 
-`SAME_FILE` deliberately requires `CONFIRMED_FIXED` specifically --
-never `CONFIRMED_USEFUL` alone at this weakest tier (an additional,
-deliberate conservatism beyond the spec's minimum: a merely-"useful"
-finding matched only at file granularity is too weak to surface at
-all).
+`PREVIOUS_FIXED_FINDING_SAME_FILE` has no live mapping -- it is never
+produced (see above).
 
 ## 7. Dedup ownership vs J/K/L/M (spec section 16)
 
@@ -259,27 +263,46 @@ equality filter -- there is no code path that can compare across
 repositories. Same `qualified_name` in a different repository never
 matches (see the corpus's mandatory isolation test).
 
-## 9. Temporal leakage protection
+## 9. Temporal leakage protection (corrected -- see section 13b)
 
-The trust query only ever reads `FeedbackAssessmentModel` rows that
-already exist *at query time* -- there is no in-memory shortcut that
-lets one review run's own newly-created finding immediately count as
-its own historical evidence. The controlled corpus stages this
-explicitly as three real, separate steps (T1: historical review
-produces a finding; T2: a real feedback event + a real
-`recompute_and_persist_all` establishes trust; T3: a later, independent
-current review is built against real historical records fetched from
-the database) -- never a hand-constructed `HistoricalRegressionRecord`
-standing in for what should have been a real DB round trip.
+**Point-in-time, not "current state."** Trust is computed strictly
+from `feedback_events` rows with `occurred_at <= as_of` -- never from
+the persisted `feedback_assessments` snapshot, which reflects trust
+*now* (whenever the row was last recomputed), not trust as of the
+current review's own temporal boundary. `as_of` is always the current
+review run's own persisted `started_at` (see
+`patchfrog.review.service`'s integration point) -- reproducible for a
+given review run, never a fresh wall-clock read that would differ
+across retries or a later backfill/replay of the same historical
+point.
+
+The controlled corpus proves this two ways: (1) the original
+before/after-trust-exists case (T1 finding exists with zero feedback
+rows at all; T2 a real feedback event + recompute; query before vs.
+after), and (2) the *true* temporal-leakage proof added during
+correction (T1 finding exists; T2 a current review's `as_of` boundary
+is captured and evaluated -- zero candidates; T3, strictly after T2, a
+real `/patchfrog fixed` event is recorded; **replaying the exact same
+T2 `as_of` boundary again** -- still zero candidates, proving a row
+that now exists but is dated after the boundary does not leak
+backwards; only a genuinely later `as_of`, captured after T3, sees it).
+Never a hand-constructed `HistoricalRegressionRecord` standing in for
+what should be a real DB round trip.
 
 ## 10. Query bounds
 
 - `MAX_HISTORICAL_LOOKBACK_ROWS` -- the single bounded SQL query (one
-  per review run, `WHERE repository_id = ? AND assessment_version = ?
-  AND (explicit_fixed > 0 OR explicit_useful > 0) AND
-  explicit_false_positive = 0 AND explicit_ignore = 0`, ordered by
-  strength then recency then id) never returns more than this many
-  rows -- no per-surface query loop, no N+1.
+  per review run) groups `feedback_events` rows
+  (`event_type=EXPLICIT_COMMAND`, `repository_id = ?`,
+  `occurred_at <= as_of`) by `finding_id`, computing
+  `fixed_count`/`useful_count`/`false_positive_count`/`ignore_count`/
+  `trusted_at` (`MIN(occurred_at)` over qualifying rows) via portable
+  `SUM(CASE ...)`/`MIN(CASE ...)` aggregation (no dialect-specific
+  `FILTER` clause), then a `HAVING` clause applies the eligibility
+  predicate before ever joining to `ai_findings`/`review_candidates`/
+  `review_runs`. Ordered by strength then most-recently-trusted then
+  id; never returns more than this many rows -- no per-surface query
+  loop, no N+1.
 - `MAX_HISTORICAL_RECORDS_PER_SURFACE` -- at most this many historical
   records considered per matched current surface.
 - `MAX_HISTORICAL_REGRESSION_CANDIDATES` -- bounds the final candidate
@@ -299,7 +322,7 @@ the one bounded trust query; zero LLM calls anywhere in the package.
 
 ## 12. Persistence decision
 
-No new table. Migration `0022_historical_regression_memory` adds five
+No new table. Migration `0022_historical_regression` adds five
 nullable-default columns to `review_runs`:
 `historical_trusted_record_count`, `historical_match_kind_counts`,
 `historical_regression_candidate_count`,
@@ -337,6 +360,52 @@ diffing head B against head A's own SHA, correctly modeling "a fresh,
 independent PR starts from here," not a cumulative diff against
 ancient history.
 
+## 13b. External-review correction round: SAME_FILE was too permissive, and temporal isolation was incomplete
+
+Two real semantic gaps were found by external review before merge,
+both fixed:
+
+**1. `SAME_FILE` independently created a candidate for a genuinely
+unrelated symbol.** The original design let a `CONFIRMED_FIXED`
+historical finding on symbol A become a candidate whenever the *file*
+containing it was touched this PR, even when the actual edit was to a
+completely different symbol B in the same file (e.g. a historical bug
+in `apply_tax` "recurring" merely because `apply_discount`, an
+unrelated function in the same file, changed). This violates the
+spec's own "same file alone is weak... otherwise defer" requirement.
+Fixed by removing `SAME_FILE` from ever being constructed at all (spec
+section 3's explicit fallback: "the safe fallback is: SAME_FILE -> no
+candidate") -- `_match_kind_for` now returns `None` whenever no *exact*
+`(file_path, qualified_name)` match exists in the current surface
+pool, full stop. `HistoricalMatchKind.SAME_FILE`/
+`HistoricalRegressionReasonCode.PREVIOUS_FIXED_FINDING_SAME_FILE`
+remain on their enums for forward documentation, never produced. This
+also automatically fixed a second, related concern (rename/move
+falling back to `SAME_FILE` noise): with `SAME_FILE` gone entirely, a
+renamed symbol now correctly produces zero candidates rather than a
+weaker-but-still-fabricated fallback.
+
+**2. The temporal model checked `finding.created_at`/row-existence,
+never the actual moment trust was established.** The original query
+joined the *persisted* `feedback_assessments` snapshot -- a table that
+reflects trust *as of whenever it was last recomputed*, not as of any
+particular current review's own point in time. This under-proves
+temporal isolation: it correctly hides a finding with *no* feedback
+row at all yet, but says nothing about whether a row that *does*
+exist, dated after a given review's own boundary, would incorrectly
+leak into a replay of that earlier review (e.g. a backfill run).
+Fixed by re-deriving trust directly from raw `feedback_events` rows
+filtered to `occurred_at <= as_of` in the bounded SQL query itself
+(see section 10), where `as_of` is threaded from the real review
+pipeline's own persisted `ReviewRunModel.started_at` (never a fresh
+wall-clock read -- reproducible for a given review run, see
+`patchfrog.review.service`'s integration point). A new, stronger
+corpus case (`test_case_true_temporal_leakage_replay_never_sees_future_trust`)
+proves this directly: captures a review boundary, confirms zero
+candidates, records a real `/patchfrog fixed` event *after* that
+boundary, replays the *exact same* boundary and confirms it is still
+zero, then confirms a genuinely later boundary does see it.
+
 ## 13. What is explicitly out of scope / deferred (never faked)
 
 - Rename/move historical continuity (see above).
@@ -350,7 +419,7 @@ ancient history.
 - Matching solely on `FindingCategory` (never a substitute for surface
   evidence, per spec section 29).
 
-## 14. Corpus results (20 behavioral scenarios)
+## 14. Corpus results (21 behavioral scenarios, post-correction)
 
 All cases stage real T1 (historical finding persisted via real
 `ReviewRunModel`/`ReviewCandidateModel`/`AIFindingProposalModel`/
@@ -368,23 +437,24 @@ DB round trip.
 | 3 | Prior finding later marked FALSE_POSITIVE (even alongside an earlier USEFUL) | 0 records, 0 candidates |
 | 4 | Prior finding later marked IGNORE (even alongside an earlier FIXED) | 0 candidates |
 | 5 | Same qualified name, different repository | 0 records, 0 candidates (isolation) |
-| 6 | Same file, unrelated symbol | `SAME_FILE`, only with `CONFIRMED_FIXED` |
+| 6 | Same file, unrelated symbol (**corrected**) | 0 candidates -- `SAME_FILE` never fires |
 | 7 | Historical record exists, current risky surface untouched | 0 candidates |
 | 8 | Head A candidate exists; Head B (fresh incremental base) fixes the surface | candidate disappears |
 | 9 | Old finding with zero feedback | 0 candidates (never recomputed, no trust row at all) |
-| 10 | Temporal leakage: before T2 vs. after T2 | invisible, then visible |
+| 10 | Temporal leakage: before any feedback row exists vs. after | invisible, then visible |
+| 10a | **True temporal-leakage replay** (new): boundary captured, feedback recorded *after*, exact same boundary replayed | still invisible; only a later boundary sees it |
 | 11 | Prior fixed finding on a contract consumer; real K stale consumer exists | enriches K's own candidate, no duplicate |
 | 12 | Docs-only change | 0 candidates |
 | 13 | Test-only PR (test calls a historically-risky production symbol) | 0 candidates (TEST-kind units excluded) |
 | 14 | Historical SECURITY finding, same surface | candidate, same trust rules, no special weighting |
 | 15 | 6 trusted findings on the same surface | bounded to `MAX_HISTORICAL_RECORDS_PER_SURFACE` (3) |
 | 16 | 30 historical findings across the repository | bounded SQL fetch (`limit=10` respected exactly) |
-| 17 | Symbol renamed since the historical finding | never a false `SAME_SYMBOL`; falls back conservatively |
+| 17 | Symbol renamed since the historical finding (**corrected**) | 0 candidates -- no `SAME_SYMBOL`, no `SAME_FILE` fallback |
 | 18 | Real `review_local` pipeline run | persisted correctly on `ReviewRunModel` |
 | 19 | Telemetry/versioning round trip on a real report | version + counts correct |
 | 20 | Structural: no `LLMProvider` import anywhere in the package | proven via AST scan |
 
-## 15. Gates (final)
+## 15. Gates (final, post-correction)
 
 - `ruff check .`: clean, whole repo.
 - `mypy . --strict`: clean, whole repo.

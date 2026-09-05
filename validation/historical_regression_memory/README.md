@@ -15,11 +15,13 @@ call, no live Gemini call, no OpenAI call, and no Cloud/dashboard work
 were required or performed for this milestone.
 
 **No new history database was added** -- the one bounded SQL query this
-milestone issues reuses Phase 9's own `feedback_assessments` table
-joined with the existing `ai_findings`/`review_candidates`/`review_runs`
-chain. Only five nullable-default summary columns were added to
-`review_runs` (migration `0022_historical_regression`), the same
-pattern every prior Intelligence milestone established.
+milestone issues reuses Phase 9's own raw `feedback_events` table
+(aggregated point-in-time, never the persisted `feedback_assessments`
+snapshot -- see `latest-summary.md` section 13b for why) joined with
+the existing `ai_findings`/`review_candidates`/`review_runs` chain.
+Only five nullable-default summary columns were added to `review_runs`
+(migration `0022_historical_regression`), the same pattern every prior
+Intelligence milestone established.
 
 Ground truth for the controlled corpus
 (`tests/integration/test_historical_regression_memory_corpus.py`) is

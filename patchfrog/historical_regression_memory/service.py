@@ -16,6 +16,7 @@ calls.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,13 +37,21 @@ async def build_historical_regression_report(
     session: AsyncSession,
     *,
     repository_id: uuid.UUID,
+    as_of: datetime,
     change_units: tuple[ChangeUnit, ...] = (),
     contract_deltas: tuple[ContractDelta, ...] = (),
     intent_gaps: tuple[PotentialIntentGap, ...] = (),
     test_gaps: tuple[PotentialTestGap, ...] = (),
     expected_companions: tuple[ExpectedCompanionChange, ...] = (),
 ) -> HistoricalRegressionReport:
-    trusted_records = await fetch_trusted_historical_records(session, repository_id=repository_id)
+    """``as_of`` is the current review run's own temporal boundary --
+    always its persisted ``started_at`` (see
+    :mod:`patchfrog.review.service`'s integration point), never a fresh
+    wall-clock read. Historical trust is computed strictly as of that
+    point in time (see :mod:`patchfrog.historical_regression_memory.queries`'s
+    own docstring for why) -- reproducible for a given review run."""
+
+    trusted_records = await fetch_trusted_historical_records(session, repository_id=repository_id, as_of=as_of)
     if not trusted_records:
         return HistoricalRegressionReport(
             version=HISTORICAL_REGRESSION_MEMORY_VERSION, trusted_records_considered=(), candidates=(),

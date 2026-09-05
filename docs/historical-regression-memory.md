@@ -50,18 +50,21 @@ commands above ever seed memory.
 2. **`SAME_QUALIFIED_NAME_IN_SAME_FILE`** -- the exact historical
    symbol is present (affected, not itself edited) in a file that
    *is* being changed this PR.
-3. **`SAME_FILE`** -- the historical file is directly changed this PR,
-   but no current symbol matches the historical `qualified_name` at
-   all. The weakest tier -- requires the file to have a real edit in
-   it (never a merely-affected-but-untouched file), and only ever
-   fires for `CONFIRMED_FIXED` evidence, never `CONFIRMED_USEFUL`
-   alone (a deliberate extra conservatism beyond the spec's minimum).
-4. **`GRAPH_RELATED_SURFACE`** -- the exact historical symbol appears
+3. **`GRAPH_RELATED_SURFACE`** -- the exact historical symbol appears
    in the current review's own already-computed graph-connected
    surface (J's `affected_surface`, K's `blast_radius`, L's
    `expected_surface`) at a file that was **not** itself directly
    touched this PR -- reached purely through a real call/dependency
    edge, never a new traversal.
+
+**`SAME_FILE` is never constructed in v1** -- a correction round found
+that "the historical file was touched" alone is too weak (it let a
+finding on symbol A "recur" merely because an unrelated symbol B in
+the same file changed). It remains defined on `HistoricalMatchKind`
+(and `PREVIOUS_FIXED_FINDING_SAME_FILE` on
+`HistoricalRegressionReasonCode`) for forward documentation only.
+Every real match requires an *exact* `(file_path, qualified_name)` hit
+against the current surface pool.
 
 **A `TEST`-kind `ChangeUnit` (every candidate in it lives in a test
 file) never contributes anything to matching** -- neither its changed
@@ -79,8 +82,9 @@ BEHAVIOR-only conservatism.
 |---|---|---|
 | SAME_SYMBOL / SAME_QUALIFIED_NAME_IN_SAME_FILE | CONFIRMED_FIXED | `PREVIOUS_FIXED_FINDING_SAME_SYMBOL` |
 | SAME_SYMBOL / SAME_QUALIFIED_NAME_IN_SAME_FILE | CONFIRMED_USEFUL | `PREVIOUS_USEFUL_FINDING_SAME_SYMBOL` |
-| SAME_FILE | CONFIRMED_FIXED | `PREVIOUS_FIXED_FINDING_SAME_FILE` |
 | GRAPH_RELATED_SURFACE | either | `PREVIOUS_REGRESSION_RELATED_SURFACE` |
+
+`PREVIOUS_FIXED_FINDING_SAME_FILE` has no live mapping -- never produced.
 
 ## Same-symbol identity: why not `symbol_id`
 
@@ -100,9 +104,9 @@ solves rename/move detection via `content_hash`, but only between two
 chain -- content hashes for a historical symbol from an arbitrary
 distance back are not retained anywhere accessible for this purpose.
 A symbol renamed or moved since its historical finding is invisible to
-this milestone (it may still surface via the weaker `SAME_FILE` tier
-if the file itself is directly touched) -- documented, never guessed
-at.
+this milestone -- produces zero candidates (no `SAME_SYMBOL` match, and
+no `SAME_FILE` fallback either, since that tier is never constructed at
+all -- see the match hierarchy above) -- documented, never guessed at.
 
 ## J/K/L/M integration and dedup ownership
 
@@ -132,14 +136,22 @@ there is no code path that compares across repositories. Same
 
 ## Temporal leakage protection
 
-The trust query only ever reads `feedback_assessments` rows that
-already exist at query time. The controlled corpus stages this as
-three real, separate steps: T1 (a historical finding exists), T2 (a
-real feedback event + a real `recompute_and_persist_all` establishes
-trust), T3 (a later, independent current review fetches historical
-records fresh from the database) -- never a hand-constructed
-`HistoricalRegressionRecord` standing in for what should be a real
-round trip.
+Trust is computed **point-in-time**, not from current state: the query
+reads raw `feedback_events` rows with `occurred_at <= as_of` only --
+never the persisted `feedback_assessments` snapshot, which reflects
+trust *now*, whenever it was last recomputed, not as of any particular
+review's own boundary. `as_of` is always the current review run's own
+persisted `started_at` -- reproducible for a given review run, never a
+fresh wall-clock read.
+
+The controlled corpus proves this with a real replay: a review
+boundary is captured, a real `/patchfrog fixed` event is then recorded
+*strictly after* that boundary, and replaying the *exact same* boundary
+again still produces zero candidates -- the row now exists in the
+database but is correctly excluded because it is dated after the
+point being evaluated. Only a genuinely later boundary, captured after
+the event, sees it. Never a hand-constructed `HistoricalRegressionRecord`
+standing in for what should be a real round trip.
 
 ## Incremental / exact-head semantics
 
@@ -152,8 +164,10 @@ disappears; if a later PR reintroduces the risk, it reappears.
 ## Query bounds
 
 - `MAX_HISTORICAL_LOOKBACK_ROWS` (200) -- the one bounded SQL query per
-  review run never returns more rows than this; no per-surface query
-  loop, no N+1.
+  review run (a portable `SUM(CASE ...)`/`MIN(CASE ...)` aggregation
+  over `feedback_events` grouped by `finding_id`, `HAVING` the trust
+  predicate, joined to `ai_findings`/`review_candidates`/`review_runs`)
+  never returns more rows than this; no per-surface query loop, no N+1.
 - `MAX_HISTORICAL_RECORDS_PER_SURFACE` (3) -- at most this many
   historical records considered per matched current surface.
 - `MAX_HISTORICAL_REGRESSION_CANDIDATES` (10) -- bounds the final
@@ -175,8 +189,8 @@ the one bounded trust query; zero LLM calls anywhere in the package
 
 ## Persistence
 
-No new table -- the one bounded query reuses Phase 9's own
-`feedback_assessments` joined with the existing
+No new table -- the one bounded query reuses Phase 9's own raw
+`feedback_events` joined with the existing
 `ai_findings`/`review_candidates`/`review_runs` chain. `review_runs`
 gained five nullable-default columns (migration
 `0022_historical_regression`): `historical_trusted_record_count`,
@@ -204,7 +218,7 @@ adds bounded evidence.
 ("Historical context: ... previously had a trusted, resolved
 finding."), only for the two strongest match tiers
 (`SAME_SYMBOL`/`SAME_QUALIFIED_NAME_IN_SAME_FILE`) -- never for a
-`SAME_FILE`/`GRAPH_RELATED_SURFACE` match alone, and never for every PR
+`GRAPH_RELATED_SURFACE` match alone, and never for every PR
 with any historical finding anywhere in the repository. The conditional
 `### Historical context` publication block uses the same eligibility
 bar. Neither ever renders a count ("N past bugs touched this file") or
@@ -217,8 +231,9 @@ a score.
   not modeled anywhere in `RepositoryModel`.
 - No per-branch/path-level historical correlation -- matching is at
   file/symbol granularity only.
-- `SAME_FILE` never fires for `CONFIRMED_USEFUL` alone (too weak at
-  that tier).
+- `SAME_FILE` is never constructed at all in v1 (see the match
+  hierarchy above) -- a real design correction, not merely an
+  unimplemented tier.
 - Historical-regression candidates are heuristic evidence, not proof --
   they must survive the existing reviewer/critic pipeline like any
   other finding before ever reaching GitHub.

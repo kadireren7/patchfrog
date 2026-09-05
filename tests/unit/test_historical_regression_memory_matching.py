@@ -128,7 +128,13 @@ def test_graph_related_surface_for_affected_in_different_file() -> None:
     assert candidates[0].reason_code is HistoricalRegressionReasonCode.PREVIOUS_REGRESSION_RELATED_SURFACE
 
 
-def test_same_file_weak_match_requires_confirmed_fixed_not_useful() -> None:
+def test_same_file_unrelated_symbol_never_produces_a_candidate() -> None:
+    """Corrected v1 semantics (spec's own "same file alone is weak...
+    otherwise defer" requirement): SAME_FILE is never constructed at
+    all. A historical finding in the same file as a real edit, but on a
+    genuinely different, unmatched symbol, produces zero candidates --
+    regardless of trust strength."""
+
     unit = ChangeUnit(
         id="u1", title="payment", change_kind=ChangeKind.BEHAVIOR,
         changed_candidates=(_candidate(file_path="service.py", qualified_name="process_payment"),),
@@ -136,15 +142,47 @@ def test_same_file_weak_match_requires_confirmed_fixed_not_useful() -> None:
     fixed_record = _record(
         file_path="service.py", qualified_name="unrelated_old_symbol", strength=HistoricalEvidenceStrength.CONFIRMED_FIXED
     )
-    candidates = derive_historical_regression_candidates(trusted_records=(fixed_record,), change_units=(unit,))
-    assert len(candidates) == 1
-    assert candidates[0].match_kind is HistoricalMatchKind.SAME_FILE
-    assert candidates[0].reason_code is HistoricalRegressionReasonCode.PREVIOUS_FIXED_FINDING_SAME_FILE
+    assert derive_historical_regression_candidates(trusted_records=(fixed_record,), change_units=(unit,)) == ()
 
     useful_record = _record(
         file_path="service.py", qualified_name="unrelated_old_symbol", strength=HistoricalEvidenceStrength.CONFIRMED_USEFUL
     )
     assert derive_historical_regression_candidates(trusted_records=(useful_record,), change_units=(unit,)) == ()
+
+
+def test_renamed_symbol_never_falls_back_to_same_file_noise() -> None:
+    """A symbol renamed since its historical finding must produce zero
+    candidates, not a SAME_FILE fallback -- proven at the matching
+    layer directly (the real, DB-backed proof lives in the corpus)."""
+
+    unit = ChangeUnit(
+        id="u1", title="payment", change_kind=ChangeKind.BEHAVIOR,
+        changed_candidates=(_candidate(file_path="pricing.py", qualified_name="apply_loyalty_discount"),),
+    )
+    record = _record(file_path="pricing.py", qualified_name="apply_discount")
+    assert derive_historical_regression_candidates(trusted_records=(record,), change_units=(unit,)) == ()
+
+
+def test_same_file_match_kind_and_reason_code_never_constructed() -> None:
+    """SAME_FILE/PREVIOUS_FIXED_FINDING_SAME_FILE remain defined on
+    their respective enums for forward documentation only -- neither
+    is ever actually produced by the matching layer in v1 (see
+    _match_kind_for's own docstring)."""
+
+    units = tuple(
+        ChangeUnit(
+            id=f"u{i}", title="t", change_kind=ChangeKind.BEHAVIOR,
+            changed_candidates=(_candidate(file_path=f"f{i}.py", qualified_name=f"fn_{i}"),),
+        )
+        for i in range(5)
+    )
+    records = tuple(
+        _record(file_path=f"f{i}.py", qualified_name=f"unrelated_{i}", strength=strength)
+        for i in range(5)
+        for strength in (HistoricalEvidenceStrength.CONFIRMED_FIXED, HistoricalEvidenceStrength.CONFIRMED_USEFUL)
+    )
+    candidates = derive_historical_regression_candidates(trusted_records=records, change_units=units)
+    assert candidates == ()
 
 
 def test_no_match_when_neither_file_nor_symbol_present() -> None:

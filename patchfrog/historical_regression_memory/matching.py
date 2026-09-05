@@ -44,8 +44,10 @@ _REASON_BY_MATCH_AND_TRUST: dict[
         HistoricalRegressionReasonCode.PREVIOUS_FIXED_FINDING_SAME_SYMBOL,
     (HistoricalMatchKind.SAME_QUALIFIED_NAME_IN_SAME_FILE, HistoricalEvidenceStrength.CONFIRMED_USEFUL):
         HistoricalRegressionReasonCode.PREVIOUS_USEFUL_FINDING_SAME_SYMBOL,
-    (HistoricalMatchKind.SAME_FILE, HistoricalEvidenceStrength.CONFIRMED_FIXED):
-        HistoricalRegressionReasonCode.PREVIOUS_FIXED_FINDING_SAME_FILE,
+    # SAME_FILE is deliberately absent -- see _match_kind_for's own
+    # docstring: it is never constructed in v1, so no reason-code
+    # mapping is needed for it. PREVIOUS_FIXED_FINDING_SAME_FILE stays
+    # defined on the enum for forward documentation only.
     (HistoricalMatchKind.GRAPH_RELATED_SURFACE, HistoricalEvidenceStrength.CONFIRMED_FIXED):
         HistoricalRegressionReasonCode.PREVIOUS_REGRESSION_RELATED_SURFACE,
     (HistoricalMatchKind.GRAPH_RELATED_SURFACE, HistoricalEvidenceStrength.CONFIRMED_USEFUL):
@@ -113,27 +115,41 @@ def _build_surface_pool(
 
 def _match_kind_for(
     record: HistoricalRegressionRecord, *, pool: tuple[_PoolEntry, ...], directly_changed_files: frozenset[str]
-) -> tuple[HistoricalMatchKind, _PoolEntry | None] | None:
-    if record.source_qualified_name is not None:
-        exact = [
-            e for e in pool if e.file_path == record.source_file_path and e.qualified_name == record.source_qualified_name
-        ]
-        if exact:
-            entry = exact[0]
-            if entry.is_directly_changed:
-                return HistoricalMatchKind.SAME_SYMBOL, entry
-            if entry.file_path in directly_changed_files:
-                return HistoricalMatchKind.SAME_QUALIFIED_NAME_IN_SAME_FILE, entry
-            return HistoricalMatchKind.GRAPH_RELATED_SURFACE, entry
+) -> tuple[HistoricalMatchKind, _PoolEntry] | None:
+    """``SAME_FILE`` is deliberately never constructed here (spec's own
+    correction: "same file alone is weak... require additional
+    deterministic relevance evidence; otherwise defer" -- no such
+    evidence can be expressed here beyond what
+    ``SAME_QUALIFIED_NAME_IN_SAME_FILE``/``GRAPH_RELATED_SURFACE``
+    already require, so the safe choice is precision over taxonomy
+    coverage: v1 never emits a bare same-file candidate). The
+    ``HistoricalMatchKind.SAME_FILE``/``HistoricalRegressionReasonCode.PREVIOUS_FIXED_FINDING_SAME_FILE``
+    enum members are kept for forward documentation only -- see
+    ``validation/historical_regression_memory/latest-summary.md``
+    section 2 for the full correction narrative. A real match always
+    requires an *exact* ``(file_path, qualified_name)`` hit against the
+    current surface pool -- a file matching alone, with no symbol
+    identity confirmed, is never enough."""
 
-    if record.source_file_path in directly_changed_files:
-        return HistoricalMatchKind.SAME_FILE, None
+    if record.source_qualified_name is None:
+        return None
 
-    return None
+    exact = [
+        e for e in pool if e.file_path == record.source_file_path and e.qualified_name == record.source_qualified_name
+    ]
+    if not exact:
+        return None
+
+    entry = exact[0]
+    if entry.is_directly_changed:
+        return HistoricalMatchKind.SAME_SYMBOL, entry
+    if entry.file_path in directly_changed_files:
+        return HistoricalMatchKind.SAME_QUALIFIED_NAME_IN_SAME_FILE, entry
+    return HistoricalMatchKind.GRAPH_RELATED_SURFACE, entry
 
 
 def _enrichment_for(
-    entry: _PoolEntry | None,
+    entry: _PoolEntry,
     *,
     expected_companions: tuple[ExpectedCompanionChange, ...],
     intent_gaps: tuple[PotentialIntentGap, ...],
@@ -143,9 +159,6 @@ def _enrichment_for(
     already a real J/K ``MISSING`` companion, an L intent gap, or an M
     test gap on the same ``(file_path, qualified_name)``, reference it
     -- never construct a second, competing top-level candidate."""
-
-    if entry is None:
-        return None, None, None
 
     for companion in expected_companions:
         if companion.status is not CompanionStatus.MISSING:
@@ -219,14 +232,11 @@ def derive_historical_regression_candidates(
             f"({record.bounded_evidence_fingerprint!r}) involved {label!r}"
         )
 
-        change_unit_id = entry.change_unit_id if entry is not None else _unit_id_for_file(
-            non_test_units, record.source_file_path
-        )
         out.append(
             PotentialHistoricalRegression(
-                current_change_unit_id=change_unit_id,
-                current_file_path=entry.file_path if entry is not None else record.source_file_path,
-                current_qualified_name=entry.qualified_name if entry is not None else None,
+                current_change_unit_id=entry.change_unit_id,
+                current_file_path=entry.file_path,
+                current_qualified_name=entry.qualified_name,
                 historical_record=record,
                 match_kind=match_kind,
                 reason_code=reason_code,
@@ -240,11 +250,3 @@ def derive_historical_regression_candidates(
             break
 
     return tuple(out)
-
-
-def _unit_id_for_file(change_units: tuple[ChangeUnit, ...], file_path: str) -> str:
-    for unit in change_units:
-        for candidate in unit.changed_candidates:
-            if candidate.file_path == file_path:
-                return unit.id
-    return ""

@@ -28,6 +28,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
@@ -525,6 +526,7 @@ class PullRequestReviewService:
                 base_sha=base_sha,
                 title=title,
                 body=body,
+                review_started_at=run.started_at,
             )
         except Exception as exc:
             async with self._session_factory() as session:
@@ -557,6 +559,7 @@ class PullRequestReviewService:
         base_sha: str | None = None,
         title: str | None = None,
         body: str | None = None,
+        review_started_at: datetime | None = None,
     ) -> ReviewRunSummary:
         async with self._session_factory() as session:
             static_findings = []
@@ -641,12 +644,17 @@ class PullRequestReviewService:
             # Change/Contract/Intent/Test Intelligence, computed right
             # after Test Intelligence, consuming their already-built
             # evidence plus the one bounded trust query this package
-            # adds (Phase 9's own feedback_assessments, joined with the
+            # adds (Phase 9's own feedback_events, joined with the
             # existing ai_findings/review_candidates/review_runs chain
             # -- no new history database, see the package docstring).
+            # ``as_of`` is this run's own persisted started_at -- never
+            # a fresh wall-clock read -- so historical trust is always
+            # evaluated strictly as of this review's own point in time
+            # (see the package's own temporal-leakage discipline).
             historical_regression_report = await build_historical_regression_report(
                 session,
                 repository_id=repository_id,
+                as_of=review_started_at or datetime.now(UTC),
                 change_units=change_intelligence_report.change_units,
                 contract_deltas=contract_intelligence_report.deltas,
                 intent_gaps=intent_verification_report.gaps,

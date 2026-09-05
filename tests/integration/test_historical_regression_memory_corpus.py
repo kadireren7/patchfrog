@@ -1,6 +1,6 @@
 """Controlled corpus for Historical Regression Memory (spec section 35,
-minimum 20 scenarios) -- real git repository, real indexing, real
-diff-driven :class:`~patchfrog.review.domain.ReviewCandidate` generation,
+minimum 20 scenarios; 21 implemented) -- real git repository, real
+indexing, real diff-driven :class:`~patchfrog.review.domain.ReviewCandidate` generation,
 real Change/Contract/Intent/Test Intelligence output for the *current*
 side, and real, persisted (not FakeLLM-authored) historical state for
 the *historical* side: a real `ReviewRunModel`/`ReviewCandidateModel`/
@@ -237,7 +237,7 @@ async def test_case_prior_fixed_finding_same_symbol_changed_again(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
     assert len(report.candidates) == 1
@@ -281,7 +281,7 @@ async def test_case_prior_useful_finding_same_symbol(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
     assert len(report.candidates) == 1
@@ -329,7 +329,7 @@ async def test_case_prior_false_positive_finding_never_seeds_memory(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
     assert report.trusted_records_considered == ()
@@ -373,7 +373,7 @@ async def test_case_prior_ignored_finding_never_seeds_memory(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
     assert report.candidates == ()
@@ -420,19 +420,25 @@ async def test_case_repository_isolation_same_qualified_name_different_repo(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
     assert report.trusted_records_considered == ()
     assert report.candidates == ()
 
 
-# ---- 6. Same file, unrelated symbol -> SAME_FILE (weak), only with CONFIRMED_FIXED ----
+# ---- 6. Same file, unrelated symbol -> ZERO candidates (corrected v1 semantics) ----
 
 
-async def test_case_same_file_unrelated_symbol_weak_match(
+async def test_case_same_file_unrelated_symbol_stays_quiet(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
+    """Corrected v1 semantics: same file alone is weak evidence and must
+    never independently create a candidate (spec's own correction --
+    "the safe fallback is: SAME_FILE -> no candidate"). A CONFIRMED_FIXED
+    historical finding on a genuinely different, unmatched symbol in the
+    same file that happens to change stays quiet."""
+
     full_name = "test/hrm-same-file-weak"
     root = _setup_base(tmp_path)
     (root / "pricing.py").write_text(
@@ -466,11 +472,10 @@ async def test_case_same_file_unrelated_symbol_weak_match(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
-    assert len(report.candidates) == 1
-    assert report.candidates[0].match_kind is HistoricalMatchKind.SAME_FILE
+    assert report.candidates == ()
 
 
 # ---- 7. Historical record exists, current risky surface untouched -> no candidate ----
@@ -510,7 +515,7 @@ async def test_case_historical_record_but_current_surface_untouched(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
     assert report.candidates == ()
@@ -552,7 +557,7 @@ async def test_case_stale_candidate_disappears_on_new_exact_head(
     )
     async with session_factory() as session:
         report_a = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report_a.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report_a.change_units
         )
     assert len(report_a.candidates) == 1
 
@@ -567,7 +572,7 @@ async def test_case_stale_candidate_disappears_on_new_exact_head(
     )
     async with session_factory() as session:
         report_b = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report_b.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report_b.change_units
         )
     assert report_b.candidates == ()
 
@@ -608,7 +613,7 @@ async def test_case_finding_without_any_feedback_never_seeds_memory(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
     assert report.candidates == ()
@@ -655,7 +660,7 @@ async def test_case_temporal_leakage_finding_invisible_before_trust_established(
     # T1 (before T2): finding exists, but no trust event yet -- invisible.
     async with session_factory() as session:
         report_before = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
     assert report_before.candidates == ()
 
@@ -665,9 +670,85 @@ async def test_case_temporal_leakage_finding_invisible_before_trust_established(
     # T3: now visible.
     async with session_factory() as session:
         report_after = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
     assert len(report_after.candidates) == 1
+
+
+# ---- 10a. TRUE temporal-leakage proof: a captured review point never sees LATER trust ----
+
+
+async def test_case_true_temporal_leakage_replay_never_sees_future_trust(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """The real proof (spec section 9): T1 a historical finding exists
+    (no feedback yet). T2 a *current review point* is captured
+    (``as_of_t2``) -- at this instant, evaluating Historical Regression
+    Memory produces zero candidates. T3, strictly after T2, the finding
+    receives a real ``/patchfrog fixed`` event. Replaying the *exact
+    same* ``as_of_t2`` boundary again (simulating a backfill/replay of
+    the earlier review) must still produce zero candidates -- the row
+    now exists in the database, but its ``occurred_at`` is after
+    ``as_of_t2``, so it must not leak backwards. Only a genuinely later
+    review, captured with a fresh ``as_of`` after T3, sees it. This is
+    the case the earlier ``test_case_temporal_leakage_finding_invisible_before_trust_established``
+    does not fully prove (that one has no feedback ROW at all before
+    T2; this one has a real row that exists but is dated after the
+    boundary)."""
+
+    full_name = "test/hrm-true-temporal-leakage"
+    root = _setup_base(tmp_path)
+    (root / "pricing.py").write_text("def apply_discount(order):\n    return order['total']\n")
+    base_sha = commit_all(root, "base")
+    repository_id = await _make_repo(session_factory, full_name)
+    await RepositoryIndexingService(session_factory=session_factory).index_local_repository(
+        repository_id=repository_id, root_path=root, repository_full_name=full_name
+    )
+    async with session_factory() as session:
+        index = await RepositoryIndexRepository().get_active(session, repository_id=repository_id)
+        assert index is not None
+        historical_index_id = index.id
+
+    # T1: historical finding exists, no feedback yet.
+    finding_id = await _stage_historical_finding(
+        session_factory, repository_id=repository_id, repository_index_id=historical_index_id,
+        file_path="pricing.py", qualified_name="apply_discount",
+    )
+
+    (root / "pricing.py").write_text(
+        "def apply_discount(order):\n    if order['loyalty_years'] > 5:\n        return order['total'] * 0.9\n"
+        "    return order['total']\n"
+    )
+    commit_all(root, "touch apply_discount")
+    change_report = await _index_and_group(
+        session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
+    )
+
+    # T2: the current review's own temporal boundary is captured.
+    as_of_t2 = datetime.now(UTC)
+    async with session_factory() as session:
+        report_at_t2 = await build_historical_regression_report(
+            session, repository_id=repository_id, as_of=as_of_t2, change_units=change_report.change_units
+        )
+    assert report_at_t2.candidates == ()
+
+    # T3: strictly after T2, the finding is marked fixed.
+    await _stage_feedback(session_factory, repository_id=repository_id, finding_id=finding_id, command=ExplicitCommand.FIXED)
+
+    # Replay the EXACT SAME as_of_t2 boundary -- must still be invisible.
+    async with session_factory() as session:
+        report_replay_at_t2 = await build_historical_regression_report(
+            session, repository_id=repository_id, as_of=as_of_t2, change_units=change_report.change_units
+        )
+    assert report_replay_at_t2.candidates == ()
+
+    # T4: a genuinely later review, captured with a fresh as_of after T3 -- now visible.
+    as_of_t4 = datetime.now(UTC)
+    async with session_factory() as session:
+        report_at_t4 = await build_historical_regression_report(
+            session, repository_id=repository_id, as_of=as_of_t4, change_units=change_report.change_units
+        )
+    assert len(report_at_t4.candidates) == 1
 
 
 # ---- 11. Prior fixed contract stale-consumer finding; K enrichment, no duplicate ----
@@ -723,7 +804,7 @@ async def test_case_historical_enriches_real_k_stale_consumer(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units,
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units,
             expected_companions=contract_report.stale_consumers,
         )
 
@@ -765,7 +846,7 @@ async def test_case_docs_only_change_no_noise(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
     assert report.candidates == ()
@@ -811,7 +892,7 @@ async def test_case_test_only_pr_no_unrelated_regression(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
     assert report.candidates == ()
@@ -851,7 +932,7 @@ async def test_case_historical_security_finding_same_surface(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
     assert len(report.candidates) == 1
@@ -897,7 +978,7 @@ async def test_case_multiple_historical_findings_same_surface_bounded(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
     from patchfrog.historical_regression_memory.domain import MAX_HISTORICAL_RECORDS_PER_SURFACE
@@ -936,7 +1017,9 @@ async def test_case_large_history_bounded_query(
     async with session_factory() as session:
         from patchfrog.historical_regression_memory.queries import fetch_trusted_historical_records
 
-        records = await fetch_trusted_historical_records(session, repository_id=repository_id, limit=10)
+        records = await fetch_trusted_historical_records(
+            session, repository_id=repository_id, as_of=datetime.now(UTC), limit=10
+        )
 
     assert len(records) == 10
 
@@ -975,12 +1058,16 @@ async def test_case_renamed_symbol_never_matched_documented_limitation(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
 
-    # Falls back to SAME_FILE (still correctly bounded/conservative),
-    # never a false SAME_SYMBOL match against the new name.
-    assert all(c.match_kind is not HistoricalMatchKind.SAME_SYMBOL for c in report.candidates)
+    # No proven continuity across the rename (Phase 7's own
+    # content-hash-based continuity only covers adjacent index versions
+    # within one PR's own incremental chain, not an arbitrary historical
+    # distance -- see the audit). SAME_FILE is deferred entirely in v1,
+    # so this must produce ZERO candidates -- never a false SAME_SYMBOL
+    # match against the new name, and never a SAME_FILE fallback either.
+    assert report.candidates == ()
 
 
 # ---- 18. Real end-to-end review_local pipeline: persisted through to ReviewRunModel ----
@@ -1088,7 +1175,7 @@ async def test_case_telemetry_and_versioning_real_report(
 
     async with session_factory() as session:
         report = await build_historical_regression_report(
-            session, repository_id=repository_id, change_units=change_report.change_units
+            session, repository_id=repository_id, as_of=datetime.now(UTC), change_units=change_report.change_units
         )
     assert report.version == HISTORICAL_REGRESSION_MEMORY_VERSION
 
