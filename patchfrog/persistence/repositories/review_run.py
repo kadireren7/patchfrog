@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from patchfrog.change_intelligence.telemetry import ChangeIntelligenceSummary
 from patchfrog.contract_intelligence.telemetry import ContractIntelligenceSummary
+from patchfrog.historical_regression_memory.telemetry import HistoricalRegressionMemorySummary
 from patchfrog.intent_verification.telemetry import IntentVerificationSummary
 from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.review.agents.roles import AgentRole
@@ -213,6 +214,7 @@ class ReviewRunRepository:
         contract_intelligence: ContractIntelligenceSummary | None = None,
         intent_verification: IntentVerificationSummary | None = None,
         test_intelligence: TestIntelligenceSummary | None = None,
+        historical_regression_memory: HistoricalRegressionMemorySummary | None = None,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -303,6 +305,14 @@ class ReviewRunRepository:
             model.test_gap_candidate_count = test_intelligence.test_gap_candidate_count
             model.test_coverage_summary_rendered = test_intelligence.test_coverage_summary_rendered
             model.test_coverage_summary_text = test_intelligence.test_coverage_summary_text
+        if historical_regression_memory is not None:
+            model.historical_trusted_record_count = historical_regression_memory.historical_trusted_record_count
+            model.historical_match_kind_counts = historical_regression_memory.historical_match_kind_counts_json
+            model.historical_regression_candidate_count = (
+                historical_regression_memory.historical_regression_candidate_count
+            )
+            model.historical_summary_rendered = historical_regression_memory.historical_summary_rendered
+            model.historical_summary_text = historical_regression_memory.historical_summary_text
         model.completed_at = datetime.now(UTC)
         await session.flush()
         return model

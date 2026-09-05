@@ -88,8 +88,13 @@ CONFIG_SCHEMA_VERSION = 4
 #: `<test_intelligence>` user-prompt section, populated from
 #: patchfrog.test_intelligence.evidence only for the exact candidate
 #: that is the source file of a real, structurally-detected test gap --
-#: empty for every other candidate.
-REVIEW_PROMPT_VERSION = 7
+#: empty for every other candidate. Bumped to 8 for Historical
+#: Regression Memory Foundation: a fifth new optional
+#: `<historical_regression>` user-prompt section, populated from
+#: patchfrog.historical_regression_memory.evidence only for the exact
+#: candidate that matches a real, trusted historical finding -- empty
+#: for every other candidate.
+REVIEW_PROMPT_VERSION = 8
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final

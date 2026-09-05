@@ -58,3 +58,10 @@ class CandidateEvidencePackage:
     #: size discipline as ``change_intelligence_text``/
     #: ``contract_intelligence_text``/``intent_verification_text`` above.
     test_intelligence_text: str = ""
+    #: Bounded (see :mod:`patchfrog.historical_regression_memory.evidence`)
+    #: evidence from Historical Regression Memory -- empty string unless
+    #: this exact candidate matches a real, trusted historical finding.
+    #: Same size discipline as ``change_intelligence_text``/
+    #: ``contract_intelligence_text``/``intent_verification_text``/
+    #: ``test_intelligence_text`` above.
+    historical_regression_text: str = ""

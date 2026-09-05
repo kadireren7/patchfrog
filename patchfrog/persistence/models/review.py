@@ -247,6 +247,23 @@ class ReviewRunModel(Base):
     test_coverage_summary_rendered: Mapped[bool] = mapped_column(Boolean, default=False)
     test_coverage_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    #: Historical Regression Memory Foundation
+    #: (:mod:`patchfrog.historical_regression_memory`) run-level summary
+    #: -- the bounded output of
+    #: :func:`patchfrog.historical_regression_memory.telemetry.summarize_for_persistence`.
+    #: No separate historical-story text column: the Historical Story
+    #: prefix is folded into ``change_story`` above, exactly like the
+    #: Intent/Test Story prefixes. ``historical_summary_text`` IS a new,
+    #: dedicated column -- the conditional Historical Context block is
+    #: its own separate publication section, not a re-render of an
+    #: existing one. All default to 0/``"{}"``/``False``/``None`` --
+    #: nullable-safe for rows predating this milestone.
+    historical_trusted_record_count: Mapped[int] = mapped_column(Integer, default=0)
+    historical_match_kind_counts: Mapped[str] = mapped_column(Text, default="{}")
+    historical_regression_candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    historical_summary_rendered: Mapped[bool] = mapped_column(Boolean, default=False)
+    historical_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 
 class ReviewCandidateModel(Base):
     """One symbol- (or module-region-) centered candidate considered for

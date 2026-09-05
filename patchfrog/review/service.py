@@ -53,6 +53,15 @@ from patchfrog.contract_intelligence.telemetry import (
     summarize_for_persistence as summarize_contract_intelligence,
 )
 from patchfrog.diff.models import DiffFile, DiffHunk
+from patchfrog.historical_regression_memory.domain import HistoricalRegressionReport
+from patchfrog.historical_regression_memory.evidence import (
+    evidence_text_for_candidate as historical_evidence_text_for_candidate,
+)
+from patchfrog.historical_regression_memory.service import build_historical_regression_report
+from patchfrog.historical_regression_memory.story import build_historical_story_prefix
+from patchfrog.historical_regression_memory.telemetry import (
+    summarize_for_persistence as summarize_historical_regression_memory,
+)
 from patchfrog.intelligence.queries import RepositoryQueryService
 from patchfrog.intent_verification.domain import IntentVerificationReport
 from patchfrog.intent_verification.evidence import (
@@ -627,24 +636,47 @@ class PullRequestReviewService:
                 diff_files=tuple(diff_files),
             )
 
+            # Historical Regression Memory Foundation
+            # (patchfrog.historical_regression_memory): extends
+            # Change/Contract/Intent/Test Intelligence, computed right
+            # after Test Intelligence, consuming their already-built
+            # evidence plus the one bounded trust query this package
+            # adds (Phase 9's own feedback_assessments, joined with the
+            # existing ai_findings/review_candidates/review_runs chain
+            # -- no new history database, see the package docstring).
+            historical_regression_report = await build_historical_regression_report(
+                session,
+                repository_id=repository_id,
+                change_units=change_intelligence_report.change_units,
+                contract_deltas=contract_intelligence_report.deltas,
+                intent_gaps=intent_verification_report.gaps,
+                test_gaps=test_intelligence_report.gaps,
+                expected_companions=combined_companions,
+            )
+
             # Fold the Contract Story addendum, the Intent Story prefix,
-            # and the Test Story prefix into the existing Change Story
-            # text, and (only when there's real contract stale-consumer
-            # evidence to add) re-render the *same* Change Map with the
-            # combined companion set -- never a second diagram system
-            # (spec section 10). See docs/contract-intelligence.md /
-            # docs/intent-verification.md / docs/test-intelligence.md.
+            # the Test Story prefix, and the Historical Story prefix
+            # into the existing Change Story text, and (only when
+            # there's real contract stale-consumer evidence to add)
+            # re-render the *same* Change Map with the combined
+            # companion set -- never a second diagram system (spec
+            # section 10). See docs/contract-intelligence.md /
+            # docs/intent-verification.md / docs/test-intelligence.md /
+            # docs/historical-regression-memory.md.
             intent_prefix = build_intent_story_prefix(intent_verification_report.claims)
             test_prefix = build_test_story_prefix(test_intelligence_report.gaps)
+            historical_prefix = build_historical_story_prefix(historical_regression_report.candidates)
             if (
                 contract_intelligence_report.contract_story
                 or contract_intelligence_report.stale_consumers
                 or intent_prefix
                 or test_prefix
+                or historical_prefix
             ):
                 combined_story = " ".join(
                     s
                     for s in (
+                        historical_prefix,
                         intent_prefix,
                         change_intelligence_report.change_story,
                         contract_intelligence_report.contract_story,
@@ -707,6 +739,7 @@ class PullRequestReviewService:
                     contract_intelligence_report=contract_intelligence_report,
                     intent_verification_report=intent_verification_report,
                     test_intelligence_report=test_intelligence_report,
+                    historical_regression_report=historical_regression_report,
                 )
 
         await asyncio.gather(*(_process(o) for o in outcomes))
@@ -953,6 +986,7 @@ class PullRequestReviewService:
                 contract_intelligence=summarize_contract_intelligence(contract_intelligence_report),
                 intent_verification=summarize_intent_verification(intent_verification_report),
                 test_intelligence=summarize_test_intelligence(test_intelligence_report),
+                historical_regression_memory=summarize_historical_regression_memory(historical_regression_report),
             )
             await session.commit()
 
@@ -1011,6 +1045,7 @@ class PullRequestReviewService:
         contract_intelligence_report: ContractIntelligenceReport,
         intent_verification_report: IntentVerificationReport,
         test_intelligence_report: TestIntelligenceReport,
+        historical_regression_report: HistoricalRegressionReport,
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
@@ -1108,6 +1143,7 @@ class PullRequestReviewService:
             ),
             intent_verification_text=intent_evidence_text_for_candidate(intent_verification_report, candidate),
             test_intelligence_text=test_evidence_text_for_candidate(test_intelligence_report, candidate),
+            historical_regression_text=historical_evidence_text_for_candidate(historical_regression_report, candidate),
         )
 
         # Stage 2: finalize the effort decision now that the context

@@ -94,7 +94,13 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 #: real additional key in the exported JSON. Bumped proactively (applying
 #: the Milestone J correction / Milestone K/L precedent), not left for a
 #: later correction round.
-TELEMETRY_SCHEMA_VERSION = 5
+#:
+#: Bumped 5 -> 6 for Historical Regression Memory Foundation: the same
+#: reasoning a fifth time -- ``ReviewTelemetrySnapshot`` gained the
+#: ``historical_regression_memory`` field
+#: (:class:`HistoricalRegressionMemoryTelemetry`), a real additional key
+#: in the exported JSON.
+TELEMETRY_SCHEMA_VERSION = 6
 
 
 class FindingLifecycleOutcome(StrEnum):
@@ -415,6 +421,23 @@ class TestIntelligenceTelemetry:
 
 
 @dataclass(frozen=True, slots=True)
+class HistoricalRegressionMemoryTelemetry:
+    """Bounded, privacy-safe counts from
+    :mod:`patchfrog.historical_regression_memory` for one review run.
+    Deliberately counts only -- no historical finding title/evidence
+    text, no Historical Story/Context prose (the latter is persisted
+    separately on ``review_runs`` for publication, exactly like
+    ``test_coverage_summary_text`` -- never duplicated here)."""
+
+    historical_trusted_record_count: int
+    #: ``(match_kind_value, count)`` pairs, sorted -- mirrors
+    #: ``ChangeIntelligenceTelemetry.change_kind_counts`` exactly.
+    historical_match_kind_counts: tuple[tuple[str, int], ...]
+    historical_regression_candidate_count: int
+    historical_summary_rendered: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewTelemetrySnapshot:
     """The complete, deterministic telemetry snapshot for one review run
     -- what :func:`patchfrog.telemetry.collector.collect_review_telemetry`
@@ -498,6 +521,17 @@ class ReviewTelemetrySnapshot:
             test_reason_code_counts=(),
             test_gap_candidate_count=0,
             test_coverage_summary_rendered=False,
+        )
+    )
+    #: All-zero/empty for a run that predates Historical Regression
+    #: Memory Foundation -- same nullable-safe-default convention as
+    #: ``test_intelligence`` above. See :class:`HistoricalRegressionMemoryTelemetry`.
+    historical_regression_memory: HistoricalRegressionMemoryTelemetry = field(
+        default_factory=lambda: HistoricalRegressionMemoryTelemetry(
+            historical_trusted_record_count=0,
+            historical_match_kind_counts=(),
+            historical_regression_candidate_count=0,
+            historical_summary_rendered=False,
         )
     )
 

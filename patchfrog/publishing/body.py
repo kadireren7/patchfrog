@@ -131,6 +131,7 @@ def format_summary_body(
     change_map_text: str | None = None,
     intent_coverage_summary: str | None = None,
     test_coverage_summary: str | None = None,
+    historical_context_summary: str | None = None,
 ) -> tuple[str, bool]:
     """Render the deterministic top-level review summary. Returns
     ``(body, truncated)``.
@@ -158,6 +159,12 @@ def format_summary_body(
     same kind of already-bounded, already-deterministic text, placed
     after the Intent Coverage block -- ``None`` unless
     :func:`patchfrog.test_intelligence.summary.should_render_test_gap_summary`
+    determined it was eligible. ``historical_context_summary``
+    (Historical Regression Memory Foundation,
+    :mod:`patchfrog.historical_regression_memory`) is the same kind of
+    already-bounded, already-deterministic text, placed after the Test
+    Impact block -- ``None`` unless
+    :func:`patchfrog.historical_regression_memory.summary.should_render_historical_summary`
     determined it was eligible. Never used on the *clean*-review path
     (:func:`format_clean_review_body`) -- see that function's own
     docstring for why."""
@@ -179,6 +186,10 @@ def format_summary_body(
 
     if test_coverage_summary:
         lines.append(sanitize_untrusted_text(test_coverage_summary.strip()))
+        lines.append("")
+
+    if historical_context_summary:
+        lines.append(sanitize_untrusted_text(historical_context_summary.strip()))
         lines.append("")
 
     severity_line = " · ".join(

@@ -290,6 +290,7 @@ class AgentOrchestrator:
                 contract_intelligence_text=evidence.contract_intelligence_text,
                 intent_verification_text=evidence.intent_verification_text,
                 test_intelligence_text=evidence.test_intelligence_text,
+                historical_regression_text=evidence.historical_regression_text,
             )
             for role in selected_roles
         }
