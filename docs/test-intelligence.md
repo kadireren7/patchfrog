@@ -79,9 +79,41 @@ has a test link:
 - **No lexical/mapping module**: unlike L, neither signal here compares
   prose to a graph object -- `NO_TEST_SURFACE_FOUND` is a pure
   existence check over already-attributed objects (same `file_path`),
-  and `TEST_TOUCHED_BUT_WEAKENED` is a pure line-count comparison
-  within one file's own diff. Introducing bounded lexical matching here
+  and `TEST_TOUCHED_BUT_WEAKENED` is anchored to a companion-confirmed
+  correlation (see below), then a pure line-count comparison within
+  that one file's own diff. Introducing bounded lexical matching here
   would be unused machinery, not future-proofing.
+
+## Test-only PRs stay quiet (not an inverse feature detector)
+
+`TEST_TOUCHED_BUT_WEAKENED` is **anchored to a real, same-PR production
+change** -- it is never evaluated for an arbitrary touched test file. A
+test file is only ever eligible when J's own companions already
+confirm, via a real `ExpectedCompanionChange` with
+`reason_code=TEST_NOT_UPDATED` naming it as `expected_file_path`, that
+it is linked to a changed *production* file. Whether the test file was
+itself genuinely touched is then answered independently -- and more
+precisely than J's own `status` field -- by direct membership in
+`diff_files` (see the note on `status` below).
+
+This is sound, not a heuristic guess, because of how J's own companions
+are constructed: `patchfrog.change_intelligence.companions._test_staleness`
+iterates the *production* side only -- for each changed production
+candidate, it looks up that candidate's own linked test files. It never
+runs in the reverse direction (starting from a changed test file and
+asking what it tests). A PR that touches only test files therefore
+produces **zero** `TEST_NOT_UPDATED` companions of any status, for any
+file -- so `TEST_TOUCHED_BUT_WEAKENED` structurally cannot fire without
+a real production change in the same PR. `NO_TEST_SURFACE_FOUND` is
+unaffected by this concern in the other direction: it already requires
+`ChangeKind.BEHAVIOR`, which by construction excludes test-only units.
+
+Put plainly: **a test-only PR is never independently judged by Test
+Intelligence.** It may still be reviewed by PatchFrog's normal
+reviewer/static layers, but this package produces no behavioral
+test-gap candidate for it -- the premise ("does the test surface verify
+the behavior that changed?") does not hold when nothing behavioral
+changed.
 
 ## Scope restriction: BEHAVIOR-kind-only for `NO_TEST_SURFACE_FOUND`
 
@@ -123,11 +155,25 @@ removed with nothing added back) produces **zero** `ReviewCandidate`s
 at all (`patchfrog.review.candidates._extract_added_lines` is the sole
 input to candidate generation), so it never appears in any `ChangeUnit`
 -- even though this is exactly the weakening this signal exists to
-catch. `derive_weakened_test_expectations` therefore scans `diff_files`
-directly, never `ChangeUnit.changed_candidates`, attributing a real
-`ChangeUnit` id when one happens to touch the same file and falling
-back to a deterministic synthetic id (`f"standalone:{file_path}"`)
-otherwise.
+catch. `derive_weakened_test_expectations` never depends on the test
+file having a `ReviewCandidate` of its own: it identifies *which* test
+files to scan entirely from J's own `TEST_NOT_UPDATED` companions (see
+"Test-only PRs stay quiet" above), and takes the `change_unit_id`/
+`source_qualified_name` directly from that companion object -- the
+actual line-count comparison then reads `diff_files` directly, so a
+pure-deletion test file is still fully scanned even though it produced
+no candidate of its own.
+
+This same blind spot showed up one level higher, too: J's own
+`status=OBSERVED`/`MISSING` split on a `TEST_NOT_UPDATED` companion is
+itself derived from `all_changed_file_paths`, a set built from
+generated candidates -- so J reports `MISSING` for a test file whose
+only edit is a pure deletion, even though it really was touched.
+`derive_weakened_test_expectations` therefore never filters on
+`companion.status`: the companion establishes *only* the file-level
+correlation to a changed production file; "was it genuinely touched"
+is answered directly by real membership in `diff_files`, which is
+strictly more accurate than J's own derived status.
 
 ## Review pipeline integration
 
@@ -152,13 +198,14 @@ of any `LLMProvider` import anywhere in `patchfrog/test_intelligence/`).
 ## Change Story integration
 
 `patchfrog.test_intelligence.story.build_test_story_prefix` produces at
-most one bounded sentence ("Test coverage: N changed symbol(s) with no
+most one bounded sentence ("Test impact: N changed symbol(s) with no
 discoverable test surface; M touched test file(s) with a weakened
 structural test signal."), prepended to the existing Change/Contract/
 Intent Story text -- never a separate publication block, never a
 separate persisted column. Empty unless at least one real gap exists.
+Named "Test impact", not "Test coverage" -- see the next section.
 
-## Conditional Test Coverage summary
+## Conditional Test Impact summary
 
 `patchfrog.test_intelligence.summary.should_render_test_gap_summary` is
 a deterministic eligibility gate: shown whenever at least one real gap
@@ -166,8 +213,14 @@ exists (each gap is already selective evidence -- no additional
 surface-count threshold is needed, unlike Intent Coverage's own
 threshold, since a test gap is never redundant with what the Story
 sentence already says). Format is a flat, bounded Markdown list
-(`### Test coverage` / `- symbol: reason`) -- **never a percentage,
-never a confidence score, never a green/red badge**.
+(`### Test impact` / `- symbol: reason`) -- **never a percentage,
+never a confidence score, never a green/red badge**. Named "Test
+impact" rather than "Test coverage" deliberately: PatchFrog does not
+measure line/branch coverage, and a "coverage" heading would imply a
+metric this milestone never computes. The internal Python/DB field
+names (`test_coverage_summary_text`, `test_gap_candidate_count`, ...)
+keep their original names -- only the user-facing rendered heading and
+Story-prefix wording changed.
 
 ## Persistence
 

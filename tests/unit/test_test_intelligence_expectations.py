@@ -144,62 +144,136 @@ def test_no_test_surface_never_fires_for_unresolved_symbol() -> None:
     assert derive_no_test_surface_expectations(change_units=(unit,), expected_companions=()) == ()
 
 
-# ---- derive_weakened_test_expectations ----
+def test_no_test_surface_soundness_invariant() -> None:
+    """Explicit statement of the soundness property audited in
+    ``validation/test_intelligence/latest-summary.md`` section 9:
+    "absence of a TEST_NOT_UPDATED companion really means 'no
+    discoverable related test surface', not 'J skipped for some
+    unrelated reason'." Both packages share the identical eligibility
+    precondition (a changed candidate with a resolved ``symbol_id``,
+    see ``patchfrog.change_intelligence.companions._test_staleness``
+    and ``patchfrog.change_intelligence.service``'s per-unit call to
+    ``derive_expected_companions`` with that same unit's own
+    ``changed_candidates``) -- so whenever this milestone considers a
+    file eligible, J's own companion derivation would have used the
+    exact same precondition to look for its test files. A discovered
+    related test -- whether OBSERVED (touched) or MISSING (not
+    touched) -- always suppresses ``NO_TEST_SURFACE_FOUND``; only a
+    truly undiscovered test surface (no companion at all) may emit
+    it."""
 
-
-def test_weakened_flagged_when_net_assertions_decrease() -> None:
     unit = ChangeUnit(
-        id="u1", title="test change", change_kind=ChangeKind.TEST,
-        changed_candidates=(_candidate(file_path="test_service.py", qualified_name="test_process_payment"),),
+        id="u1", title="new behavior", change_kind=ChangeKind.BEHAVIOR,
+        changed_candidates=(_candidate(file_path="service.py", qualified_name="process_payment"),),
     )
+
+    observed = _companion(source_file_path="service.py", status=CompanionStatus.OBSERVED)
+    assert derive_no_test_surface_expectations(change_units=(unit,), expected_companions=(observed,)) == ()
+
+    missing = _companion(source_file_path="service.py", status=CompanionStatus.MISSING)
+    assert derive_no_test_surface_expectations(change_units=(unit,), expected_companions=(missing,)) == ()
+
+    truly_undiscovered = derive_no_test_surface_expectations(change_units=(unit,), expected_companions=())
+    assert len(truly_undiscovered) == 1
+    assert truly_undiscovered[0].reason_code is TestExpectationReasonCode.NO_TEST_SURFACE_FOUND
+
+
+# ---- derive_weakened_test_expectations ----
+#
+# Anchored to a real, same-PR production change: only ever eligible for
+# a test file that a real ExpectedCompanionChange
+# (reason_code=TEST_NOT_UPDATED, status=OBSERVED) already confirms is
+# linked to a changed production file and was itself genuinely touched.
+# A companion is the *only* correlation mechanism -- never
+# ChangeUnit.changed_candidates, never a filename-similarity guess.
+
+
+def test_weakened_flagged_when_anchored_to_observed_companion() -> None:
+    companion = _companion(source_file_path="service.py", status=CompanionStatus.OBSERVED)
     diff_file = _diff_file(
         path="test_service.py",
         deleted=["assert result.status == 'ok'", "assert result.amount == 100"],
         added=["# simplified test"],
     )
-    expectations = derive_weakened_test_expectations(change_units=(unit,), diff_files=(diff_file,))
+    expectations = derive_weakened_test_expectations(expected_companions=(companion,), diff_files=(diff_file,))
     assert len(expectations) == 1
     assert expectations[0].reason_code is TestExpectationReasonCode.TEST_TOUCHED_BUT_WEAKENED
+    assert expectations[0].change_unit_id == "u1"
     assert "2 removed" in expectations[0].evidence.bounded_text
 
 
-def test_not_weakened_when_assertions_unchanged() -> None:
-    unit = ChangeUnit(
-        id="u1", title="test change", change_kind=ChangeKind.TEST,
-        changed_candidates=(_candidate(file_path="test_service.py", qualified_name="test_process_payment"),),
+def test_weakened_never_flagged_without_a_companion_test_only_pr() -> None:
+    """The mandatory test-only negative case: a PR touching only
+    test_service.py, with no production change at all, produces zero
+    ExpectedCompanionChange objects (companions are only ever derived
+    from a changed *production* candidate's own test-file lookup -- see
+    patchfrog.change_intelligence.companions._test_staleness), so this
+    signal structurally cannot fire."""
+
+    diff_file = _diff_file(
+        path="test_service.py",
+        deleted=["assert result.status == 'ok'", "assert result.amount == 100"],
+        added=["# simplified test"],
     )
+    assert derive_weakened_test_expectations(expected_companions=(), diff_files=(diff_file,)) == ()
+
+
+def test_weakened_still_flagged_when_companion_status_is_missing_but_diff_shows_a_real_touch() -> None:
+    """Deliberately does not gate on companion.status: J's own
+    OBSERVED/MISSING split is derived from candidate-generated
+    all_changed_file_paths, which is added-lines-only and therefore
+    reports MISSING for a test file whose only change is a pure
+    deletion -- even though it really was touched. Real diff membership
+    is the authoritative "touched" signal here, not J's own status."""
+
+    companion = _companion(source_file_path="service.py", status=CompanionStatus.MISSING)
+    diff_file = _diff_file(
+        path="test_service.py",
+        deleted=["assert result.status == 'ok'"],
+        added=[],
+    )
+    expectations = derive_weakened_test_expectations(expected_companions=(companion,), diff_files=(diff_file,))
+    assert len(expectations) == 1
+    assert expectations[0].reason_code is TestExpectationReasonCode.TEST_TOUCHED_BUT_WEAKENED
+
+
+def test_weakened_never_flagged_when_companion_file_absent_from_diff_at_all() -> None:
+    """The real "never touched" case: no diff entry exists for the
+    companion's expected_file_path at all -- genuinely untouched,
+    regardless of companion.status."""
+
+    companion = _companion(source_file_path="service.py", status=CompanionStatus.MISSING)
+    assert derive_weakened_test_expectations(expected_companions=(companion,), diff_files=()) == ()
+
+
+def test_not_weakened_when_assertions_unchanged() -> None:
+    companion = _companion(source_file_path="service.py", status=CompanionStatus.OBSERVED)
     diff_file = _diff_file(
         path="test_service.py",
         deleted=["import old_mock"],
         added=["import new_mock"],
     )
-    assert derive_weakened_test_expectations(change_units=(unit,), diff_files=(diff_file,)) == ()
+    assert derive_weakened_test_expectations(expected_companions=(companion,), diff_files=(diff_file,)) == ()
 
 
 def test_not_weakened_when_assertions_strengthened() -> None:
-    unit = ChangeUnit(
-        id="u1", title="test change", change_kind=ChangeKind.TEST,
-        changed_candidates=(_candidate(file_path="test_service.py", qualified_name="test_process_payment"),),
-    )
+    companion = _companion(source_file_path="service.py", status=CompanionStatus.OBSERVED)
     diff_file = _diff_file(
         path="test_service.py",
         deleted=["assert result.status == 'ok'"],
         added=["assert result.status == 'ok'", "assert result.amount == 100"],
     )
-    assert derive_weakened_test_expectations(change_units=(unit,), diff_files=(diff_file,)) == ()
+    assert derive_weakened_test_expectations(expected_companions=(companion,), diff_files=(diff_file,)) == ()
 
 
 def test_weakened_flagged_when_skip_marker_added() -> None:
-    unit = ChangeUnit(
-        id="u1", title="test change", change_kind=ChangeKind.TEST,
-        changed_candidates=(_candidate(file_path="test_service.py", qualified_name="test_process_payment"),),
-    )
+    companion = _companion(source_file_path="service.py", status=CompanionStatus.OBSERVED)
     diff_file = _diff_file(
         path="test_service.py",
         deleted=["def test_process_payment():"],
         added=["@pytest.mark.skip(reason='flaky')", "def test_process_payment():"],
     )
-    expectations = derive_weakened_test_expectations(change_units=(unit,), diff_files=(diff_file,))
+    expectations = derive_weakened_test_expectations(expected_companions=(companion,), diff_files=(diff_file,))
     assert len(expectations) == 1
     assert "skip/xfail" in expectations[0].evidence.bounded_text
 
@@ -207,33 +281,46 @@ def test_weakened_flagged_when_skip_marker_added() -> None:
 def test_not_weakened_when_skip_marker_removed() -> None:
     """Un-skipping a test is strengthening, never flagged."""
 
-    unit = ChangeUnit(
-        id="u1", title="test change", change_kind=ChangeKind.TEST,
-        changed_candidates=(_candidate(file_path="test_service.py", qualified_name="test_process_payment"),),
-    )
+    companion = _companion(source_file_path="service.py", status=CompanionStatus.OBSERVED)
     diff_file = _diff_file(
         path="test_service.py",
         deleted=["@pytest.mark.skip(reason='flaky')", "def test_process_payment():"],
         added=["def test_process_payment():"],
     )
-    assert derive_weakened_test_expectations(change_units=(unit,), diff_files=(diff_file,)) == ()
+    assert derive_weakened_test_expectations(expected_companions=(companion,), diff_files=(diff_file,)) == ()
 
 
-def test_weakened_never_checked_for_non_test_file() -> None:
-    unit = ChangeUnit(
-        id="u1", title="behavior change", change_kind=ChangeKind.BEHAVIOR,
-        changed_candidates=(_candidate(file_path="service.py", qualified_name="process_payment"),),
-    )
-    diff_file = _diff_file(path="service.py", deleted=["assert x"], added=[])
-    assert derive_weakened_test_expectations(change_units=(unit,), diff_files=(diff_file,)) == ()
+def test_weakened_never_checked_for_a_non_companion_file() -> None:
+    """A real weakening exists in the diff, but no companion names this
+    file at all -- never guessed via filename similarity."""
+
+    companion = _companion(source_file_path="service.py", status=CompanionStatus.OBSERVED)
+    diff_file = _diff_file(path="test_unrelated.py", deleted=["assert x"], added=[])
+    assert derive_weakened_test_expectations(expected_companions=(companion,), diff_files=(diff_file,)) == ()
 
 
 def test_weakened_never_checked_when_file_absent_from_diff() -> None:
-    unit = ChangeUnit(
-        id="u1", title="test change", change_kind=ChangeKind.TEST,
-        changed_candidates=(_candidate(file_path="test_service.py", qualified_name="test_process_payment"),),
+    companion = _companion(source_file_path="service.py", status=CompanionStatus.OBSERVED)
+    assert derive_weakened_test_expectations(expected_companions=(companion,), diff_files=()) == ()
+
+
+def test_weakened_deduplicates_repeated_companions_for_same_test_file() -> None:
+    """Two production candidates in the same unit can both link to the
+    same test file (two OBSERVED companions, same expected_file_path) --
+    only one expectation, never a duplicate."""
+
+    companions = (
+        _companion(source_file_path="service.py", status=CompanionStatus.OBSERVED),
+        ExpectedCompanionChange(
+            change_unit_id="u1", source_qualified_name="other_fn", source_file_path="other.py",
+            expected_qualified_name="test_process_payment", expected_file_path="test_service.py",
+            reason_code=CompanionReasonCode.TEST_NOT_UPDATED, reason="likely test",
+            evidence="file_tests_file edge", status=CompanionStatus.OBSERVED,
+        ),
     )
-    assert derive_weakened_test_expectations(change_units=(unit,), diff_files=()) == ()
+    diff_file = _diff_file(path="test_service.py", deleted=["assert x", "assert y"], added=[])
+    expectations = derive_weakened_test_expectations(expected_companions=companions, diff_files=(diff_file,))
+    assert len(expectations) == 1
 
 
 # ---- derive_gaps ----

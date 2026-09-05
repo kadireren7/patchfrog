@@ -1,7 +1,9 @@
-"""Conditional, deterministic Test Coverage summary -- a small, bounded,
-evidence-only list, never a score/percentage/gamified badge. Mirrors
-:mod:`patchfrog.intent_verification.summary`'s own discipline: shown
-only when there is real gap evidence to report."""
+"""Conditional, deterministic Test Impact summary -- a small, bounded,
+evidence-only list, never a score/percentage/gamified badge. Named
+"Test impact", not "Test coverage" -- PatchFrog does not measure
+line/branch coverage, and the latter heading would misleadingly imply
+it does. Mirrors :mod:`patchfrog.intent_verification.summary`'s own
+discipline: shown only when there is real gap evidence to report."""
 
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ def render_test_gap_summary(report: TestIntelligenceReport) -> str | None:
     if not report.gaps:
         return None
 
-    lines = ["### Test coverage", ""]
+    lines = ["### Test impact", ""]
     for gap in report.gaps[:_MAX_LINES]:
         label = sanitize_untrusted_text(gap.expectation.source_qualified_name or gap.expectation.source_file_path)
         lines.append(f"- `{label}`: {sanitize_untrusted_text(gap.expectation.reason)}")

@@ -50,6 +50,28 @@ same list) already produced -- checked regardless of that companion's
 own `status` (even a `MISSING` `TEST_NOT_UPDATED` companion means "a
 test file *was* found," which is J's territory, not this milestone's).
 
+**Test-only PRs stay quiet -- Test Intelligence is not an inverse
+feature detector.** `TEST_TOUCHED_BUT_WEAKENED` (see below) is
+deliberately **anchored** to a real, same-PR *production* change: a
+test file is only ever eligible for it when a real
+`ExpectedCompanionChange` with `reason_code=TEST_NOT_UPDATED` already
+names it as `expected_file_path` -- i.e. J's own companion machinery
+already confirms this test file is linked to a changed production
+file. This is sound, not a heuristic guess, because
+`_test_staleness` iterates the *production* side only: for each
+changed production candidate, it looks up that candidate's own linked
+test files; it never runs in the reverse direction (starting from a
+changed test file and asking what it tests). A PR that touches only
+test files therefore produces **zero** `TEST_NOT_UPDATED` companions
+of any status for any file -- so this signal structurally cannot fire
+without a real production change in the same PR. Proven directly by
+the corpus's two mandatory negative cases (pure test-only assertion
+removal, pure test-only skip/xfail addition) and a precision case (an
+unrelated pre-existing test weakened while a *different* production
+file changes elsewhere in the same PR never fires, since the
+correlation is per-file, never "any production change in the PR
+unlocks any touched test").
+
 ### What does K (Contract & Blast Radius Intelligence) already detect, and is there overlap?
 
 K's `stale_consumers` are `ExpectedCompanionChange` objects with
@@ -64,7 +86,7 @@ cross-file caller is classified `ChangeKind.CONTRACT` by
 `ChangeUnit`s whose combined `change_kind` is exactly `BEHAVIOR`. A
 `CONTRACT`-kind change with a real caller is `K`'s own territory (a
 missing/stale *consumer*, not a missing *test*) and is correctly never
-re-flagged here -- see corpus case 6.
+re-flagged here -- see corpus case 9.
 
 ### What does L (Intent Verification) already detect, and is there overlap?
 
@@ -76,7 +98,7 @@ sufficient. This milestone's signals never look at PR title/body at
 all and fire (or don't) independent of whether any intent text exists.
 The two candidate kinds can coexist for the same `ChangeUnit` without
 duplicating each other (different evidence, different reason-code
-namespace) -- see corpus case 14 for a coexistence proof. L already
+namespace) -- see corpus cases 13/16 for coexistence proofs (with a gap, and fully resolved). L already
 established the precedent of referencing another package's objects by
 instance rather than re-deriving them (`IntentCoverage.relevant_companion_candidates`);
 this milestone follows the same discipline for J's `TEST_NOT_UPDATED`
@@ -92,15 +114,14 @@ already builds before this package would run:
   `symbol_id`), and the combined `expected_companions` list (J's own
   `TEST_NOT_UPDATED` objects, already computed once per run). No new
   `RepositoryQueryService` call.
-- `TEST_TOUCHED_BUT_WEAKENED` needs only the *diff itself* --
-  `DiffFile.added_lines`/`deleted_lines` (`patchfrog/diff/models.py`)
-  are already fully parsed, in-memory, for every review run before
-  Change Intelligence even runs. A structural (regex-only, no NLP,
-  no LLM) count of assertion-like lines and skip/xfail-marker lines
-  added vs. removed for any changed file that
-  `patchfrog.indexing.inventory.is_test_path` (already-existing, pure,
-  language-agnostic path heuristic -- the same function that produces
-  `IndexedFileModel.is_test` at index time) identifies as a test file
+- `TEST_TOUCHED_BUT_WEAKENED` needs the combined `expected_companions`
+  list (to identify *which* test files correlate to a real production
+  change -- see "Test-only PRs stay quiet" above) and the PR's own
+  already-parsed `DiffFile.added_lines`/`deleted_lines`
+  (`patchfrog/diff/models.py`, already built for every review run
+  before Change Intelligence even runs) for the actual structural
+  comparison. A regex-only (never NLP, never LLM) count of
+  assertion-like lines and skip/xfail-marker lines added vs. removed
   answers the question with zero additional I/O of any kind -- not
   even K's own one bounded base-content git fetch was needed.
 
@@ -169,41 +190,77 @@ parsing the diff against symbol boundaries, which is real future work
 this milestone deliberately does not attempt (see docs for the
 explicit deferral, mirroring K's own `ContractKind` deferrals).
 
-### Self-caught bug during corpus authoring: pure-deletion test edits are invisible to `ChangeUnit`
+### Self-caught/externally-flagged issues during development (final, post-correction)
 
-The first implementation of `derive_weakened_test_expectations` iterated
-`unit.changed_candidates` to find touched test files, mirroring J's own
-`_test_staleness` structure. Building the real corpus case for "an
-assertion was deleted with nothing added back" exposed that this is
-wrong: `patchfrog.review.candidates._extract_added_lines` is the sole
-input to candidate generation, so a diff hunk containing **only**
-deletions produces zero `ReviewCandidate`s for that file -- it therefore
-never appears in any `ChangeUnit` at all, even though a bare assertion
+**Issue 1 (self-caught, initial build): pure-deletion test edits are
+invisible to `ChangeUnit`.** The first implementation of
+`derive_weakened_test_expectations` iterated `unit.changed_candidates`
+to find touched test files, mirroring J's own `_test_staleness`
+structure. Building the real corpus case for "an assertion was deleted
+with nothing added back" exposed that this is wrong:
+`patchfrog.review.candidates._extract_added_lines` is the sole input to
+candidate generation, so a diff hunk containing **only** deletions
+produces zero `ReviewCandidate`s for that file -- it therefore never
+appears in any `ChangeUnit` at all, even though a bare assertion
 deletion is exactly the kind of silent test erosion this signal exists
-to catch (arguably the highest-value case, since the file may then
-receive *no* AI review attention whatsoever). Fixed by scanning
-`diff_files` directly for `is_test_path` matches, entirely decoupled
-from `ChangeUnit.changed_candidates` -- a real `ChangeUnit` id is still
-attributed when one happens to touch the same file (the common case:
-most weakening edits touch at least one other line too), falling back
-to a deterministic synthetic id (`f"standalone:{file_path}"`) when none
-does. Two corpus cases (the assertion-removal case and a title/token
-mismatch in an unrelated coexistence case, see below) initially passed
-"for the wrong reason" -- a pure-deletion fixture that never exercised
-the real counting logic at all because no candidate existed -- until
-this was caught; both were re-verified to genuinely exercise the fixed
-logic afterward. Mirrors Milestone L's own "check whether the fixture
-actually produces the diff you think it does" lesson.
+to catch. First fix: scan `diff_files` directly rather than
+`ChangeUnit.changed_candidates` to *identify* which files to consider.
 
-A second, smaller self-caught issue in the same pass: a coexistence
-corpus case's PR title used "retries" (plural) while the affected
-callee's own name tokenized to "retry" (singular) -- L's deterministic
-lexical matcher never stems, so the claim and the affected-surface node
-shared no token and the expected `PotentialIntentGap` never appeared.
-Fixed by aligning the title's wording with the real identifier's token
-exactly (matching Milestone L's own corpus's phrasing convention) --
-not a code bug, a fixture-wording bug caught by the same "does the
-fixture actually produce what I think it does" discipline.
+**Issue 2 (externally flagged, correction round): the first fix let a
+test-only PR produce a gap.** Scanning *every* touched test file in
+`diff_files` (as Issue 1's fix did) meant `TEST_TOUCHED_BUT_WEAKENED`
+could fire for a PR that touches nothing but tests -- directly
+violating the spec's "not an inverse feature detector" requirement and
+its mandatory test-only negative case. Fixed by **anchoring** the
+signal to a real `ExpectedCompanionChange` with
+`reason_code=TEST_NOT_UPDATED` naming that exact test file as
+`expected_file_path` -- see "Test-only PRs stay quiet" above for why
+this is sound (companions are only ever derived from the *production*
+side, never the reverse). The `f"standalone:{file_path}"` synthetic
+change-unit-id fallback from Issue 1's fix was removed entirely: the
+companion object itself already carries a real `change_unit_id`
+(traced back to the production candidate that produced it), which is
+both simpler and more correct than any fallback.
+
+**Issue 3 (self-caught while re-verifying Issue 2's fix): anchoring on
+`companion.status is OBSERVED` reintroduced Issue 1's own blind spot.**
+The natural first anchor -- require `status=OBSERVED` on the
+`TEST_NOT_UPDATED` companion -- turned out to be unsound: that status
+is itself derived from `all_changed_file_paths`, a set built from
+generated `ReviewCandidate`s, so it inherits the exact added-lines-only
+blind spot Issue 1 fixed at the file-identification layer. A real
+corpus run of "production changes, and its already-existing test loses
+an assertion via pure deletion" produced `status=MISSING` for the
+correlating companion (since the test file's pure-deletion edit
+produced no candidate) -- so gating on `OBSERVED` would have silently
+dropped exactly the case Issue 1 was written to catch. Fixed by
+dropping the `status` filter entirely: the companion is used *only* to
+establish the file-level correlation to a changed production file;
+whether the test file was genuinely touched is answered independently,
+and more precisely, by direct membership in `diff_files` (real ground
+truth, not a derived approximation). Both the test-only negative
+requirement and the pure-deletion positive case now hold simultaneously
+-- proven together in the corpus (`test_case_weakened_assertions_removed`
+is exactly this pure-deletion-plus-production-change scenario, and
+correctly produces a `MISSING`-status companion alongside a real gap).
+
+**Issue 4 (self-caught): the module docstring's original "18/18"
+framing conflated behavioral scenarios with structural/pipeline
+tests.** External review correctly noted that a telemetry-serialization
+test, a version-pin test, and a structural zero-`AsyncSession`-import
+proof are not themselves behavioral evaluation scenarios. Section 4/8
+below now report the two counts separately.
+
+**Issue 5 (self-caught): a coexistence corpus case's PR title used
+"retries" (plural) while the affected callee's own name tokenized to
+"retry" (singular)** -- L's deterministic lexical matcher never stems,
+so the claim and the affected-surface node shared no token and the
+expected `PotentialIntentGap` never appeared. Fixed by aligning the
+title's wording with the real identifier's token exactly (matching
+Milestone L's own corpus's phrasing convention) -- not a code bug, a
+fixture-wording bug caught by the same "does the fixture actually
+produce what I think it does" discipline every prior milestone's own
+corpus work has relied on.
 
 ### What is explicitly out of scope / deferred (never faked)
 
@@ -258,63 +315,86 @@ Wired at the exact same point J/K/L already established
 (`PullRequestReviewService._execute_and_persist`, right after Intent
 Verification): a fourth optional `<test_intelligence>` prompt section
 (`REVIEW_PROMPT_VERSION` 6 -> 7), a Test Story prefix folded into
-`change_story`, a new conditional `### Test coverage` publication
-block (its own persisted `test_coverage_summary_text` column, mirroring
+`change_story`, a new conditional `### Test impact` publication block
+(its own persisted `test_coverage_summary_text` column, mirroring
 Intent Coverage), five new nullable-default `review_runs` columns
 (migration `0021_test_intelligence`), a new `TestIntelligenceTelemetry`
 counts-only field on `ReviewTelemetrySnapshot` (`TELEMETRY_SCHEMA_VERSION`
 4 -> 5). No new agent role, no new provider call, no new repository-graph
 query, no new base-commit fetch.
 
-## 4. Corpus results (18/18 real-stack scenarios, spec section 31 minimum)
+**User-facing wording**: the rendered heading is `### Test impact`, not
+`### Test coverage` -- PatchFrog does not measure line/branch coverage,
+and a "coverage" heading would misleadingly imply it does. Same for the
+Change Story prefix ("Test impact: ..."). Only the *rendered* text
+changed; internal Python/DB field and column names
+(`test_coverage_summary_text`, `test_gap_candidate_count`, ...) keep
+their original names, since renaming internal identifiers would be
+unrelated churn.
+
+## 4. Corpus results (21 behavioral scenarios + 3 supporting tests)
 
 All cases use a real git fixture repository, real indexing
 (`RepositoryIndexingService`), a real diff (`diff_against_base`), real
 `ReviewCandidateGenerator`/`build_change_intelligence_report` output,
 and (where relevant) real `build_contract_intelligence_report`/
 `build_intent_verification_report` output. Zero FakeLLM-authored ground
-truth anywhere.
+truth anywhere. **21 behavioral corpus scenarios**, exceeding the
+spec's 18-scenario minimum, plus **3 supporting integration/structural
+tests** deliberately not counted toward that total (see section 8's
+explicit accounting and matrix against the spec's own 18 named
+scenarios).
 
 | # | Case | Result |
 |---|------|--------|
 | 1 | New, entirely untested BEHAVIOR function | `NO_TEST_SURFACE_FOUND` gap |
 | 2 | Existing test file found but MISSING (J's own territory) | dedup: 0 gaps |
 | 3 | Existing test touched normally, no weakening | 0 gaps |
-| 4 | Real assertion removed from a touched test | `TEST_TOUCHED_BUT_WEAKENED` gap |
-| 5 | Assertions strengthened | 0 gaps |
-| 6 | Only an unused import removed (neutral) | 0 gaps |
-| 7 | `@pytest.mark.skip` newly added | `TEST_TOUCHED_BUT_WEAKENED` gap |
-| 8 | `@pytest.mark.skip` removed (un-skip) | 0 gaps (strengthening) |
+| 4 | Production changed + its linked test's assertion removed | `TEST_TOUCHED_BUT_WEAKENED` gap |
+| 4a | **Mandatory negative**: same test edit, but test-only (no production change) | 0 gaps -- structurally cannot fire |
+| 5 | Assertions strengthened (production+test both present) | 0 gaps |
+| 6 | Only an unused import removed (neutral, production+test both present) | 0 gaps |
+| 7 | Production changed + `@pytest.mark.skip` newly added to its linked test | `TEST_TOUCHED_BUT_WEAKENED` gap |
+| 7a | **Mandatory negative**: same skip addition, but test-only | 0 gaps |
+| 8 | Production changed + `@pytest.mark.skip` removed (un-skip) | 0 gaps (strengthening) |
+| 8a | **Precision check**: unrelated pre-existing test weakened while a *different* production file changes elsewhere | 0 gaps for the unrelated test (per-file anchor, not "any production change unlocks any test") |
 | 9 | Real cross-file caller -> CONTRACT-kind, untested | 0 `NO_TEST_SURFACE_FOUND` gaps (K's territory) |
 | 10 | CONFIGURATION-kind file change | 0 gaps |
 | 11 | MIXED unit (behavior + infra in one component) | 0 `NO_TEST_SURFACE_FOUND` gaps |
 | 12 | Real K stale consumer + a separate untested BEHAVIOR change | both fire, independently |
-| 13 | Real L intent gap + a separate test gap | both fire, independently |
+| 13 | Real L intent gap + a separate test gap (test unchanged) | both fire, independently |
 | 14 | INFRASTRUCTURE-kind file change | 0 gaps |
 | 15 | New behavior + a brand-new test file added in the same PR | 0 gaps (J's OBSERVED companion suppresses) |
-| 16 | Real `review_local` pipeline run | persisted correctly on `ReviewRunModel` |
-| 17 | Telemetry/versioning round trip on a real report | version + counts correct |
-| 18 | Structural: no `AsyncSession` import anywhere in the package | proven via AST scan |
+| 16 | Intent-mapped behavior + relevant test **updated** (companion to 13) | both L and M report clean/no gap |
+| 17 | Docs-only change | 0 gaps, no crash |
+| 18 | Two unrelated ChangeUnits, each independently untested | two distinct gaps, never merged/conflated |
+| 19 | Large fan-out: one function, 7 independently-linked test files, all weakened | bounded to `MAX_TEST_GAPS_PER_UNIT` (5), not one per file |
+| 20 | A related test file is **deleted** in the same commit | `NO_TEST_SURFACE_FOUND` fires (J's post-deletion graph has no edge -- equivalent to "no test ever found") |
+| 21 | **Stale-gap regression**: head A has a real gap; head B (same branch) adds the test and is recomputed from scratch against the new exact head | the head-A gap does not survive into the head-B report |
 
-## 5. Self-caught issues during corpus authoring
+**Supporting integration/structural tests** (not counted above): a
+real `review_local` pipeline run persisting Test Intelligence onto
+`ReviewRunModel`; a telemetry/versioning round trip on a real
+corpus-built report; a structural AST proof that no module in
+`patchfrog/test_intelligence/` imports `AsyncSession`.
 
-See section 1's "Self-caught bug during corpus authoring" above for
-the full narrative: (1) a real architecture fix -- pure-deletion test
-edits produce zero `ReviewCandidate`s, so `TEST_TOUCHED_BUT_WEAKENED`
-detection was redesigned to scan `diff_files` directly rather than
-`ChangeUnit.changed_candidates`; (2) a fixture-wording fix -- a
-coexistence case's PR title used "retries" where the real identifier
-tokenized to "retry" (no stemming, by design), breaking L's lexical
-match. Both caught by re-verifying that each fixture's real git diff
-produced the exact evidence the test claimed, before trusting a
-passing assertion.
+## 5. Self-caught/externally-flagged issues
 
-## 6. Gates (final)
+See section 1's "Self-caught/externally-flagged issues" above for the
+full five-issue narrative (pure-deletion invisibility -> anchor
+introduced -> anchor's own status-filter blind spot found and removed
+-> accounting corrected -> a lexical-matching fixture-wording fix).
+Each was caught by re-verifying that a fixture's real git diff/real
+companion output produced the exact evidence the test claimed, before
+trusting a passing assertion -- the same discipline every prior
+milestone's own corpus work has relied on.
 
-- `ruff check .`: clean (488 files scanned, whole repo).
-- `mypy . --strict`: clean, 488 source files.
-- `pytest tests/`: **1576/1576 passing** (1178 unit + 398 integration),
-  against real Postgres/Redis.
+## 6. Gates (final, post-correction)
+
+- `ruff check .`: clean, whole repo.
+- `mypy . --strict`: clean, whole repo.
+- `pytest tests/`: full suite passing against real Postgres/Redis (see
+  the final report for the exact post-correction total).
 - Alembic: single head (`0021_test_intelligence`), real upgrade applied
   cleanly on top of `0020_intent_verification`.
 - Both Docker images (`api`, `worker`) built clean from `docker/Dockerfile`.
@@ -324,10 +404,51 @@ passing assertion.
 
 ## 7. Versioning (final)
 
-- `TEST_INTELLIGENCE_VERSION = 1` (new).
+- `TEST_INTELLIGENCE_VERSION = 1` -- this is the *corrected*, final
+  semantics (test-only-quiet, status-independent diff-anchored
+  correlation): the version was never bumped mid-correction because
+  PR #45 had not yet merged, so there was no prior "v1" behavior a
+  consumer could have already observed and relied on. `1` names this
+  final design, not the pre-correction one.
 - `REVIEW_PROMPT_VERSION`: 6 -> 7 (new `<test_intelligence>` section).
 - `TELEMETRY_SCHEMA_VERSION`: 4 -> 5 (new `test_intelligence` telemetry field).
 - `REVIEW_POLICY_VERSION`/`REVIEW_ENGINE_VERSION`/`CONFIG_SCHEMA_VERSION`/
   `QUALITY_COST_POLICY_VERSION`/`CHANGE_INTELLIGENCE_VERSION`/
   `CONTRACT_INTELLIGENCE_VERSION`/`INTENT_VERIFICATION_VERSION`: all
   unchanged, each pinned by `tests/unit/test_test_intelligence_versioning.py`.
+
+## 8. Spec section 31 scenario matrix (18 named scenarios, explicit accounting)
+
+| # | Spec scenario | Status | Corpus case(s) |
+|---|---------------|--------|-----------------|
+| 1 | Behavior changed + related test updated | SUPPORTED | 3 |
+| 2 | Behavior changed + related test unchanged (J dedup) | SUPPORTED | 2 |
+| 3 | No known related test | SUPPORTED | 1 |
+| 4 | Contract change + related test unchanged | SUPPORTED (scope: K's territory, M correctly quiet) | 9 |
+| 5 | Intent-mapped behavior + relevant test unchanged | SUPPORTED | 13 |
+| 6 | Intent-mapped behavior + relevant test updated | SUPPORTED | 16 |
+| 7 | Negative/error-path test missing | **DEFERRED** -- see below | -- |
+| 8 | Complete implementation + tests | SUPPORTED | 3, 15 |
+| 9 | Docs-only | SUPPORTED | 17 |
+| 10 | Test-only | SUPPORTED (mandatory negatives) | 4a, 7a |
+| 11 | Internal helper (no external consumer) | SUPPORTED -- M has no K-style "externally consumed" restriction; an untested private helper is flagged the same as any other untested BEHAVIOR symbol | 1 |
+| 12 | Unrelated test changed | SUPPORTED | 8a |
+| 13 | Stale gap disappears on later head | SUPPORTED | 21 |
+| 14 | J TEST_NOT_UPDATED dedup | SUPPORTED | 2 |
+| 15 | K/L coexistence/dedup | SUPPORTED | 12, 13 |
+| 16 | Two unrelated ChangeUnits / separate tests | SUPPORTED | 18 |
+| 17 | Large fan-out boundedness | SUPPORTED | 19 |
+| 18 | Deleted related test | SUPPORTED | 20 |
+
+**Scenario 7, DEFERRED, with technical reason**: "does the test surface
+exercise a *specific* code path (e.g. an error/exception branch)"
+requires reasoning about branch/path coverage -- fundamentally a
+different granularity than this milestone's file-existence and
+gross-assertion-count signals. Answering it correctly would require
+either (a) real line/branch coverage instrumentation (which PatchFrog
+explicitly does not run, and which this milestone's own non-goals
+rule out), or (b) parsing the diff against control-flow/AST boundaries
+to determine which branch of the changed function a given assertion
+exercises -- real, substantial future work, not a small extension of
+the existing regex-based markers. Never faked; not claimed as passing
+anywhere in this document, the code, or the PR description.

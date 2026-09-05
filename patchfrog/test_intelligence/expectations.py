@@ -23,7 +23,6 @@ from patchfrog.change_intelligence.domain import (
     ExpectedCompanionChange,
 )
 from patchfrog.diff.models import DiffFile, DiffLine
-from patchfrog.indexing.inventory import is_test_path
 from patchfrog.test_intelligence.domain import (
     MAX_TEST_GAPS_PER_UNIT,
     PotentialTestGap,
@@ -125,7 +124,7 @@ def _count_markers(lines: list[DiffLine]) -> tuple[int, int]:
 
 
 def derive_weakened_test_expectations(
-    *, change_units: tuple[ChangeUnit, ...], diff_files: tuple[DiffFile, ...]
+    *, expected_companions: tuple[ExpectedCompanionChange, ...], diff_files: tuple[DiffFile, ...]
 ) -> tuple[TestExpectation, ...]:
     """One expectation per genuinely-touched test file whose structural
     assertion signal weakened -- net assertion markers decreased, or a
@@ -133,32 +132,50 @@ def derive_weakened_test_expectations(
     markers count as 'weakened'" section for exactly why removing a
     skip marker never flags (that is strengthening).
 
-    Scans ``diff_files`` directly, never ``ChangeUnit.changed_candidates``
-    -- a test file where every changed line is a pure deletion (an
-    assertion removed with nothing added back) produces zero
-    :class:`~patchfrog.review.domain.ReviewCandidate`\\ s at all (see
-    :func:`patchfrog.review.candidates._extract_added_lines`), so it
-    would never appear in any ChangeUnit even though it is exactly the
-    weakening this signal exists to catch. A real ChangeUnit id is
-    still attributed when one happens to touch the same file (the
-    common case); otherwise a deterministic synthetic id keeps the
-    candidate attributable without fabricating a unit that never
-    existed."""
+    **Anchored to a real, same-PR production change** (spec's own
+    "Test Intelligence is not an inverse feature detector" requirement,
+    and the mandatory test-only negative case): a test file is only
+    ever eligible here when J's own companions already confirm, via a
+    real ``TEST_NOT_UPDATED`` companion, that it is linked to a changed
+    *production* file. Companions are only ever derived from a changed
+    *production* candidate's own test-file lookup
+    (:func:`patchfrog.change_intelligence.companions._test_staleness`
+    iterates the production side, never the reverse) -- a PR that
+    touches only test files therefore produces zero such companions of
+    any status, so this signal structurally cannot fire without a
+    real, same-PR production change. See
+    ``validation/test_intelligence/latest-summary.md`` section 1
+    ("Test-only PRs stay quiet") for the full proof.
 
-    qualified_name_by_file: dict[str, str] = {}
-    unit_id_by_file: dict[str, str] = {}
-    for unit in change_units:
-        for candidate in unit.changed_candidates:
-            if is_test_path(candidate.file_path):
-                unit_id_by_file.setdefault(candidate.file_path, unit.id)
-                if candidate.qualified_name is not None:
-                    qualified_name_by_file.setdefault(candidate.file_path, candidate.qualified_name)
+    Deliberately does **not** filter on ``companion.status is OBSERVED``:
+    that status is itself derived from ``all_changed_file_paths``, a
+    set built from the *candidates* generated for this diff -- and
+    candidate generation is added-lines-only
+    (:func:`patchfrog.review.candidates._extract_added_lines`), so a
+    test file whose only change is a pure deletion never produces a
+    candidate and is therefore reported ``MISSING`` by J even though it
+    really was touched. Whether the test file was genuinely touched is
+    instead answered directly and more precisely by real membership in
+    ``diff_files`` (the same already-parsed diff every review run
+    builds) -- the companion is used *only* to establish the
+    correlation to a changed production file, never to gate on
+    "touched"."""
 
+    diff_by_path = {d.path: d for d in diff_files}
     out: list[TestExpectation] = []
-    for diff_file in diff_files:
-        file_path = diff_file.path
-        if not is_test_path(file_path):
+    seen_files: set[str] = set()
+
+    for companion in expected_companions:
+        if companion.reason_code is not CompanionReasonCode.TEST_NOT_UPDATED:
             continue
+        file_path = companion.expected_file_path
+        if file_path in seen_files:
+            continue
+        seen_files.add(file_path)
+
+        diff_file = diff_by_path.get(file_path)
+        if diff_file is None:
+            continue  # not present in this diff at all -- genuinely untouched, not this signal's concern
 
         added_assert, added_skip = _count_markers(diff_file.added_lines)
         removed_assert, removed_skip = _count_markers(diff_file.deleted_lines)
@@ -173,14 +190,16 @@ def derive_weakened_test_expectations(
         if net_skip > 0:
             evidence_parts.append(f"skip/xfail markers newly added: {net_skip}")
 
-        change_unit_id = unit_id_by_file.get(file_path, f"standalone:{file_path}")
         out.append(
             TestExpectation(
-                change_unit_id=change_unit_id,
-                source_qualified_name=qualified_name_by_file.get(file_path, file_path),
+                change_unit_id=companion.change_unit_id,
+                source_qualified_name=companion.expected_qualified_name,
                 source_file_path=file_path,
                 reason_code=TestExpectationReasonCode.TEST_TOUCHED_BUT_WEAKENED,
-                reason=f"{file_path!r} was changed in this diff but its structural test signal weakened",
+                reason=(
+                    f"{file_path!r} is linked to changed production symbol "
+                    f"{companion.source_qualified_name!r} but its structural test signal weakened"
+                ),
                 evidence=TestEvidence(
                     reason_code=TestExpectationReasonCode.TEST_TOUCHED_BUT_WEAKENED,
                     bounded_text="; ".join(evidence_parts),

@@ -1,6 +1,7 @@
 """Controlled corpus for Test Intelligence (spec section 31, minimum 18
-scenarios) -- real git repository, real indexing, real diff-driven
-:class:`~patchfrog.review.domain.ReviewCandidate` generation, real
+behavioral scenarios) -- real git repository, real indexing, real
+diff-driven :class:`~patchfrog.review.domain.ReviewCandidate`
+generation, real
 :func:`~patchfrog.change_intelligence.service.build_change_intelligence_report`
 for real `ChangeUnit`s, then real
 :func:`~patchfrog.test_intelligence.service.build_test_intelligence_report`.
@@ -10,6 +11,23 @@ FakeLLM output.
 
 Each case is a real, independent commit against a shared base fixture
 repository, with explicit ground truth recorded directly in the test.
+
+**Accounting** (see ``validation/test_intelligence/latest-summary.md``
+section 8 for the full matrix against the spec's 18 named scenarios):
+this file contains **21 behavioral corpus scenarios** (numbered
+1-21 in the section comments below, including the mandatory test-only
+negative cases and the exact-head stale-gap regression) plus **3
+supporting integration/structural tests** (real `review_local` pipeline
+persistence, telemetry/versioning round trip, a structural
+zero-`AsyncSession`-import proof) that are deliberately **not** counted
+toward the behavioral total. One spec matrix item --
+"negative/error-path test missing" (does the test surface exercise a
+*specific* code path, e.g. an error branch) -- is explicitly **DEFERRED**:
+this milestone's signals operate at file-existence and gross
+assertion-count granularity, never per-branch/per-path coverage, so
+"was the error path tested" cannot be answered without a semantic/
+path-coverage analysis this milestone does not (and should not, per its
+own non-goals) attempt. Marked DEFERRED, never implied as passing.
 """
 
 from __future__ import annotations
@@ -193,13 +211,80 @@ async def test_case_existing_test_touched_healthy_no_gap(
     assert report.gaps == ()
 
 
-# ---- 4. TEST_TOUCHED_BUT_WEAKENED: a real assertion removed ----
+# ---- 4. TEST_TOUCHED_BUT_WEAKENED: production changed + related test weakened ----
 
 
 async def test_case_weakened_assertions_removed(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
+    """The anchored positive case: apply_discount (production) AND its
+    linked test_pricing.py both change in the same PR -- a real OBSERVED
+    TEST_NOT_UPDATED companion exists, so the weakened assertion is
+    correctly attributed to that companion's own ChangeUnit."""
+
     full_name = "test/ti-weakened-assert"
+    root = _setup_base(tmp_path)
+    (root / "pricing.py").write_text("def apply_discount(order):\n    return order['total']\n")
+    (root / "test_pricing.py").write_text(
+        "from pricing import apply_discount\n\n\ndef test_apply_discount():\n"
+        "    result = apply_discount({'total': 100})\n"
+        "    assert result == 100\n"
+        "    assert isinstance(result, int)\n"
+    )
+    base_sha = commit_all(root, "base with a thorough test")
+    repository_id = await _make_repo(session_factory, full_name)
+
+    (root / "pricing.py").write_text(
+        "def apply_discount(order):\n    if order['loyalty_years'] > 5:\n        return order['total'] * 0.9\n"
+        "    return order['total']\n"
+    )
+    (root / "test_pricing.py").write_text(
+        "from pricing import apply_discount\n\n\ndef test_apply_discount():\n"
+        "    result = apply_discount({'total': 100})\n"
+        "    assert result == 100\n"
+    )
+    commit_all(root, "add loyalty discount; simplify test_apply_discount, dropping the type assertion")
+
+    change_report, diff_files = await _index_and_group(
+        session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
+    )
+    # A real TEST_NOT_UPDATED companion names test_pricing.py -- the
+    # correlation this signal anchors on. Its own status happens to be
+    # MISSING here (test_pricing.py's edit is a pure deletion, so it
+    # never produced a ReviewCandidate and is therefore absent from
+    # J's own all_changed_file_paths accounting) -- irrelevant to this
+    # milestone's own, more precise "genuinely in diff_files" touch
+    # check (see expectations.derive_weakened_test_expectations).
+    assert any(
+        c.reason_code is CompanionReasonCode.TEST_NOT_UPDATED and c.expected_file_path == "test_pricing.py"
+        for c in change_report.expected_companions
+    )
+    report = build_test_intelligence_report(
+        change_units=change_report.change_units,
+        expected_companions=change_report.expected_companions,
+        diff_files=tuple(diff_files),
+    )
+
+    assert len(report.gaps) == 1
+    assert report.gaps[0].expectation.reason_code is TestExpectationReasonCode.TEST_TOUCHED_BUT_WEAKENED
+    assert report.gaps[0].expectation.source_file_path == "test_pricing.py"
+
+
+# ---- 4a. MANDATORY NEGATIVE: test-only assertion removal, no production change -> quiet ----
+
+
+async def test_case_test_only_assertion_removal_stays_quiet(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """The mandatory test-only negative case (spec's own "Test
+    Intelligence is not an inverse feature detector" requirement):
+    exactly the same test-side edit as the positive case above, but
+    pricing.py itself never changes in this PR -- zero
+    TEST_NOT_UPDATED companions exist at all (companions.py only ever
+    looks up test files *from* a changed production candidate), so
+    TEST_TOUCHED_BUT_WEAKENED structurally cannot fire."""
+
+    full_name = "test/ti-test-only-assert"
     root = _setup_base(tmp_path)
     (root / "pricing.py").write_text("def apply_discount(order):\n    return order['total']\n")
     (root / "test_pricing.py").write_text(
@@ -221,18 +306,19 @@ async def test_case_weakened_assertions_removed(
     change_report, diff_files = await _index_and_group(
         session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
     )
+    assert not any(
+        c.reason_code is CompanionReasonCode.TEST_NOT_UPDATED for c in change_report.expected_companions
+    )
     report = build_test_intelligence_report(
         change_units=change_report.change_units,
         expected_companions=change_report.expected_companions,
         diff_files=tuple(diff_files),
     )
 
-    assert len(report.gaps) == 1
-    assert report.gaps[0].expectation.reason_code is TestExpectationReasonCode.TEST_TOUCHED_BUT_WEAKENED
-    assert report.gaps[0].expectation.source_file_path == "test_pricing.py"
+    assert report.gaps == ()
 
 
-# ---- 5. Assertions strengthened -> never a gap ----
+# ---- 5. Assertions strengthened (production+test present) -> never a gap ----
 
 
 async def test_case_strengthened_assertions_no_gap(
@@ -248,13 +334,17 @@ async def test_case_strengthened_assertions_no_gap(
     base_sha = commit_all(root, "base with a thin test")
     repository_id = await _make_repo(session_factory, full_name)
 
+    (root / "pricing.py").write_text(
+        "def apply_discount(order):\n    if order['loyalty_years'] > 5:\n        return order['total'] * 0.9\n"
+        "    return order['total']\n"
+    )
     (root / "test_pricing.py").write_text(
         "from pricing import apply_discount\n\n\ndef test_apply_discount():\n"
         "    result = apply_discount({'total': 100})\n"
         "    assert result == 100\n"
         "    assert isinstance(result, int)\n"
     )
-    commit_all(root, "strengthen test_apply_discount with a type assertion")
+    commit_all(root, "add loyalty discount; strengthen test_apply_discount with a type assertion")
 
     change_report, diff_files = await _index_and_group(
         session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
@@ -284,11 +374,15 @@ async def test_case_neutral_test_change_no_gap(
     base_sha = commit_all(root, "base with an unused import")
     repository_id = await _make_repo(session_factory, full_name)
 
+    (root / "pricing.py").write_text(
+        "def apply_discount(order):\n    if order['loyalty_years'] > 5:\n        return order['total'] * 0.9\n"
+        "    return order['total']\n"
+    )
     (root / "test_pricing.py").write_text(
         "from pricing import apply_discount\n\n\ndef test_apply_discount():\n"
         "    assert apply_discount({'total': 100}) == 100\n"
     )
-    commit_all(root, "remove unused import in test_pricing")
+    commit_all(root, "add loyalty discount; remove unused import in test_pricing")
 
     change_report, diff_files = await _index_and_group(
         session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
@@ -302,13 +396,53 @@ async def test_case_neutral_test_change_no_gap(
     assert report.gaps == ()
 
 
-# ---- 7. A skip marker newly added -> flagged even with unchanged asserts ----
+# ---- 7. A skip marker newly added (production changed too) -> flagged ----
 
 
 async def test_case_skip_marker_added_flagged(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
     full_name = "test/ti-skip-added"
+    root = _setup_base(tmp_path)
+    (root / "pricing.py").write_text("def apply_discount(order):\n    return order['total']\n")
+    (root / "test_pricing.py").write_text(
+        "from pricing import apply_discount\n\n\ndef test_apply_discount():\n"
+        "    assert apply_discount({'total': 100}) == 100\n"
+    )
+    base_sha = commit_all(root, "base with a passing test")
+    repository_id = await _make_repo(session_factory, full_name)
+
+    (root / "pricing.py").write_text(
+        "def apply_discount(order):\n    if order['loyalty_years'] > 5:\n        return order['total'] * 0.9\n"
+        "    return order['total']\n"
+    )
+    (root / "test_pricing.py").write_text(
+        "import pytest\nfrom pricing import apply_discount\n\n\n@pytest.mark.skip(reason='flaky in CI')\n"
+        "def test_apply_discount():\n    assert apply_discount({'total': 100}) == 100\n"
+    )
+    commit_all(root, "add loyalty discount; skip test_apply_discount, flaky in CI")
+
+    change_report, diff_files = await _index_and_group(
+        session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
+    )
+    report = build_test_intelligence_report(
+        change_units=change_report.change_units,
+        expected_companions=change_report.expected_companions,
+        diff_files=tuple(diff_files),
+    )
+
+    assert len(report.gaps) == 1
+    assert report.gaps[0].expectation.reason_code is TestExpectationReasonCode.TEST_TOUCHED_BUT_WEAKENED
+    assert "skip" in report.gaps[0].expectation.evidence.bounded_text
+
+
+# ---- 7a. MANDATORY NEGATIVE: test-only skip/xfail addition, no production change -> quiet ----
+
+
+async def test_case_test_only_skip_marker_addition_stays_quiet(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    full_name = "test/ti-test-only-skip"
     root = _setup_base(tmp_path)
     (root / "pricing.py").write_text("def apply_discount(order):\n    return order['total']\n")
     (root / "test_pricing.py").write_text(
@@ -327,18 +461,19 @@ async def test_case_skip_marker_added_flagged(
     change_report, diff_files = await _index_and_group(
         session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
     )
+    assert not any(
+        c.reason_code is CompanionReasonCode.TEST_NOT_UPDATED for c in change_report.expected_companions
+    )
     report = build_test_intelligence_report(
         change_units=change_report.change_units,
         expected_companions=change_report.expected_companions,
         diff_files=tuple(diff_files),
     )
 
-    assert len(report.gaps) == 1
-    assert report.gaps[0].expectation.reason_code is TestExpectationReasonCode.TEST_TOUCHED_BUT_WEAKENED
-    assert "skip" in report.gaps[0].expectation.evidence.bounded_text
+    assert report.gaps == ()
 
 
-# ---- 8. A skip marker removed (un-skip) -> never flagged (strengthening) ----
+# ---- 8. A skip marker removed (un-skip, production changed too) -> never flagged ----
 
 
 async def test_case_skip_marker_removed_not_flagged(
@@ -354,11 +489,15 @@ async def test_case_skip_marker_removed_not_flagged(
     base_sha = commit_all(root, "base with a skipped test")
     repository_id = await _make_repo(session_factory, full_name)
 
+    (root / "pricing.py").write_text(
+        "def apply_discount(order):\n    if order['loyalty_years'] > 5:\n        return order['total'] * 0.9\n"
+        "    return order['total']\n"
+    )
     (root / "test_pricing.py").write_text(
         "from pricing import apply_discount\n\n\ndef test_apply_discount():\n"
         "    assert apply_discount({'total': 100}) == 100\n"
     )
-    commit_all(root, "un-skip test_apply_discount, no longer flaky")
+    commit_all(root, "add loyalty discount; un-skip test_apply_discount, no longer flaky")
 
     change_report, diff_files = await _index_and_group(
         session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
@@ -370,6 +509,66 @@ async def test_case_skip_marker_removed_not_flagged(
     )
 
     assert report.gaps == ()
+
+
+# ---- 8a. Precision check: an unrelated pre-existing test weakened while a
+# DIFFERENT production file changes elsewhere -> the unrelated test stays quiet ----
+
+
+async def test_case_unrelated_test_weakened_elsewhere_in_pr_stays_quiet(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Precision proof for the companion-anchor correlation: a real
+    production change exists *somewhere* in the PR (shipping.py), and a
+    wholly unrelated pre-existing test (test_pricing.py, testing
+    pricing.py, which never changes) is independently weakened in the
+    very same PR. The anchor is per-file (via the companion's own
+    expected_file_path), never "any production change in the PR
+    unlocks any touched test file" -- so the unrelated weakening never
+    fires."""
+
+    full_name = "test/ti-unrelated-weakened"
+    root = _setup_base(tmp_path)
+    (root / "pricing.py").write_text("def apply_discount(order):\n    return order['total']\n")
+    (root / "test_pricing.py").write_text(
+        "from pricing import apply_discount\n\n\ndef test_apply_discount():\n"
+        "    result = apply_discount({'total': 100})\n"
+        "    assert result == 100\n"
+        "    assert isinstance(result, int)\n"
+    )
+    (root / "shipping.py").write_text("def apply_shipping(order):\n    return order['total'] + 5\n")
+    base_sha = commit_all(root, "base: pricing + its test + an unrelated shipping module")
+    repository_id = await _make_repo(session_factory, full_name)
+
+    # shipping.py changes (a real, unrelated production change) --
+    # pricing.py itself never changes, only its test does.
+    (root / "shipping.py").write_text(
+        "def apply_shipping(order):\n    if order.get('express'):\n        return order['total'] + 15\n"
+        "    return order['total'] + 5\n"
+    )
+    (root / "test_pricing.py").write_text(
+        "from pricing import apply_discount\n\n\ndef test_apply_discount():\n"
+        "    result = apply_discount({'total': 100})\n"
+        "    assert result == 100\n"
+    )
+    commit_all(root, "add express shipping; unrelated: simplify test_apply_discount")
+
+    change_report, diff_files = await _index_and_group(
+        session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
+    )
+    # No companion names test_pricing.py at all: pricing.py itself never
+    # changed, so companions.py's own production-side lookup never runs
+    # for it.
+    assert not any(
+        c.expected_file_path == "test_pricing.py" for c in change_report.expected_companions
+    )
+    report = build_test_intelligence_report(
+        change_units=change_report.change_units,
+        expected_companions=change_report.expected_companions,
+        diff_files=tuple(diff_files),
+    )
+
+    assert not any(g.expectation.source_file_path == "test_pricing.py" for g in report.gaps)
 
 
 # ---- 9. CONTRACT-kind (real cross-file caller) -> scope restriction holds ----
@@ -642,7 +841,305 @@ async def test_case_new_test_file_added_suppresses_gap(
     assert report.gaps == ()
 
 
-# ---- 16. Real end-to-end review_local pipeline: persisted through to ReviewRunModel ----
+# ---- 16. Intent-mapped behavior + relevant test updated -> fully supported, no gaps ----
+
+
+async def test_case_intent_mapped_behavior_with_test_updated_no_gap(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Companion case to test_case_real_intent_gap_coexistence: same
+    intent-mapped behavior change, but this time a real test is also
+    added for the changed function -- both L's IntentCoverage and M's
+    own signal report clean/SUPPORTED, proving the positive path is
+    equally exercised, not just the gap path."""
+
+    full_name = "test/ti-intent-test-updated"
+    root = _setup_base(tmp_path)
+    (root / "pricing.py").write_text("def apply_discount(order):\n    return order['total']\n")
+    base_sha = commit_all(root, "base")
+    repository_id = await _make_repo(session_factory, full_name)
+
+    (root / "pricing.py").write_text(
+        "def apply_discount(order):\n    if order.get('id') in _seen:\n        return None\n"
+        "    return order['total']\n\n\n_seen = set()\n"
+    )
+    (root / "test_pricing.py").write_text(
+        "from pricing import apply_discount\n\n\ndef test_apply_discount_duplicate():\n"
+        "    apply_discount({'id': 1, 'total': 100})\n"
+        "    assert apply_discount({'id': 1, 'total': 100}) is None\n"
+    )
+    commit_all(root, "prevent duplicate discount processing")
+
+    change_report, diff_files = await _index_and_group(
+        session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
+    )
+    intent_report = build_intent_verification_report(
+        title="Prevent duplicate discount processing",
+        body=None,
+        change_units=change_report.change_units,
+        expected_companions=change_report.expected_companions,
+    )
+    test_report = build_test_intelligence_report(
+        change_units=change_report.change_units,
+        expected_companions=change_report.expected_companions,
+        diff_files=tuple(diff_files),
+    )
+
+    assert intent_report.gaps == ()
+    assert test_report.gaps == ()
+
+
+# ---- 17. Docs-only change -> zero gaps, no crash ----
+
+
+async def test_case_docs_only_change_no_gap_no_crash(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    full_name = "test/ti-docs-only"
+    root = _setup_base(tmp_path)
+    base_sha = commit_all(root, "base")
+    repository_id = await _make_repo(session_factory, full_name)
+
+    (root / "README.md").write_text("# scratch repo\n\nNow with real documentation.\n")
+    commit_all(root, "document the scratch repo")
+
+    change_report, diff_files = await _index_and_group(
+        session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
+    )
+    report = build_test_intelligence_report(
+        change_units=change_report.change_units,
+        expected_companions=change_report.expected_companions,
+        diff_files=tuple(diff_files),
+    )
+
+    assert report.gaps == ()
+
+
+# ---- 18. Two unrelated ChangeUnits, each with its own untested behavior ----
+
+
+async def test_case_two_unrelated_change_units_each_get_their_own_gap(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Two wholly independent BEHAVIOR-kind ChangeUnits (no shared
+    files, no graph connection) in one PR, each genuinely untested --
+    proves gaps are attributed per-unit/per-file, never merged or
+    conflated into one candidate."""
+
+    full_name = "test/ti-two-units"
+    root = _setup_base(tmp_path)
+    base_sha = commit_all(root, "base")
+    repository_id = await _make_repo(session_factory, full_name)
+
+    (root / "pricing.py").write_text(
+        "def apply_discount(order):\n    if order['loyalty_years'] > 5:\n        return order['total'] * 0.9\n"
+        "    return order['total']\n"
+    )
+    (root / "shipping.py").write_text(
+        "def apply_shipping(order):\n    if order.get('express'):\n        return order['total'] + 15\n"
+        "    return order['total'] + 5\n"
+    )
+    commit_all(root, "add loyalty discount and express shipping, both untested")
+
+    change_report, diff_files = await _index_and_group(
+        session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
+    )
+    report = build_test_intelligence_report(
+        change_units=change_report.change_units,
+        expected_companions=change_report.expected_companions,
+        diff_files=tuple(diff_files),
+    )
+
+    flagged_files = {g.expectation.source_file_path for g in report.gaps}
+    assert flagged_files == {"pricing.py", "shipping.py"}
+    change_unit_ids = {g.change_unit_id for g in report.gaps}
+    assert len(change_unit_ids) == 2  # two distinct, unmerged ChangeUnits
+
+
+# ---- 19. Large fan-out boundedness (real corpus) ----
+
+
+async def test_case_large_fanout_bounded_per_unit(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """One production function, independently exercised by many
+    separate test files (a real, if unusual, pattern -- e.g. a unit
+    test, an integration test, and several edge-case-focused test
+    files all covering the same function) -- all weakened in the same
+    PR. Each linked test file produces its own
+    ``ExpectedCompanionChange`` sharing the *same* ``change_unit_id``
+    (all traced back to the one changed ``apply_discount`` candidate),
+    so ``derive_gaps``'s ``MAX_TEST_GAPS_PER_UNIT`` bound is exercised
+    against real, non-fabricated data -- proving the system does not
+    flood the reviewer with one candidate per linked test file."""
+
+    full_name = "test/ti-large-fanout"
+    root = _setup_base(tmp_path)
+    (root / "pricing.py").write_text("def apply_discount(order):\n    return order['total']\n")
+    test_file_count = 7
+    for i in range(test_file_count):
+        (root / f"test_pricing_case_{i}.py").write_text(
+            "from pricing import apply_discount\n\n\ndef test_apply_discount_case():\n"
+            "    result = apply_discount({'total': 100})\n"
+            "    assert result == 100\n"
+            "    assert isinstance(result, int)\n"
+        )
+    base_sha = commit_all(root, "base: one function, many independent test files")
+    repository_id = await _make_repo(session_factory, full_name)
+
+    (root / "pricing.py").write_text(
+        "def apply_discount(order):\n    if order['loyalty_years'] > 5:\n        return order['total'] * 0.9\n"
+        "    return order['total']\n"
+    )
+    for i in range(test_file_count):
+        (root / f"test_pricing_case_{i}.py").write_text(
+            "from pricing import apply_discount\n\n\ndef test_apply_discount_case():\n"
+            "    result = apply_discount({'total': 100})\n"
+            "    assert result == 100\n"
+        )
+    commit_all(root, "add loyalty discount; weaken every one of the linked test files")
+
+    change_report, diff_files = await _index_and_group(
+        session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
+    )
+    linked_companions = [
+        c for c in change_report.expected_companions if c.reason_code is CompanionReasonCode.TEST_NOT_UPDATED
+    ]
+    assert len(linked_companions) == test_file_count
+    assert len({c.change_unit_id for c in linked_companions}) == 1  # all trace back to the same unit
+
+    report = build_test_intelligence_report(
+        change_units=change_report.change_units,
+        expected_companions=change_report.expected_companions,
+        diff_files=tuple(diff_files),
+    )
+
+    from patchfrog.test_intelligence.domain import MAX_TEST_GAPS_PER_UNIT
+
+    assert test_file_count > MAX_TEST_GAPS_PER_UNIT
+    assert len(report.gaps) == MAX_TEST_GAPS_PER_UNIT  # bounded, not one per linked test file
+    assert all(
+        g.expectation.reason_code is TestExpectationReasonCode.TEST_TOUCHED_BUT_WEAKENED for g in report.gaps
+    )
+
+
+# ---- 20. A related test file is DELETED in the same commit -> treated as no surface ----
+
+
+async def test_case_deleted_related_test_treated_as_no_surface(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """J's own graph reflects the *current* (head) checkout -- once the
+    related test file is deleted, ``likely_tests_for_file`` finds no
+    edge at all, so no TEST_NOT_UPDATED companion of any status exists.
+    From this milestone's perspective that is indistinguishable from
+    "no test file was ever found" -- NO_TEST_SURFACE_FOUND correctly
+    fires, rather than the deletion silently producing no signal at
+    all."""
+
+    full_name = "test/ti-deleted-test"
+    root = _setup_base(tmp_path)
+    (root / "pricing.py").write_text("def apply_discount(order):\n    return order['total']\n")
+    (root / "test_pricing.py").write_text(
+        "from pricing import apply_discount\n\n\ndef test_apply_discount():\n"
+        "    assert apply_discount({'total': 100}) == 100\n"
+    )
+    base_sha = commit_all(root, "base with existing test")
+    repository_id = await _make_repo(session_factory, full_name)
+
+    (root / "pricing.py").write_text(
+        "def apply_discount(order):\n    if order['loyalty_years'] > 5:\n        return order['total'] * 0.9\n"
+        "    return order['total']\n"
+    )
+    (root / "test_pricing.py").unlink()
+    commit_all(root, "add loyalty discount; delete its test file entirely")
+
+    change_report, diff_files = await _index_and_group(
+        session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
+    )
+    assert not any(
+        c.reason_code is CompanionReasonCode.TEST_NOT_UPDATED for c in change_report.expected_companions
+    )
+    report = build_test_intelligence_report(
+        change_units=change_report.change_units,
+        expected_companions=change_report.expected_companions,
+        diff_files=tuple(diff_files),
+    )
+
+    assert len(report.gaps) == 1
+    assert report.gaps[0].expectation.reason_code is TestExpectationReasonCode.NO_TEST_SURFACE_FOUND
+    assert report.gaps[0].expectation.source_file_path == "pricing.py"
+
+
+# ---- 21. Stale gap disappears on a new exact head (real incremental regression) ----
+
+
+async def test_case_stale_gap_disappears_on_new_exact_head(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Acceptance criterion: "stale test gaps disappear on new exact
+    head." Head A introduces an untested behavior change (a real gap).
+    Head B advances the *same* branch with a real test added for it,
+    and Test Intelligence is recomputed from scratch against the new
+    exact head -- via the real index/diff path, never by hand-editing a
+    report. The previous gap must not survive into the new report."""
+
+    full_name = "test/ti-stale-gap"
+    root = _setup_base(tmp_path)
+    base_sha = commit_all(root, "base")
+    repository_id = await _make_repo(session_factory, full_name)
+
+    # Head A: untested behavior change -> a real gap.
+    (root / "pricing.py").write_text(
+        "def apply_discount(order):\n    if order['loyalty_years'] > 5:\n        return order['total'] * 0.9\n"
+        "    return order['total']\n"
+    )
+    commit_all(root, "add loyalty discount pricing rule")
+
+    change_report_a, diff_files_a = await _index_and_group(
+        session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
+    )
+    report_a = build_test_intelligence_report(
+        change_units=change_report_a.change_units,
+        expected_companions=change_report_a.expected_companions,
+        diff_files=tuple(diff_files_a),
+    )
+    assert len(report_a.gaps) == 1
+    assert report_a.gaps[0].expectation.reason_code is TestExpectationReasonCode.NO_TEST_SURFACE_FOUND
+
+    # Head B: same branch advances with a real test added -- recompute
+    # against the new exact head from scratch (fresh index, fresh diff,
+    # fresh report; never carrying report_a forward).
+    (root / "test_pricing.py").write_text(
+        "from pricing import apply_discount\n\n\ndef test_apply_discount_loyalty():\n"
+        "    assert apply_discount({'total': 100, 'loyalty_years': 6}) == 90\n"
+    )
+    commit_all(root, "add the missing test for the loyalty discount rule")
+
+    change_report_b, diff_files_b = await _index_and_group(
+        session_factory, repository_id=repository_id, root=root, full_name=full_name, base_sha=base_sha
+    )
+    report_b = build_test_intelligence_report(
+        change_units=change_report_b.change_units,
+        expected_companions=change_report_b.expected_companions,
+        diff_files=tuple(diff_files_b),
+    )
+
+    assert report_b.gaps == ()  # the stale gap from head A does not survive
+    assert not any(
+        "pricing" in e.source_file_path and e.reason_code is TestExpectationReasonCode.NO_TEST_SURFACE_FOUND
+        for e in report_b.expectations
+    )
+
+
+# ==================================================================
+# Supporting integration/structural tests (NOT counted as behavioral
+# corpus scenarios -- see validation/test_intelligence/latest-summary.md
+# section 8's explicit accounting).
+# ==================================================================
+
+
+# ---- Real end-to-end review_local pipeline: persisted through to ReviewRunModel ----
 
 
 async def test_case_review_local_pipeline_persists_test_intelligence(
@@ -695,10 +1192,10 @@ async def test_case_review_local_pipeline_persists_test_intelligence(
     assert run.test_gap_candidate_count == 1
     assert run.test_coverage_summary_rendered is True
     assert "no_test_surface_found" in run.test_reason_code_counts
-    assert "Test coverage:" in (run.change_story or "")
+    assert "Test impact:" in (run.change_story or "")
 
 
-# ---- 17. Telemetry/versioning round trip on a real corpus-built report ----
+# ---- Telemetry/versioning round trip on a real corpus-built report ----
 
 
 async def test_case_telemetry_and_versioning_real_report(
@@ -735,7 +1232,7 @@ async def test_case_telemetry_and_versioning_real_report(
     assert "no_test_surface_found" in summary.test_reason_code_counts_json
 
 
-# ---- 18. Zero repository-graph queries: structurally synchronous/session-free ----
+# ---- Zero repository-graph queries: structurally synchronous/session-free ----
 
 
 def test_test_intelligence_never_imports_a_session_type() -> None:

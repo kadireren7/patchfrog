@@ -60,7 +60,7 @@ def test_summary_rendered_with_a_real_gap() -> None:
     assert should_render_test_gap_summary(report)
     text = render_test_gap_summary(report)
     assert text is not None
-    assert "### Test coverage" in text
+    assert "### Test impact" in text
     assert "process_payment" in text
 
 

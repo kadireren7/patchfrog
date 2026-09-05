@@ -34,7 +34,7 @@ def build_test_intelligence_report(
 ) -> TestIntelligenceReport:
     expectations = derive_no_test_surface_expectations(
         change_units=change_units, expected_companions=expected_companions
-    ) + derive_weakened_test_expectations(change_units=change_units, diff_files=diff_files)
+    ) + derive_weakened_test_expectations(expected_companions=expected_companions, diff_files=diff_files)
 
     gaps = derive_gaps(expectations)
     test_story = build_test_story_prefix(gaps)

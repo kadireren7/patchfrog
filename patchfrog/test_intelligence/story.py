@@ -26,4 +26,4 @@ def build_test_story_prefix(gaps: tuple[PotentialTestGap, ...]) -> str:
     if weakened:
         parts.append(f"{weakened} touched test file(s) with a weakened structural test signal")
 
-    return "Test coverage: " + "; ".join(parts) + "."
+    return "Test impact: " + "; ".join(parts) + "."
