@@ -59,6 +59,7 @@ from patchfrog.telemetry.domain import (
     FeedbackScope,
     FeedbackTelemetry,
     FindingLifecycleTelemetry,
+    HistoricalRegressionMemoryTelemetry,
     IntentVerificationTelemetry,
     ProviderRoleUsage,
     ProviderTelemetry,
@@ -355,6 +356,14 @@ async def collect_review_telemetry(
         test_coverage_summary_rendered=run.test_coverage_summary_rendered,
     )
 
+    historical_match_kind_counts_raw = _load_json_dict(run.historical_match_kind_counts)
+    historical_regression_memory = HistoricalRegressionMemoryTelemetry(
+        historical_trusted_record_count=run.historical_trusted_record_count,
+        historical_match_kind_counts=tuple(sorted(historical_match_kind_counts_raw.items())),
+        historical_regression_candidate_count=run.historical_regression_candidate_count,
+        historical_summary_rendered=run.historical_summary_rendered,
+    )
+
     return ReviewTelemetrySnapshot(
         schema_version=TELEMETRY_SCHEMA_VERSION,
         review_run_id=run.id,
@@ -380,4 +389,5 @@ async def collect_review_telemetry(
         contract_intelligence=contract_intelligence,
         intent_verification=intent_verification,
         test_intelligence=test_intelligence,
+        historical_regression_memory=historical_regression_memory,
     )
