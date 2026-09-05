@@ -100,7 +100,12 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 #: ``historical_regression_memory`` field
 #: (:class:`HistoricalRegressionMemoryTelemetry`), a real additional key
 #: in the exported JSON.
-TELEMETRY_SCHEMA_VERSION = 6
+#:
+#: Bumped 6 -> 7 for Repository Learnings Foundation: the same
+#: reasoning a sixth time -- ``ReviewTelemetrySnapshot`` gained the
+#: ``repository_learnings`` field (:class:`RepositoryLearningsTelemetry`),
+#: a real additional key in the exported JSON.
+TELEMETRY_SCHEMA_VERSION = 7
 
 
 class FindingLifecycleOutcome(StrEnum):
@@ -438,6 +443,23 @@ class HistoricalRegressionMemoryTelemetry:
 
 
 @dataclass(frozen=True, slots=True)
+class RepositoryLearningsTelemetry:
+    """Bounded, privacy-safe counts from
+    :mod:`patchfrog.repository_learnings` for one review run.
+    Deliberately counts only -- no learning evidence text. Unlike
+    every prior Intelligence package's own telemetry type, there is no
+    ``*_summary_rendered`` field here at all: this package has no
+    standalone publication block in v1 (it only ever enriches an
+    existing Historical Regression Memory candidate on the same
+    surface -- see ``patchfrog.repository_learnings``'s own
+    ``__init__.py`` docstring), so there is nothing to report as
+    rendered or not."""
+
+    repository_learning_active_count: int
+    repository_learning_application_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewTelemetrySnapshot:
     """The complete, deterministic telemetry snapshot for one review run
     -- what :func:`patchfrog.telemetry.collector.collect_review_telemetry`
@@ -532,6 +554,15 @@ class ReviewTelemetrySnapshot:
             historical_match_kind_counts=(),
             historical_regression_candidate_count=0,
             historical_summary_rendered=False,
+        )
+    )
+    #: All-zero/empty for a run that predates Repository Learnings
+    #: Foundation -- same nullable-safe-default convention as
+    #: ``historical_regression_memory`` above. See :class:`RepositoryLearningsTelemetry`.
+    repository_learnings: RepositoryLearningsTelemetry = field(
+        default_factory=lambda: RepositoryLearningsTelemetry(
+            repository_learning_active_count=0,
+            repository_learning_application_count=0,
         )
     )
 

@@ -65,3 +65,11 @@ class CandidateEvidencePackage:
     #: ``contract_intelligence_text``/``intent_verification_text``/
     #: ``test_intelligence_text`` above.
     historical_regression_text: str = ""
+    #: Bounded (see :mod:`patchfrog.repository_learnings.evidence`)
+    #: evidence from Repository Learnings -- empty string unless this
+    #: exact candidate matches a real, repeated (>= 2 independently
+    #: trusted historical review runs) pattern. Same size discipline as
+    #: ``change_intelligence_text``/``contract_intelligence_text``/
+    #: ``intent_verification_text``/``test_intelligence_text``/
+    #: ``historical_regression_text`` above.
+    repository_learning_text: str = ""

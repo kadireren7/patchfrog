@@ -93,8 +93,13 @@ CONFIG_SCHEMA_VERSION = 4
 #: `<historical_regression>` user-prompt section, populated from
 #: patchfrog.historical_regression_memory.evidence only for the exact
 #: candidate that matches a real, trusted historical finding -- empty
-#: for every other candidate.
-REVIEW_PROMPT_VERSION = 8
+#: for every other candidate. Bumped to 9 for Repository Learnings
+#: Foundation: a sixth new optional `<repository_learning>` user-prompt
+#: section, populated from patchfrog.repository_learnings.evidence only
+#: for the exact candidate that matches a real, repeated (>= 2
+#: independently trusted historical review runs) pattern -- empty for
+#: every other candidate.
+REVIEW_PROMPT_VERSION = 9
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final

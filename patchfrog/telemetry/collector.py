@@ -63,6 +63,7 @@ from patchfrog.telemetry.domain import (
     IntentVerificationTelemetry,
     ProviderRoleUsage,
     ProviderTelemetry,
+    RepositoryLearningsTelemetry,
     ReviewFeedbackEventTelemetry,
     ReviewTelemetrySnapshot,
     TestIntelligenceTelemetry,
@@ -364,6 +365,11 @@ async def collect_review_telemetry(
         historical_summary_rendered=run.historical_summary_rendered,
     )
 
+    repository_learnings = RepositoryLearningsTelemetry(
+        repository_learning_active_count=run.repository_learning_active_count,
+        repository_learning_application_count=run.repository_learning_application_count,
+    )
+
     return ReviewTelemetrySnapshot(
         schema_version=TELEMETRY_SCHEMA_VERSION,
         review_run_id=run.id,
@@ -390,4 +396,5 @@ async def collect_review_telemetry(
         intent_verification=intent_verification,
         test_intelligence=test_intelligence,
         historical_regression_memory=historical_regression_memory,
+        repository_learnings=repository_learnings,
     )

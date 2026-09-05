@@ -118,7 +118,10 @@ class PublicationPlanner:
         ``test_coverage_summary`` (Test Intelligence Foundation) is the
         same kind of pass-through text. ``historical_context_summary``
         (Historical Regression Memory Foundation) is the same kind of
-        pass-through text."""
+        pass-through text. Repository Learnings Foundation has no
+        separate summary parameter here -- it has no standalone
+        publication block in v1 (see that package's own ``__init__.py``
+        docstring)."""
 
         if current_head_sha != snapshot.head_sha:
             return ReviewPublicationPlan(

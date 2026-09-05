@@ -165,7 +165,14 @@ def format_summary_body(
     already-bounded, already-deterministic text, placed after the Test
     Impact block -- ``None`` unless
     :func:`patchfrog.historical_regression_memory.summary.should_render_historical_summary`
-    determined it was eligible. Never used on the *clean*-review path
+    determined it was eligible. Repository Learnings Foundation
+    (:mod:`patchfrog.repository_learnings`) has no separate summary
+    block of its own in v1 -- it only ever enriches an existing
+    Historical Regression Memory candidate, so a second, standalone
+    section here would duplicate the block above for the exact same
+    surface (see that package's own ``__init__.py`` docstring); its
+    only user-facing footprint is a bounded addendum already folded
+    into ``change_story`` above. Never used on the *clean*-review path
     (:func:`format_clean_review_body`) -- see that function's own
     docstring for why."""
 
