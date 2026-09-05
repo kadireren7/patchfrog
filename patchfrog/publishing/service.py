@@ -233,6 +233,9 @@ class ReviewPublicationService:
             historical_context_summary=(
                 run.historical_summary_text if run.historical_summary_rendered else None
             ),
+            repository_learning_summary=(
+                run.repository_learning_summary_text if run.repository_learning_summary_rendered else None
+            ),
         )
 
         await self._persist_plan_comments(publication_id, plan)

@@ -264,6 +264,23 @@ class ReviewRunModel(Base):
     historical_summary_rendered: Mapped[bool] = mapped_column(Boolean, default=False)
     historical_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    #: Repository Learnings Foundation
+    #: (:mod:`patchfrog.repository_learnings`) run-level summary -- the
+    #: bounded output of
+    #: :func:`patchfrog.repository_learnings.telemetry.summarize_for_persistence`.
+    #: No separate story text column: the Repository Learning Story
+    #: prefix is folded into ``change_story`` above, exactly like the
+    #: Intent/Test/Historical Story prefixes.
+    #: ``repository_learning_summary_text`` IS a new, dedicated column --
+    #: the conditional Repository Learning block is its own separate
+    #: publication section, not a re-render of an existing one. All
+    #: default to 0/``False``/``None`` -- nullable-safe for rows
+    #: predating this milestone.
+    repository_learning_active_count: Mapped[int] = mapped_column(Integer, default=0)
+    repository_learning_application_count: Mapped[int] = mapped_column(Integer, default=0)
+    repository_learning_summary_rendered: Mapped[bool] = mapped_column(Boolean, default=False)
+    repository_learning_summary_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 
 class ReviewCandidateModel(Base):
     """One symbol- (or module-region-) centered candidate considered for

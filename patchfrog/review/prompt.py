@@ -245,6 +245,7 @@ def build_agent_prompt(
     intent_verification_text: str = "",
     test_intelligence_text: str = "",
     historical_regression_text: str = "",
+    repository_learning_text: str = "",
 ) -> tuple[str, str]:
     """Returns ``(system_prompt, user_prompt)`` for one candidate review by
     one specialist role."""
@@ -260,6 +261,7 @@ def build_agent_prompt(
         intent_verification_text=intent_verification_text,
         test_intelligence_text=test_intelligence_text,
         historical_regression_text=historical_regression_text,
+        repository_learning_text=repository_learning_text,
     )
 
 
@@ -274,6 +276,7 @@ def _build_user_prompt(
     intent_verification_text: str = "",
     test_intelligence_text: str = "",
     historical_regression_text: str = "",
+    repository_learning_text: str = "",
 ) -> str:
     target_label = candidate.qualified_name or candidate.symbol_name or candidate.file_path
     lines = [
@@ -313,6 +316,9 @@ def _build_user_prompt(
 
     if historical_regression_text.strip():
         lines += ["", "<historical_regression>", historical_regression_text.strip(), "</historical_regression>"]
+
+    if repository_learning_text.strip():
+        lines += ["", "<repository_learning>", repository_learning_text.strip(), "</repository_learning>"]
 
     return "\n".join(lines)
 

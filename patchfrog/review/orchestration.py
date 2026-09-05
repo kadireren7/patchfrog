@@ -291,6 +291,7 @@ class AgentOrchestrator:
                 intent_verification_text=evidence.intent_verification_text,
                 test_intelligence_text=evidence.test_intelligence_text,
                 historical_regression_text=evidence.historical_regression_text,
+                repository_learning_text=evidence.repository_learning_text,
             )
             for role in selected_roles
         }

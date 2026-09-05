@@ -13,6 +13,7 @@ from patchfrog.contract_intelligence.telemetry import ContractIntelligenceSummar
 from patchfrog.historical_regression_memory.telemetry import HistoricalRegressionMemorySummary
 from patchfrog.intent_verification.telemetry import IntentVerificationSummary
 from patchfrog.persistence.models.review import ReviewRunModel
+from patchfrog.repository_learnings.telemetry import RepositoryLearningsSummary
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import ReviewRunStatus
 from patchfrog.review.effort_types import ReviewEffortTier
@@ -215,6 +216,7 @@ class ReviewRunRepository:
         intent_verification: IntentVerificationSummary | None = None,
         test_intelligence: TestIntelligenceSummary | None = None,
         historical_regression_memory: HistoricalRegressionMemorySummary | None = None,
+        repository_learnings: RepositoryLearningsSummary | None = None,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -313,6 +315,13 @@ class ReviewRunRepository:
             )
             model.historical_summary_rendered = historical_regression_memory.historical_summary_rendered
             model.historical_summary_text = historical_regression_memory.historical_summary_text
+        if repository_learnings is not None:
+            model.repository_learning_active_count = repository_learnings.repository_learning_active_count
+            model.repository_learning_application_count = (
+                repository_learnings.repository_learning_application_count
+            )
+            model.repository_learning_summary_rendered = repository_learnings.repository_learning_summary_rendered
+            model.repository_learning_summary_text = repository_learnings.repository_learning_summary_text
         model.completed_at = datetime.now(UTC)
         await session.flush()
         return model

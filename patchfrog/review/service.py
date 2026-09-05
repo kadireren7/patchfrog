@@ -84,6 +84,15 @@ from patchfrog.persistence.repositories import (
 )
 from patchfrog.persistence.repositories.analysis_run import AnalysisRunRepository
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
+from patchfrog.repository_learnings.domain import RepositoryLearningsReport
+from patchfrog.repository_learnings.evidence import (
+    evidence_text_for_candidate as repository_learning_evidence_text_for_candidate,
+)
+from patchfrog.repository_learnings.service import build_repository_learnings_report
+from patchfrog.repository_learnings.story import build_repository_learning_story_prefix
+from patchfrog.repository_learnings.telemetry import (
+    summarize_for_persistence as summarize_repository_learnings,
+)
 from patchfrog.review.agents.cross_role import CROSS_ROLE_DUPLICATE, UNRESOLVED_CONTRADICTION
 from patchfrog.review.agents.evidence import CandidateEvidencePackage
 from patchfrog.review.agents.proposal import AgentProposal
@@ -662,28 +671,53 @@ class PullRequestReviewService:
                 expected_companions=combined_companions,
             )
 
+            # Repository Learnings Foundation
+            # (patchfrog.repository_learnings): extends Historical
+            # Regression Memory, computed last, consuming N's own
+            # already-fetched trusted records directly -- never a
+            # second, duplicate trust query for the same data. See the
+            # package docstring and
+            # validation/repository_learnings/latest-summary.md for why
+            # a *single* trusted historical event (N's own domain) is
+            # never enough here: this package only ever activates on
+            # >= MIN_SUPPORTING_EVENTS independent, distinct-review-run
+            # occurrences on the exact same surface.
+            repository_learnings_report = build_repository_learnings_report(
+                repository_id=repository_id,
+                trusted_records=historical_regression_report.trusted_records_considered,
+                change_units=change_intelligence_report.change_units,
+                historical_candidates=historical_regression_report.candidates,
+            )
+
             # Fold the Contract Story addendum, the Intent Story prefix,
-            # the Test Story prefix, and the Historical Story prefix
-            # into the existing Change Story text, and (only when
-            # there's real contract stale-consumer evidence to add)
-            # re-render the *same* Change Map with the combined
-            # companion set -- never a second diagram system (spec
-            # section 10). See docs/contract-intelligence.md /
+            # the Test Story prefix, the Historical Story prefix, and
+            # the Repository Learning Story prefix into the existing
+            # Change Story text, and (only when there's real contract
+            # stale-consumer evidence to add) re-render the *same*
+            # Change Map with the combined companion set -- never a
+            # second diagram system (spec section 10). See
+            # docs/contract-intelligence.md /
             # docs/intent-verification.md / docs/test-intelligence.md /
-            # docs/historical-regression-memory.md.
+            # docs/historical-regression-memory.md /
+            # docs/repository-learnings.md.
             intent_prefix = build_intent_story_prefix(intent_verification_report.claims)
             test_prefix = build_test_story_prefix(test_intelligence_report.gaps)
             historical_prefix = build_historical_story_prefix(historical_regression_report.candidates)
+            repository_learning_prefix = build_repository_learning_story_prefix(
+                repository_learnings_report.applications
+            )
             if (
                 contract_intelligence_report.contract_story
                 or contract_intelligence_report.stale_consumers
                 or intent_prefix
                 or test_prefix
                 or historical_prefix
+                or repository_learning_prefix
             ):
                 combined_story = " ".join(
                     s
                     for s in (
+                        repository_learning_prefix,
                         historical_prefix,
                         intent_prefix,
                         change_intelligence_report.change_story,
@@ -748,6 +782,7 @@ class PullRequestReviewService:
                     intent_verification_report=intent_verification_report,
                     test_intelligence_report=test_intelligence_report,
                     historical_regression_report=historical_regression_report,
+                    repository_learnings_report=repository_learnings_report,
                 )
 
         await asyncio.gather(*(_process(o) for o in outcomes))
@@ -995,6 +1030,7 @@ class PullRequestReviewService:
                 intent_verification=summarize_intent_verification(intent_verification_report),
                 test_intelligence=summarize_test_intelligence(test_intelligence_report),
                 historical_regression_memory=summarize_historical_regression_memory(historical_regression_report),
+                repository_learnings=summarize_repository_learnings(repository_learnings_report),
             )
             await session.commit()
 
@@ -1054,6 +1090,7 @@ class PullRequestReviewService:
         intent_verification_report: IntentVerificationReport,
         test_intelligence_report: TestIntelligenceReport,
         historical_regression_report: HistoricalRegressionReport,
+        repository_learnings_report: RepositoryLearningsReport,
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
@@ -1152,6 +1189,9 @@ class PullRequestReviewService:
             intent_verification_text=intent_evidence_text_for_candidate(intent_verification_report, candidate),
             test_intelligence_text=test_evidence_text_for_candidate(test_intelligence_report, candidate),
             historical_regression_text=historical_evidence_text_for_candidate(historical_regression_report, candidate),
+            repository_learning_text=repository_learning_evidence_text_for_candidate(
+                repository_learnings_report, candidate
+            ),
         )
 
         # Stage 2: finalize the effort decision now that the context
