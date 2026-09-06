@@ -8,6 +8,10 @@ from patchfrog.persistence.repositories.call_reference import CallReferenceRepos
 from patchfrog.persistence.repositories.context_bundle import ContextBundleRepository
 from patchfrog.persistence.repositories.context_item import ContextItemRepository
 from patchfrog.persistence.repositories.critic_verdict import CriticVerdictRepository
+from patchfrog.persistence.repositories.cross_repo import (
+    RepositoryContractKeyRepository,
+    RepositoryRelationRepository,
+)
 from patchfrog.persistence.repositories.feedback import (
     FeedbackAssessmentRepository,
     FeedbackEventRepository,
@@ -57,8 +61,10 @@ __all__ = [
     "ParsedFileCacheRepository",
     "PullRequestIngestionRepository",
     "PullRequestRepository",
+    "RepositoryContractKeyRepository",
     "RepositoryEdgeRepository",
     "RepositoryIndexRepository",
+    "RepositoryRelationRepository",
     "RepositoryRepository",
     "ReviewCandidateRepository",
     "ReviewGenerationRepository",

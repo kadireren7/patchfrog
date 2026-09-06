@@ -44,6 +44,11 @@ from patchfrog.config.settings import Settings, get_settings
 from patchfrog.context.config import ContextConfig
 from patchfrog.context.domain import ContextBundle, ContextItemKind, ContextTargetType
 from patchfrog.context.service import ContextService, StaleContextIndexError
+from patchfrog.contract_intelligence.domain import ContractKind
+from patchfrog.cross_repo_intelligence.domain import (
+    RepositoryRelationKind,
+    RepositoryRelationProvenance,
+)
 from patchfrog.evaluation.domain import (
     CaseStatus,
     EvaluationCase,
@@ -105,6 +110,8 @@ from patchfrog.persistence.models.review_memory import ReviewGenerationModel
 from patchfrog.persistence.repositories import (
     InstallationRepository,
     PullRequestRepository,
+    RepositoryContractKeyRepository,
+    RepositoryRelationRepository,
     RepositoryRepository,
 )
 from patchfrog.persistence.repositories.feedback import (
@@ -1441,6 +1448,211 @@ def _run_ops_installations(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cross_repo_resolve_repository(session: Any, *, full_name: str) -> RepositoryModel:
+    repo = await RepositoryRepository().get_by_full_name(session, full_name=full_name)
+    if repo is None:
+        raise ValueError(f"no repository named {full_name!r} is known to PatchFrog")
+    return repo
+
+
+async def _cross_repo_contract_add_async(
+    *, repository_full_name: str, contract_kind: str, stable_key: str, file_path: str, qualified_name: str
+) -> None:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            repo = await _cross_repo_resolve_repository(session, full_name=repository_full_name)
+            await RepositoryContractKeyRepository().upsert(
+                session, repository_id=repo.id, contract_kind=ContractKind(contract_kind),
+                stable_key=stable_key, file_path=file_path, qualified_name=qualified_name,
+            )
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
+async def _cross_repo_contract_list_async(*, repository_full_name: str) -> list[Any]:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            repo = await _cross_repo_resolve_repository(session, full_name=repository_full_name)
+            return await RepositoryContractKeyRepository().list_for_repository(session, repository_id=repo.id)
+    finally:
+        await engine.dispose()
+
+
+async def _cross_repo_contract_remove_async(*, repository_full_name: str, stable_key: str) -> bool:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            repo = await _cross_repo_resolve_repository(session, full_name=repository_full_name)
+            removed = await RepositoryContractKeyRepository().remove(
+                session, repository_id=repo.id, stable_key=stable_key
+            )
+            await session.commit()
+            return removed
+    finally:
+        await engine.dispose()
+
+
+async def _cross_repo_relation_add_async(
+    *, source_full_name: str, target_full_name: str, contract_key: str
+) -> None:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            source = await _cross_repo_resolve_repository(session, full_name=source_full_name)
+            target = await _cross_repo_resolve_repository(session, full_name=target_full_name)
+            if source.id == target.id:
+                raise ValueError("source and target repository must be different")
+            await RepositoryRelationRepository().upsert(
+                session, source_repository_id=source.id, target_repository_id=target.id,
+                relation_kind=RepositoryRelationKind.EXPLICIT_SHARED_CONTRACT,
+                external_contract_key=contract_key, provenance=RepositoryRelationProvenance.OPERATOR_CLI,
+            )
+            await session.commit()
+    finally:
+        await engine.dispose()
+
+
+async def _cross_repo_relation_list_async(*, source_full_name: str) -> list[Any]:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            source = await _cross_repo_resolve_repository(session, full_name=source_full_name)
+            return await RepositoryRelationRepository().list_for_source(session, source_repository_id=source.id)
+    finally:
+        await engine.dispose()
+
+
+async def _cross_repo_relation_remove_async(
+    *, source_full_name: str, target_full_name: str, contract_key: str
+) -> bool:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            source = await _cross_repo_resolve_repository(session, full_name=source_full_name)
+            target = await _cross_repo_resolve_repository(session, full_name=target_full_name)
+            deactivated = await RepositoryRelationRepository().deactivate(
+                session, source_repository_id=source.id, target_repository_id=target.id,
+                relation_kind=RepositoryRelationKind.EXPLICIT_SHARED_CONTRACT, external_contract_key=contract_key,
+            )
+            await session.commit()
+            return deactivated
+    finally:
+        await engine.dispose()
+
+
+def _run_cross_repo_contract(args: argparse.Namespace) -> int:
+    if args.contract_command == "add":
+        try:
+            asyncio.run(
+                _cross_repo_contract_add_async(
+                    repository_full_name=args.repository, contract_kind=args.contract_kind,
+                    stable_key=args.stable_key, file_path=args.file_path, qualified_name=args.qualified_name,
+                )
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"registered contract key={args.stable_key!r} for repository={args.repository}")
+        return 0
+    if args.contract_command == "list":
+        try:
+            keys = asyncio.run(_cross_repo_contract_list_async(repository_full_name=args.repository))
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        for key in keys:
+            print(
+                f"stable_key={key.stable_key} contract_kind={key.contract_kind.value} "
+                f"file_path={key.file_path} qualified_name={key.qualified_name}"
+            )
+        return 0
+    if args.contract_command == "remove":
+        try:
+            removed = asyncio.run(
+                _cross_repo_contract_remove_async(repository_full_name=args.repository, stable_key=args.stable_key)
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if not removed:
+            print(f"error: no contract key {args.stable_key!r} registered for {args.repository}", file=sys.stderr)
+            return 1
+        print(f"removed contract key={args.stable_key!r} for repository={args.repository}")
+        return 0
+    raise ValueError(f"unknown cross-repo contract subcommand: {args.contract_command}")
+
+
+def _run_cross_repo_relation(args: argparse.Namespace) -> int:
+    if args.relation_command == "add":
+        try:
+            asyncio.run(
+                _cross_repo_relation_add_async(
+                    source_full_name=args.source, target_full_name=args.target, contract_key=args.contract_key
+                )
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"registered relation source={args.source} target={args.target} contract_key={args.contract_key!r}")
+        return 0
+    if args.relation_command == "list":
+        try:
+            relations = asyncio.run(_cross_repo_relation_list_async(source_full_name=args.source))
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        for relation in relations:
+            print(
+                f"target_repository_id={relation.target_repository_id} kind={relation.relation_kind.value} "
+                f"contract_key={relation.external_contract_key} active={relation.active} "
+                f"provenance={relation.provenance.value}"
+            )
+        return 0
+    if args.relation_command == "remove":
+        try:
+            deactivated = asyncio.run(
+                _cross_repo_relation_remove_async(
+                    source_full_name=args.source, target_full_name=args.target, contract_key=args.contract_key
+                )
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if not deactivated:
+            print(
+                f"error: no active relation source={args.source} target={args.target} "
+                f"contract_key={args.contract_key!r}",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"deactivated relation source={args.source} target={args.target} contract_key={args.contract_key!r}")
+        return 0
+    raise ValueError(f"unknown cross-repo relation subcommand: {args.relation_command}")
+
+
+def _run_cross_repo(args: argparse.Namespace) -> int:
+    if args.cross_repo_command == "contract":
+        return _run_cross_repo_contract(args)
+    if args.cross_repo_command == "relation":
+        return _run_cross_repo_relation(args)
+    raise ValueError(f"unknown cross-repo subcommand: {args.cross_repo_command}")
+
+
 def _run_ops(args: argparse.Namespace) -> int:
     if args.ops_command == "health":
         return _run_ops_health(args)
@@ -2053,6 +2265,71 @@ def main(argv: list[str] | None = None) -> int:
         help="Disallow real GitHub writes for --installation",
     )
 
+    cross_repo_parser = subparsers.add_parser(
+        "cross-repo",
+        help=(
+            "Cross-Repo Intelligence (patchfrog.cross_repo_intelligence) -- trusted-operator-only "
+            "registration of explicit contract keys and repository relations. Never reachable from "
+            ".patchfrog.yml or any PR-influenced source."
+        ),
+    )
+    cross_repo_subparsers = cross_repo_parser.add_subparsers(dest="cross_repo_command", required=True)
+
+    cross_repo_contract_parser = cross_repo_subparsers.add_parser(
+        "contract", help="Register/list/remove a repository's own explicit contract keys"
+    )
+    cross_repo_contract_subparsers = cross_repo_contract_parser.add_subparsers(
+        dest="contract_command", required=True
+    )
+    cross_repo_contract_add_parser = cross_repo_contract_subparsers.add_parser(
+        "add", help="Register one stable contract key for an exact symbol"
+    )
+    cross_repo_contract_add_parser.add_argument("--repository", required=True, help="e.g. 'owner/repo'")
+    cross_repo_contract_add_parser.add_argument(
+        "--contract-kind", choices=[k.value for k in ContractKind], default=ContractKind.FUNCTION.value
+    )
+    cross_repo_contract_add_parser.add_argument(
+        "--stable-key", required=True, help="e.g. 'payments.capture:v1' -- human-assigned, never derived"
+    )
+    cross_repo_contract_add_parser.add_argument("--file-path", required=True)
+    cross_repo_contract_add_parser.add_argument("--qualified-name", required=True)
+
+    cross_repo_contract_list_parser = cross_repo_contract_subparsers.add_parser(
+        "list", help="List a repository's own registered contract keys"
+    )
+    cross_repo_contract_list_parser.add_argument("--repository", required=True, help="e.g. 'owner/repo'")
+
+    cross_repo_contract_remove_parser = cross_repo_contract_subparsers.add_parser(
+        "remove", help="Remove one registered contract key"
+    )
+    cross_repo_contract_remove_parser.add_argument("--repository", required=True, help="e.g. 'owner/repo'")
+    cross_repo_contract_remove_parser.add_argument("--stable-key", required=True)
+
+    cross_repo_relation_parser = cross_repo_subparsers.add_parser(
+        "relation", help="Register/list/remove an explicit, directional cross-repository dependency"
+    )
+    cross_repo_relation_subparsers = cross_repo_relation_parser.add_subparsers(
+        dest="relation_command", required=True
+    )
+    cross_repo_relation_add_parser = cross_repo_relation_subparsers.add_parser(
+        "add", help="Register that --target explicitly consumes --source's --contract-key"
+    )
+    cross_repo_relation_add_parser.add_argument("--source", required=True, help="Producer, e.g. 'owner/repo-a'")
+    cross_repo_relation_add_parser.add_argument("--target", required=True, help="Consumer, e.g. 'owner/repo-b'")
+    cross_repo_relation_add_parser.add_argument("--contract-key", required=True)
+
+    cross_repo_relation_list_parser = cross_repo_relation_subparsers.add_parser(
+        "list", help="List relations where --source is the producer"
+    )
+    cross_repo_relation_list_parser.add_argument("--source", required=True, help="e.g. 'owner/repo-a'")
+
+    cross_repo_relation_remove_parser = cross_repo_relation_subparsers.add_parser(
+        "remove", help="Deactivate one relation (takes effect on the very next review)"
+    )
+    cross_repo_relation_remove_parser.add_argument("--source", required=True)
+    cross_repo_relation_remove_parser.add_argument("--target", required=True)
+    cross_repo_relation_remove_parser.add_argument("--contract-key", required=True)
+
     eval_parser = subparsers.add_parser("eval", help="Phase 8 quality evaluation harness (patchfrog.evaluation)")
     eval_subparsers = eval_parser.add_subparsers(dest="eval_command", required=True)
 
@@ -2134,6 +2411,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_telemetry_beta_summary(args)
     if args.command == "ops":
         return _run_ops(args)
+    if args.command == "cross-repo":
+        return _run_cross_repo(args)
     if args.command == "eval":
         if args.eval_command == "run":
             return _run_eval_run(args)

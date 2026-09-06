@@ -49,6 +49,14 @@ class ReviewEffortReason(StrEnum):
     #: signal exactly like every other reason above, never a separate
     #: escalation path. Cross-PR overlap evidence, never a finding.
     CROSS_PR_OVERLAP_PRESENT = "cross_pr_overlap_present"
+    #: Cross-Repo Intelligence (:mod:`patchfrog.cross_repo_intelligence`)
+    #: found this exact candidate's surface is an operator-registered
+    #: contract explicitly consumed by another, authorized repository
+    #: (``CrossRepoReviewHint.REQUIRE_CRITIC``) -- counted as a
+    #: structural signal exactly like every other reason above, never a
+    #: separate escalation path. Cross-repo dependency evidence, never
+    #: a finding.
+    CROSS_REPO_CONTRACT_IMPACT_PRESENT = "cross_repo_contract_impact"
     #: Escalation-only: the provisional tier was raised *before* any
     #: specialist provider call because adaptive context expansion
     #: actually occurred (see

@@ -109,8 +109,14 @@ CONFIG_SCHEMA_VERSION = 4
 #: section, populated from patchfrog.cross_pr_intelligence.evidence
 #: only for the exact candidate whose surface is also directly changed
 #: in another PR's reviewed head in the same repository -- empty for
+#: every other candidate. Bumped to 12 for Cross-Repo Intelligence
+#: Foundation: a ninth new optional `<cross_repo_intelligence>`
+#: user-prompt section, populated from
+#: patchfrog.cross_repo_intelligence.evidence only for the exact
+#: candidate whose surface is an operator-registered contract
+#: explicitly consumed by another, authorized repository -- empty for
 #: every other candidate.
-REVIEW_PROMPT_VERSION = 11
+REVIEW_PROMPT_VERSION = 12
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final
@@ -157,8 +163,15 @@ REVIEW_ENGINE_VERSION = 3
 #: (`ReviewEffortReason.CROSS_PR_OVERLAP_PRESENT`), the same shape and
 #: justification as `trajectory_signal_present` -- a real tiering-policy
 #: semantics change, defaulting to `False` (byte-identical behavior for
-#: any run with no cross-PR overlap signal).
-QUALITY_COST_POLICY_VERSION = 3
+#: any run with no cross-PR overlap signal). Bumped 3 -> 4 for
+#: Cross-Repo Intelligence Foundation: `ReviewEffortPolicy.decide_provisional`
+#: gained a third new `cross_repo_signal_present` structural signal
+#: (`ReviewEffortReason.CROSS_REPO_CONTRACT_IMPACT_PRESENT`), the same
+#: shape and justification as `trajectory_signal_present`/
+#: `cross_pr_signal_present` -- a real tiering-policy semantics change,
+#: defaulting to `False` (byte-identical behavior for any run with no
+#: cross-repo contract impact signal).
+QUALITY_COST_POLICY_VERSION = 4
 
 DEFAULT_MAX_CANDIDATES = 40
 DEFAULT_MAX_INPUT_TOKENS_PER_CANDIDATE = 12_000

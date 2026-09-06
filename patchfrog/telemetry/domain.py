@@ -115,7 +115,12 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 #: reasoning an eighth time -- ``ReviewTelemetrySnapshot`` gained the
 #: ``cross_pr_intelligence`` field (:class:`CrossPRIntelligenceTelemetry`),
 #: a real additional key in the exported JSON.
-TELEMETRY_SCHEMA_VERSION = 9
+#:
+#: Bumped 9 -> 10 for Cross-Repo Intelligence Foundation: the same
+#: reasoning a ninth time -- ``ReviewTelemetrySnapshot`` gained the
+#: ``cross_repo_intelligence`` field (:class:`CrossRepoIntelligenceTelemetry`),
+#: a real additional key in the exported JSON.
+TELEMETRY_SCHEMA_VERSION = 10
 
 
 class FindingLifecycleOutcome(StrEnum):
@@ -505,6 +510,22 @@ class CrossPRIntelligenceTelemetry:
 
 
 @dataclass(frozen=True, slots=True)
+class CrossRepoIntelligenceTelemetry:
+    """Bounded, privacy-safe counts from
+    :mod:`patchfrog.cross_repo_intelligence` for one review run.
+    Deliberately counts only -- no repository full_name/id, no contract
+    key string, no organization name anywhere. This package has no
+    standalone publication block at all, so there is no
+    ``*_summary_rendered`` field here either."""
+
+    cross_repo_peer_count: int
+    cross_repo_signal_count: int
+    cross_repo_explicit_contract_relation_count: int
+    cross_repo_require_critic_count: int
+    cross_repo_deepen_context_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewTelemetrySnapshot:
     """The complete, deterministic telemetry snapshot for one review run
     -- what :func:`patchfrog.telemetry.collector.collect_review_telemetry`
@@ -634,6 +655,18 @@ class ReviewTelemetrySnapshot:
             cross_pr_same_changed_symbol_count=0,
             cross_pr_require_critic_count=0,
             cross_pr_deepen_context_count=0,
+        )
+    )
+    #: All-zero/empty for a run that predates Cross-Repo Intelligence
+    #: Foundation -- same nullable-safe-default convention as
+    #: ``cross_pr_intelligence`` above. See :class:`CrossRepoIntelligenceTelemetry`.
+    cross_repo_intelligence: CrossRepoIntelligenceTelemetry = field(
+        default_factory=lambda: CrossRepoIntelligenceTelemetry(
+            cross_repo_peer_count=0,
+            cross_repo_signal_count=0,
+            cross_repo_explicit_contract_relation_count=0,
+            cross_repo_require_critic_count=0,
+            cross_repo_deepen_context_count=0,
         )
     )
 

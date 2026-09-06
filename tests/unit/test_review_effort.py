@@ -464,3 +464,63 @@ def test_trajectory_and_cross_pr_signals_both_present_combine_toward_deep() -> N
     assert ReviewEffortReason.CROSS_PR_OVERLAP_PRESENT in decision.reasons
     assert ReviewEffortReason.MULTIPLE_STRUCTURAL_SIGNALS in decision.reasons
     assert decision.critic_expectation is CriticExpectation.MANDATORY
+
+
+# -- Cross-Repo Intelligence integration (Milestone R) ------------------------
+
+
+def test_cross_repo_signal_absent_by_default_is_byte_identical() -> None:
+    """A run with no cross-repo signal at all (the default) behaves
+    exactly as before this milestone -- no reason, no tier change."""
+
+    decision = _decide(_candidate())
+    assert decision.tier is ReviewEffortTier.LIGHT
+    assert ReviewEffortReason.CROSS_REPO_CONTRACT_IMPACT_PRESENT not in decision.reasons
+    assert decision.critic_expectation is CriticExpectation.OPTIONAL
+
+
+def test_cross_repo_signal_present_escalates_light_to_standard_and_forces_mandatory_critic() -> None:
+    decision = _POLICY.decide_provisional(
+        _candidate(), static_findings=(), max_retries=_MAX_RETRIES, cross_repo_signal_present=True
+    )
+    assert decision.tier is ReviewEffortTier.STANDARD
+    assert ReviewEffortReason.CROSS_REPO_CONTRACT_IMPACT_PRESENT in decision.reasons
+    assert decision.critic_expectation is CriticExpectation.MANDATORY
+
+
+def test_cross_repo_signal_combines_with_another_signal_toward_deep() -> None:
+    decision = _POLICY.decide_provisional(
+        _candidate(), static_findings=(_static_finding(category=FindingCategory.PERFORMANCE),),
+        max_retries=_MAX_RETRIES, cross_repo_signal_present=True,
+    )
+    assert decision.tier is ReviewEffortTier.DEEP
+    assert ReviewEffortReason.MULTIPLE_STRUCTURAL_SIGNALS in decision.reasons
+    assert decision.critic_expectation is CriticExpectation.MANDATORY
+
+
+def test_cross_repo_signal_forces_mandatory_critic_even_at_deep() -> None:
+    decision = _POLICY.decide_provisional(
+        _candidate(), static_findings=(_static_finding(category=FindingCategory.SECURITY, severity=Severity.HIGH),),
+        max_retries=_MAX_RETRIES, cross_repo_signal_present=True,
+    )
+    assert decision.tier is ReviewEffortTier.DEEP
+    assert decision.critic_expectation is CriticExpectation.MANDATORY
+
+
+def test_all_three_cross_boundary_signals_combine_without_double_counting() -> None:
+    """Trajectory + Cross-PR + Cross-Repo signals present at once are
+    three independent structural signals, corroborating toward DEEP
+    exactly like any other signal combination -- never a special-cased
+    interaction, never a duplicate critic mechanism (CriticExpectation
+    is a single decision state, not additive)."""
+
+    decision = _POLICY.decide_provisional(
+        _candidate(), static_findings=(), max_retries=_MAX_RETRIES,
+        trajectory_signal_present=True, cross_pr_signal_present=True, cross_repo_signal_present=True,
+    )
+    assert decision.tier is ReviewEffortTier.DEEP
+    assert ReviewEffortReason.TRAJECTORY_SIGNAL_PRESENT in decision.reasons
+    assert ReviewEffortReason.CROSS_PR_OVERLAP_PRESENT in decision.reasons
+    assert ReviewEffortReason.CROSS_REPO_CONTRACT_IMPACT_PRESENT in decision.reasons
+    assert ReviewEffortReason.MULTIPLE_STRUCTURAL_SIGNALS in decision.reasons
+    assert decision.critic_expectation is CriticExpectation.MANDATORY
