@@ -158,6 +158,7 @@ class ReviewEffortPolicy:
         static_findings: tuple[StaticFindingSummary, ...],
         max_retries: int,
         trajectory_signal_present: bool = False,
+        cross_pr_signal_present: bool = False,
     ) -> ReviewEffortDecision:
         """``trajectory_signal_present`` (Trajectory Intelligence,
         :mod:`patchfrog.trajectory_intelligence`) is ``True`` only when
@@ -172,7 +173,16 @@ class ReviewEffortPolicy:
         pure per-candidate structural read cannot otherwise see.
         Defaults to ``False`` -- a run with no PR context, or no
         trajectory signal at all, is byte-identical to before this
-        milestone."""
+        milestone.
+
+        ``cross_pr_signal_present`` (Cross-PR Intelligence,
+        :mod:`patchfrog.cross_pr_intelligence`) is ``True`` only when
+        this exact candidate's surface selected
+        ``CrossPRReviewHint.REQUIRE_CRITIC`` -- the same treatment as
+        ``trajectory_signal_present`` (structural signal, plus the same
+        unconditional mandatory-critic override), justified the same
+        way: cross-PR overlap is evidence a pure per-candidate
+        structural read cannot otherwise see. Defaults to ``False``."""
 
 
         agent_decisions = self._agent_selection.select(candidate, static_findings=static_findings)
@@ -213,6 +223,9 @@ class ReviewEffortPolicy:
         if trajectory_signal_present:
             reasons.append(ReviewEffortReason.TRAJECTORY_SIGNAL_PRESENT)
             signal_count += 1
+        if cross_pr_signal_present:
+            reasons.append(ReviewEffortReason.CROSS_PR_OVERLAP_PRESENT)
+            signal_count += 1
 
         if security_is_real_signal or high_severity_static or high_risk_category_static:
             tier = ReviewEffortTier.DEEP
@@ -237,13 +250,13 @@ class ReviewEffortPolicy:
         context_fraction, adaptive_enabled, critic_expectation, retry_limit, output_fraction = _tier_semantics(
             tier, retry_ceiling=max_retries
         )
-        if trajectory_signal_present:
-            # TrajectoryReviewHint.REQUIRE_CRITIC's own contract: critic
-            # verification is mandatory for this exact candidate
-            # regardless of which tier the signal above ended up
-            # contributing to -- reuses CriticExpectation/
-            # patchfrog.review.critic_selection completely unchanged,
-            # never a second critic mechanism.
+        if trajectory_signal_present or cross_pr_signal_present:
+            # TrajectoryReviewHint.REQUIRE_CRITIC's / CrossPRReviewHint.
+            # REQUIRE_CRITIC's own contract: critic verification is
+            # mandatory for this exact candidate regardless of which
+            # tier the signal above ended up contributing to -- reuses
+            # CriticExpectation/patchfrog.review.critic_selection
+            # completely unchanged, never a second critic mechanism.
             critic_expectation = CriticExpectation.MANDATORY
 
         return ReviewEffortDecision(

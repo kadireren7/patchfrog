@@ -79,3 +79,9 @@ class CandidateEvidencePackage:
     #: change across the current PR's own verified lineage. Same size
     #: discipline as every other Intelligence text field above.
     trajectory_intelligence_text: str = ""
+    #: Bounded (see :mod:`patchfrog.cross_pr_intelligence.evidence`)
+    #: evidence from Cross-PR Intelligence -- empty string unless this
+    #: exact candidate's surface is also directly changed in another
+    #: PR's reviewed head in the same repository. Same size discipline
+    #: as every other Intelligence text field above.
+    cross_pr_intelligence_text: str = ""

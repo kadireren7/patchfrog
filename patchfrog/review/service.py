@@ -53,6 +53,20 @@ from patchfrog.contract_intelligence.service import build_contract_intelligence_
 from patchfrog.contract_intelligence.telemetry import (
     summarize_for_persistence as summarize_contract_intelligence,
 )
+from patchfrog.cross_pr_intelligence.domain import (
+    CrossPRIntelligenceReport,
+    CrossPRReviewHint,
+)
+from patchfrog.cross_pr_intelligence.evidence import (
+    evidence_text_for_candidate as cross_pr_evidence_text_for_candidate,
+)
+from patchfrog.cross_pr_intelligence.matching import (
+    select_review_hint as select_cross_pr_review_hint,
+)
+from patchfrog.cross_pr_intelligence.service import build_cross_pr_intelligence_report
+from patchfrog.cross_pr_intelligence.telemetry import (
+    summarize_for_persistence as summarize_cross_pr_intelligence,
+)
 from patchfrog.diff.models import DiffFile, DiffHunk
 from patchfrog.historical_regression_memory.domain import HistoricalRegressionReport
 from patchfrog.historical_regression_memory.evidence import (
@@ -752,6 +766,24 @@ class PullRequestReviewService:
                 previous_generation_ancestry_verified=previous_generation_ancestry_verified,
             )
 
+            # Cross-PR Intelligence Foundation (patchfrog.cross_pr_intelligence):
+            # same-repository, concurrently-relevant-PR structural
+            # overlap evidence, computed last. Unlike Trajectory
+            # Intelligence, peer eligibility is entirely self-contained
+            # (same repository, still open, non-stale reviewed head --
+            # all read fresh from already-persisted state every call),
+            # so no ancestry-verification flag needs to be threaded
+            # through the caller. Cross-PR overlap is never a finding --
+            # this report only ever feeds a bounded orchestration hint
+            # (Quality + Cost Guard escalation, candidate ordering) for
+            # a candidate that already exists.
+            cross_pr_report = await build_cross_pr_intelligence_report(
+                session,
+                repository_id=repository_id,
+                pull_request_id=pull_request_id,
+                change_units=change_intelligence_report.change_units,
+            )
+
             # Fold the Contract Story addendum, the Intent Story prefix,
             # the Test Story prefix, the Historical Story prefix, and
             # the Repository Learning Story prefix into the existing
@@ -805,21 +837,27 @@ class PullRequestReviewService:
             # subset of exactly what Phase 5 would already review.
             candidates = tuple(c for c in candidates if candidate_filter(c))
 
-        # Trajectory Intelligence's TrajectoryReviewHint.INCREASE_CANDIDATE_PRIORITY
-        # behavior (spec section 36): a candidate whose surface selected
-        # REQUIRE_CRITIC is dispatched first -- earlier asyncio.Semaphore
-        # acquisition and earlier shared-token-budget claim -- a
-        # deterministic, zero-cost ordering effect only, never a change
-        # to which candidates are reviewed or how many tokens they get.
-        candidates = tuple(
-            sorted(
-                candidates,
-                key=lambda c: select_review_hint(
-                    trajectory_report.signals, file_path=c.file_path, qualified_name=c.qualified_name
-                )
-                is not TrajectoryReviewHint.REQUIRE_CRITIC,
+        # Trajectory Intelligence's / Cross-PR Intelligence's
+        # *_ReviewHint.INCREASE_CANDIDATE_PRIORITY behavior: a candidate
+        # whose surface selected REQUIRE_CRITIC from *either* report is
+        # dispatched first -- earlier asyncio.Semaphore acquisition and
+        # earlier shared-token-budget claim -- a deterministic,
+        # zero-cost ordering effect only, never a change to which
+        # candidates are reviewed or how many tokens they get.
+        def _requires_critic(c: ReviewCandidate) -> bool:
+            trajectory_requires = (
+                select_review_hint(trajectory_report.signals, file_path=c.file_path, qualified_name=c.qualified_name)
+                is TrajectoryReviewHint.REQUIRE_CRITIC
             )
-        )
+            cross_pr_requires = (
+                select_cross_pr_review_hint(
+                    cross_pr_report.signals, file_path=c.file_path, qualified_name=c.qualified_name
+                )
+                is CrossPRReviewHint.REQUIRE_CRITIC
+            )
+            return trajectory_requires or cross_pr_requires
+
+        candidates = tuple(sorted(candidates, key=lambda c: not _requires_critic(c)))
 
         outcomes = [_CandidateOutcome(c) for c in candidates]
         static_by_id = {f.id: f for f in static_findings}
@@ -863,6 +901,7 @@ class PullRequestReviewService:
                     historical_regression_report=historical_regression_report,
                     repository_learnings_report=repository_learnings_report,
                     trajectory_report=trajectory_report,
+                    cross_pr_report=cross_pr_report,
                 )
 
         await asyncio.gather(*(_process(o) for o in outcomes))
@@ -1112,6 +1151,7 @@ class PullRequestReviewService:
                 historical_regression_memory=summarize_historical_regression_memory(historical_regression_report),
                 repository_learnings=summarize_repository_learnings(repository_learnings_report),
                 trajectory_intelligence=summarize_trajectory_intelligence(trajectory_report),
+                cross_pr_intelligence=summarize_cross_pr_intelligence(cross_pr_report),
             )
             await session.commit()
 
@@ -1173,6 +1213,7 @@ class PullRequestReviewService:
         historical_regression_report: HistoricalRegressionReport,
         repository_learnings_report: RepositoryLearningsReport,
         trajectory_report: TrajectoryIntelligenceReport,
+        cross_pr_report: CrossPRIntelligenceReport,
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
@@ -1194,6 +1235,17 @@ class PullRequestReviewService:
             trajectory_report.signals, file_path=candidate.file_path, qualified_name=candidate.qualified_name
         )
 
+        # Cross-PR Intelligence's own orchestration effect on Quality +
+        # Cost Guard -- the same treatment as Trajectory Intelligence
+        # above: REQUIRE_CRITIC for this exact candidate's surface both
+        # contributes a structural signal and unconditionally forces
+        # mandatory critic verification, never a second escalation
+        # path, never a provider call for a candidate that wasn't
+        # already about to be reviewed.
+        cross_pr_hint = select_cross_pr_review_hint(
+            cross_pr_report.signals, file_path=candidate.file_path, qualified_name=candidate.qualified_name
+        )
+
         # Quality + Cost Guard (patchfrog.review.effort), stage 1: decided
         # from only the candidate + static findings, *before* context is
         # built -- this is what determines the context budget/adaptive
@@ -1205,6 +1257,7 @@ class PullRequestReviewService:
             static_findings=static_summaries,
             max_retries=config.max_retries,
             trajectory_signal_present=trajectory_hint is TrajectoryReviewHint.REQUIRE_CRITIC,
+            cross_pr_signal_present=cross_pr_hint is CrossPRReviewHint.REQUIRE_CRITIC,
         )
 
         try:
@@ -1289,6 +1342,7 @@ class PullRequestReviewService:
                 repository_learnings_report, candidate
             ),
             trajectory_intelligence_text=trajectory_evidence_text_for_candidate(trajectory_report, candidate),
+            cross_pr_intelligence_text=cross_pr_evidence_text_for_candidate(cross_pr_report, candidate),
         )
 
         # Stage 2: finalize the effort decision now that the context

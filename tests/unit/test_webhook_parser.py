@@ -58,6 +58,47 @@ def test_parses_reopened_pull_request(fixture_loader: Any) -> None:
     assert event.action is PullRequestEventAction.REOPENED
 
 
+def test_parses_closed_pull_request_not_merged(fixture_loader: Any) -> None:
+    payload = fixture_loader("pull_request_closed.json")
+
+    event = parse_pull_request_event(
+        event_name="pull_request", delivery_id="delivery-closed", payload=payload
+    )
+
+    assert event is not None
+    assert event.action is PullRequestEventAction.CLOSED
+    assert event.merged is False
+
+
+def test_parses_closed_pull_request_merged(fixture_loader: Any) -> None:
+    payload = copy.deepcopy(fixture_loader("pull_request_closed.json"))
+    payload["pull_request"]["merged"] = True
+
+    event = parse_pull_request_event(
+        event_name="pull_request", delivery_id="delivery-merged", payload=payload
+    )
+
+    assert event is not None
+    assert event.action is PullRequestEventAction.CLOSED
+    assert event.merged is True
+
+
+def test_merged_defaults_false_when_absent_from_payload(fixture_loader: Any) -> None:
+    """GitHub always sends `merged` on `pull_request` payloads in practice,
+    but the parser must not crash if it's ever missing -- `merged` isn't a
+    "critical field" that should raise WebhookPayloadError."""
+
+    payload = fixture_loader("pull_request_opened.json")
+    assert "merged" not in payload["pull_request"]
+
+    event = parse_pull_request_event(
+        event_name="pull_request", delivery_id="delivery-no-merged", payload=payload
+    )
+
+    assert event is not None
+    assert event.merged is False
+
+
 def test_unsupported_action_is_ignored(fixture_loader: Any) -> None:
     payload = copy.deepcopy(fixture_loader("pull_request_opened.json"))
     payload["action"] = "labeled"

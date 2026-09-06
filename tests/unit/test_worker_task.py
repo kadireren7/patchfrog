@@ -22,6 +22,7 @@ def test_reconstruct_event_builds_matching_domain_event() -> None:
         base_sha="aaa",
         head_sha="bbb",
         html_url="https://github.com/kadireren7/libft/pull/14",
+        merged=False,
     )
 
     assert event.action is PullRequestEventAction.OPENED
@@ -29,3 +30,29 @@ def test_reconstruct_event_builds_matching_domain_event() -> None:
     assert event.repository.installation.id == 55667788
     assert event.pull_request_number == 14
     assert event.head_sha == "bbb"
+    assert event.merged is False
+
+
+def test_reconstruct_event_threads_merged_flag_for_closed_action() -> None:
+    event = _reconstruct_event(
+        delivery_id="delivery-2",
+        action="closed",
+        github_repository_id=987654321,
+        owner="kadireren7",
+        name="libft",
+        full_name="kadireren7/libft",
+        installation_id=55667788,
+        pull_request_number=14,
+        pull_request_title="Add ft_strdup",
+        pull_request_body="desc",
+        author="kadireren7",
+        base_branch="main",
+        head_branch="feature/ft-strdup",
+        base_sha="aaa",
+        head_sha="bbb",
+        html_url="https://github.com/kadireren7/libft/pull/14",
+        merged=True,
+    )
+
+    assert event.action is PullRequestEventAction.CLOSED
+    assert event.merged is True

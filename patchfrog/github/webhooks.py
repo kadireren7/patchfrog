@@ -74,6 +74,7 @@ def parse_pull_request_event(
             base_sha=pull_request["base"]["sha"],
             head_sha=pull_request["head"]["sha"],
             html_url=pull_request["html_url"],
+            merged=bool(pull_request.get("merged", False)),
         )
     except (KeyError, TypeError) as exc:
         raise WebhookPayloadError(

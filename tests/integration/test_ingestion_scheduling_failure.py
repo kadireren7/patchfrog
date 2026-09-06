@@ -58,6 +58,28 @@ _PR_METADATA = PullRequestMetadata(
     state="open", merged=False,
 )
 
+_CLOSED_EVENT = PullRequestWebhookEvent(
+    delivery_id="delivery-closed-scheduling",
+    action=PullRequestEventAction.CLOSED,
+    repository=RepositoryRef(
+        github_repository_id=112233,
+        owner="kadireren7",
+        name="libft",
+        full_name="kadireren7/libft",
+        installation=InstallationRef(id=55667788),
+    ),
+    pull_request_number=1,
+    pull_request_title="t",
+    pull_request_body=None,
+    author="kadireren7",
+    base_branch="main",
+    head_branch="feature",
+    base_sha="a" * 40,
+    head_sha="b" * 40,
+    html_url="https://github.com/kadireren7/libft/pull/1",
+    merged=True,
+)
+
 
 def _settings(database_url: str) -> Settings:
     base: dict[str, Any] = {
@@ -111,3 +133,38 @@ async def test_scheduling_failure_after_successful_ingestion_never_propagates(
     assert outcome.status.value == "succeeded"
     skipped_after = metrics.reviews_skipped_total.labels(reason="scheduling_failed")._value.get()
     assert skipped_after == skipped_before + 1
+
+
+async def test_closed_event_never_schedules_a_review_and_never_calls_github(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `closed` webhook must persist state via the cheap
+    `ingest_closed` path and must never reach
+    `schedule_pipeline_if_eligible` -- a closed/merged PR has no commit
+    that should be reviewed."""
+
+    db_path = tmp_path / "closed_event.db"
+    database_url = f"sqlite+aiosqlite:///{db_path}"
+
+    setup_engine = create_async_engine(database_url)
+    async with setup_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await setup_engine.dispose()
+
+    def _fail_get_pull_request(*args: object, **kwargs: object) -> None:
+        raise AssertionError("closed ingestion must never call the GitHub API")
+
+    monkeypatch.setattr(GitHubClient, "get_pull_request", _fail_get_pull_request)
+    monkeypatch.setattr(GitHubClient, "list_pull_request_files", _fail_get_pull_request)
+
+    scheduled: list[object] = []
+
+    async def _record_schedule(*args: object, **kwargs: object) -> None:
+        scheduled.append((args, kwargs))
+
+    monkeypatch.setattr(process_pull_request, "schedule_pipeline_if_eligible", _record_schedule)
+
+    outcome = await process_pull_request._ingest(_CLOSED_EVENT, _settings(database_url))
+
+    assert outcome.status.value == "succeeded"
+    assert scheduled == []

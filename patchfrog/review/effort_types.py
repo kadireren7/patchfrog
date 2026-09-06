@@ -42,6 +42,13 @@ class ReviewEffortReason(StrEnum):
     #: structural signal exactly like every other reason above, never a
     #: separate escalation path. Trajectory evidence, never a finding.
     TRAJECTORY_SIGNAL_PRESENT = "trajectory_signal_present"
+    #: Cross-PR Intelligence (:mod:`patchfrog.cross_pr_intelligence`)
+    #: found this exact candidate's surface is also directly changed in
+    #: another PR's reviewed head in the same repository
+    #: (``CrossPRReviewHint.REQUIRE_CRITIC``) -- counted as a structural
+    #: signal exactly like every other reason above, never a separate
+    #: escalation path. Cross-PR overlap evidence, never a finding.
+    CROSS_PR_OVERLAP_PRESENT = "cross_pr_overlap_present"
     #: Escalation-only: the provisional tier was raised *before* any
     #: specialist provider call because adaptive context expansion
     #: actually occurred (see

@@ -167,3 +167,77 @@ class PullRequestIngestionService:
             additions=total_additions,
             deletions=total_deletions,
         )
+
+    async def ingest_closed(self, event: PullRequestWebhookEvent) -> IngestionOutcome:
+        """Record that a pull request was closed or merged.
+
+        Deliberately the cheapest possible path: everything needed
+        (title/author/base_sha/head_sha/merged) is already on the verified
+        webhook payload itself, so unlike :meth:`ingest` this makes *zero*
+        GitHub API calls -- there is no diff to fetch and nothing to
+        review. This is what keeps :class:`patchfrog.persistence.models.
+        pull_request.PullRequestModel`'s ``state`` column trustworthy as
+        "is this PR still open" for any consumer (e.g. Cross-PR
+        Intelligence's peer-eligibility check) -- without it, `state`
+        would only ever reflect whatever GitHub reported at the *last*
+        opened/reopened/synchronize event, frozen forever once a PR is
+        later closed or merged.
+        """
+
+        base_log = logger.bind(
+            github_delivery_id=event.delivery_id,
+            repository=event.repository.full_name,
+            pull_request_number=event.pull_request_number,
+            event_action=event.action.value,
+        )
+
+        async with self._session_factory() as session:
+            ingestion = await self._ingestion_repo.reserve(
+                session,
+                delivery_id=event.delivery_id,
+                event_action=event.action.value,
+                head_sha=event.head_sha,
+            )
+            if ingestion is None:
+                base_log.info("pull_request_ingestion_duplicate")
+                return IngestionOutcome(
+                    status=IngestionOutcomeStatus.DUPLICATE,
+                    delivery_id=event.delivery_id,
+                    repository_full_name=event.repository.full_name,
+                    pull_request_number=event.pull_request_number,
+                )
+            ingestion_id = ingestion.id
+
+            state = "merged" if event.merged else "closed"
+            repository_row = await self._repository_repo.upsert(
+                session,
+                github_repository_id=event.repository.github_repository_id,
+                owner=event.repository.owner,
+                name=event.repository.name,
+                full_name=event.repository.full_name,
+                installation_id=event.repository.installation.id,
+            )
+            pull_request_row = await self._pull_request_repo.upsert(
+                session,
+                repository_id=repository_row.id,
+                github_pr_number=event.pull_request_number,
+                title=event.pull_request_title,
+                author=event.author,
+                base_sha=event.base_sha,
+                head_sha=event.head_sha,
+                state=state,
+            )
+            await self._ingestion_repo.mark_succeeded(
+                session, ingestion_id=ingestion_id, pull_request_id=pull_request_row.id
+            )
+            await session.commit()
+
+        base_log.info("pull_request_closed_ingested", state=state)
+
+        return IngestionOutcome(
+            status=IngestionOutcomeStatus.SUCCEEDED,
+            delivery_id=event.delivery_id,
+            repository_full_name=event.repository.full_name,
+            pull_request_number=event.pull_request_number,
+            head_sha=event.head_sha,
+        )

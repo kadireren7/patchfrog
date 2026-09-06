@@ -247,6 +247,7 @@ def build_agent_prompt(
     historical_regression_text: str = "",
     repository_learning_text: str = "",
     trajectory_intelligence_text: str = "",
+    cross_pr_intelligence_text: str = "",
 ) -> tuple[str, str]:
     """Returns ``(system_prompt, user_prompt)`` for one candidate review by
     one specialist role."""
@@ -264,6 +265,7 @@ def build_agent_prompt(
         historical_regression_text=historical_regression_text,
         repository_learning_text=repository_learning_text,
         trajectory_intelligence_text=trajectory_intelligence_text,
+        cross_pr_intelligence_text=cross_pr_intelligence_text,
     )
 
 
@@ -280,6 +282,7 @@ def _build_user_prompt(
     historical_regression_text: str = "",
     repository_learning_text: str = "",
     trajectory_intelligence_text: str = "",
+    cross_pr_intelligence_text: str = "",
 ) -> str:
     target_label = candidate.qualified_name or candidate.symbol_name or candidate.file_path
     lines = [
@@ -325,6 +328,9 @@ def _build_user_prompt(
 
     if trajectory_intelligence_text.strip():
         lines += ["", "<trajectory_intelligence>", trajectory_intelligence_text.strip(), "</trajectory_intelligence>"]
+
+    if cross_pr_intelligence_text.strip():
+        lines += ["", "<cross_pr_intelligence>", cross_pr_intelligence_text.strip(), "</cross_pr_intelligence>"]
 
     return "\n".join(lines)
 
