@@ -85,3 +85,9 @@ class CandidateEvidencePackage:
     #: PR's reviewed head in the same repository. Same size discipline
     #: as every other Intelligence text field above.
     cross_pr_intelligence_text: str = ""
+    #: Bounded (see :mod:`patchfrog.cross_repo_intelligence.evidence`)
+    #: evidence from Cross-Repo Intelligence -- empty string unless this
+    #: exact candidate's surface is an operator-registered contract
+    #: explicitly consumed by another, authorized repository. Same size
+    #: discipline as every other Intelligence text field above.
+    cross_repo_intelligence_text: str = ""

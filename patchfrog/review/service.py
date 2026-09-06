@@ -67,6 +67,20 @@ from patchfrog.cross_pr_intelligence.service import build_cross_pr_intelligence_
 from patchfrog.cross_pr_intelligence.telemetry import (
     summarize_for_persistence as summarize_cross_pr_intelligence,
 )
+from patchfrog.cross_repo_intelligence.domain import (
+    CrossRepoIntelligenceReport,
+    CrossRepoReviewHint,
+)
+from patchfrog.cross_repo_intelligence.evidence import (
+    evidence_text_for_candidate as cross_repo_evidence_text_for_candidate,
+)
+from patchfrog.cross_repo_intelligence.matching import (
+    select_review_hint as select_cross_repo_review_hint,
+)
+from patchfrog.cross_repo_intelligence.service import build_cross_repo_intelligence_report
+from patchfrog.cross_repo_intelligence.telemetry import (
+    summarize_for_persistence as summarize_cross_repo_intelligence,
+)
 from patchfrog.diff.models import DiffFile, DiffHunk
 from patchfrog.historical_regression_memory.domain import HistoricalRegressionReport
 from patchfrog.historical_regression_memory.evidence import (
@@ -784,6 +798,26 @@ class PullRequestReviewService:
                 change_units=change_intelligence_report.change_units,
             )
 
+            # Cross-Repo Intelligence Foundation
+            # (patchfrog.cross_repo_intelligence): proven dependency/
+            # contract evidence across an explicit repository boundary,
+            # computed last. Reuses Contract & Blast Radius
+            # Intelligence's own already-computed
+            # ContractIntelligenceReport.deltas directly -- never a
+            # second contract-detection engine. Peer eligibility is
+            # entirely self-contained (an active, operator-registered
+            # relation plus same-installation authorization, all read
+            # fresh from already-persisted state every call) -- no
+            # ancestry-verification flag needed, same reasoning as
+            # Cross-PR Intelligence above. Cross-repo overlap is never a
+            # finding -- this report only ever feeds a bounded
+            # orchestration hint for a candidate that already exists.
+            cross_repo_report = await build_cross_repo_intelligence_report(
+                session,
+                repository_id=repository_id,
+                contract_deltas=contract_intelligence_report.deltas,
+            )
+
             # Fold the Contract Story addendum, the Intent Story prefix,
             # the Test Story prefix, the Historical Story prefix, and
             # the Repository Learning Story prefix into the existing
@@ -837,13 +871,14 @@ class PullRequestReviewService:
             # subset of exactly what Phase 5 would already review.
             candidates = tuple(c for c in candidates if candidate_filter(c))
 
-        # Trajectory Intelligence's / Cross-PR Intelligence's
-        # *_ReviewHint.INCREASE_CANDIDATE_PRIORITY behavior: a candidate
-        # whose surface selected REQUIRE_CRITIC from *either* report is
-        # dispatched first -- earlier asyncio.Semaphore acquisition and
-        # earlier shared-token-budget claim -- a deterministic,
-        # zero-cost ordering effect only, never a change to which
-        # candidates are reviewed or how many tokens they get.
+        # Trajectory Intelligence's / Cross-PR Intelligence's /
+        # Cross-Repo Intelligence's *_ReviewHint.INCREASE_CANDIDATE_PRIORITY
+        # behavior: a candidate whose surface selected REQUIRE_CRITIC
+        # from *any* report is dispatched first -- earlier
+        # asyncio.Semaphore acquisition and earlier shared-token-budget
+        # claim -- a deterministic, zero-cost ordering effect only,
+        # never a change to which candidates are reviewed or how many
+        # tokens they get.
         def _requires_critic(c: ReviewCandidate) -> bool:
             trajectory_requires = (
                 select_review_hint(trajectory_report.signals, file_path=c.file_path, qualified_name=c.qualified_name)
@@ -855,7 +890,13 @@ class PullRequestReviewService:
                 )
                 is CrossPRReviewHint.REQUIRE_CRITIC
             )
-            return trajectory_requires or cross_pr_requires
+            cross_repo_requires = (
+                select_cross_repo_review_hint(
+                    cross_repo_report.signals, file_path=c.file_path, qualified_name=c.qualified_name
+                )
+                is CrossRepoReviewHint.REQUIRE_CRITIC
+            )
+            return trajectory_requires or cross_pr_requires or cross_repo_requires
 
         candidates = tuple(sorted(candidates, key=lambda c: not _requires_critic(c)))
 
@@ -902,6 +943,7 @@ class PullRequestReviewService:
                     repository_learnings_report=repository_learnings_report,
                     trajectory_report=trajectory_report,
                     cross_pr_report=cross_pr_report,
+                    cross_repo_report=cross_repo_report,
                 )
 
         await asyncio.gather(*(_process(o) for o in outcomes))
@@ -1152,6 +1194,7 @@ class PullRequestReviewService:
                 repository_learnings=summarize_repository_learnings(repository_learnings_report),
                 trajectory_intelligence=summarize_trajectory_intelligence(trajectory_report),
                 cross_pr_intelligence=summarize_cross_pr_intelligence(cross_pr_report),
+                cross_repo_intelligence=summarize_cross_repo_intelligence(cross_repo_report),
             )
             await session.commit()
 
@@ -1214,6 +1257,7 @@ class PullRequestReviewService:
         repository_learnings_report: RepositoryLearningsReport,
         trajectory_report: TrajectoryIntelligenceReport,
         cross_pr_report: CrossPRIntelligenceReport,
+        cross_repo_report: CrossRepoIntelligenceReport,
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
@@ -1246,6 +1290,13 @@ class PullRequestReviewService:
             cross_pr_report.signals, file_path=candidate.file_path, qualified_name=candidate.qualified_name
         )
 
+        # Cross-Repo Intelligence's own orchestration effect on Quality +
+        # Cost Guard -- the same treatment as Trajectory/Cross-PR
+        # Intelligence above.
+        cross_repo_hint = select_cross_repo_review_hint(
+            cross_repo_report.signals, file_path=candidate.file_path, qualified_name=candidate.qualified_name
+        )
+
         # Quality + Cost Guard (patchfrog.review.effort), stage 1: decided
         # from only the candidate + static findings, *before* context is
         # built -- this is what determines the context budget/adaptive
@@ -1258,6 +1309,7 @@ class PullRequestReviewService:
             max_retries=config.max_retries,
             trajectory_signal_present=trajectory_hint is TrajectoryReviewHint.REQUIRE_CRITIC,
             cross_pr_signal_present=cross_pr_hint is CrossPRReviewHint.REQUIRE_CRITIC,
+            cross_repo_signal_present=cross_repo_hint is CrossRepoReviewHint.REQUIRE_CRITIC,
         )
 
         try:
@@ -1343,6 +1395,7 @@ class PullRequestReviewService:
             ),
             trajectory_intelligence_text=trajectory_evidence_text_for_candidate(trajectory_report, candidate),
             cross_pr_intelligence_text=cross_pr_evidence_text_for_candidate(cross_pr_report, candidate),
+            cross_repo_intelligence_text=cross_repo_evidence_text_for_candidate(cross_repo_report, candidate),
         )
 
         # Stage 2: finalize the effort decision now that the context

@@ -311,6 +311,19 @@ class ReviewRunModel(Base):
     cross_pr_require_critic_count: Mapped[int] = mapped_column(Integer, default=0)
     cross_pr_deepen_context_count: Mapped[int] = mapped_column(Integer, default=0)
 
+    #: Cross-Repo Intelligence Foundation
+    #: (:mod:`patchfrog.cross_repo_intelligence`) run-level summary --
+    #: the bounded output of
+    #: :func:`patchfrog.cross_repo_intelligence.telemetry.summarize_for_persistence`.
+    #: Counts only -- no repository full_name/id, no contract key
+    #: string, no organization name anywhere. All default to 0 --
+    #: nullable-safe for rows predating this milestone.
+    cross_repo_peer_count: Mapped[int] = mapped_column(Integer, default=0)
+    cross_repo_signal_count: Mapped[int] = mapped_column(Integer, default=0)
+    cross_repo_explicit_contract_relation_count: Mapped[int] = mapped_column(Integer, default=0)
+    cross_repo_require_critic_count: Mapped[int] = mapped_column(Integer, default=0)
+    cross_repo_deepen_context_count: Mapped[int] = mapped_column(Integer, default=0)
+
 
 class ReviewCandidateModel(Base):
     """One symbol- (or module-region-) centered candidate considered for

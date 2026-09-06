@@ -19,6 +19,16 @@ class RepositoryRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_full_name(self, session: AsyncSession, *, full_name: str) -> RepositoryModel | None:
+        """Resolves an ``owner/name`` string to its row -- used by the
+        trusted-operator-only ``cross-repo`` CLI path
+        (:mod:`patchfrog.cli`) to register a
+        :class:`~patchfrog.persistence.models.cross_repo.RepositoryRelationModel`
+        by human-readable name, never by raw id."""
+
+        result = await session.execute(select(RepositoryModel).where(RepositoryModel.full_name == full_name))
+        return result.scalar_one_or_none()
+
     async def upsert(
         self,
         session: AsyncSession,

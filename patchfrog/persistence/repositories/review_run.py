@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from patchfrog.change_intelligence.telemetry import ChangeIntelligenceSummary
 from patchfrog.contract_intelligence.telemetry import ContractIntelligenceSummary
 from patchfrog.cross_pr_intelligence.telemetry import CrossPRIntelligenceSummary
+from patchfrog.cross_repo_intelligence.telemetry import CrossRepoIntelligenceSummary
 from patchfrog.historical_regression_memory.telemetry import HistoricalRegressionMemorySummary
 from patchfrog.intent_verification.telemetry import IntentVerificationSummary
 from patchfrog.persistence.models.review import ReviewRunModel
@@ -221,6 +222,7 @@ class ReviewRunRepository:
         repository_learnings: RepositoryLearningsSummary | None = None,
         trajectory_intelligence: TrajectoryIntelligenceSummary | None = None,
         cross_pr_intelligence: CrossPRIntelligenceSummary | None = None,
+        cross_repo_intelligence: CrossRepoIntelligenceSummary | None = None,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -338,6 +340,14 @@ class ReviewRunRepository:
             model.cross_pr_same_changed_symbol_count = cross_pr_intelligence.cross_pr_same_changed_symbol_count
             model.cross_pr_require_critic_count = cross_pr_intelligence.cross_pr_require_critic_count
             model.cross_pr_deepen_context_count = cross_pr_intelligence.cross_pr_deepen_context_count
+        if cross_repo_intelligence is not None:
+            model.cross_repo_peer_count = cross_repo_intelligence.cross_repo_peer_count
+            model.cross_repo_signal_count = cross_repo_intelligence.cross_repo_signal_count
+            model.cross_repo_explicit_contract_relation_count = (
+                cross_repo_intelligence.cross_repo_explicit_contract_relation_count
+            )
+            model.cross_repo_require_critic_count = cross_repo_intelligence.cross_repo_require_critic_count
+            model.cross_repo_deepen_context_count = cross_repo_intelligence.cross_repo_deepen_context_count
         model.completed_at = datetime.now(UTC)
         await session.flush()
         return model

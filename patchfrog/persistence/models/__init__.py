@@ -22,6 +22,10 @@ from patchfrog.persistence.models.context import (
     ContextBundleStatus,
     ContextItemModel,
 )
+from patchfrog.persistence.models.cross_repo import (
+    RepositoryContractKeyModel,
+    RepositoryRelationModel,
+)
 from patchfrog.persistence.models.feedback import FeedbackAssessmentModel, FeedbackEventModel
 from patchfrog.persistence.models.installation import (
     BetaState,
@@ -82,9 +86,11 @@ __all__ = [
     "ParsedFileCacheModel",
     "PullRequestIngestionModel",
     "PullRequestModel",
+    "RepositoryContractKeyModel",
     "RepositoryEdgeModel",
     "RepositoryIndexModel",
     "RepositoryModel",
+    "RepositoryRelationModel",
     "ReviewCandidateModel",
     "ReviewCandidateStatus",
     "ReviewGenerationModel",

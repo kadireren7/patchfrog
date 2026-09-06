@@ -57,6 +57,7 @@ from patchfrog.telemetry.domain import (
     ContextTelemetry,
     ContractIntelligenceTelemetry,
     CrossPRIntelligenceTelemetry,
+    CrossRepoIntelligenceTelemetry,
     FeedbackScope,
     FeedbackTelemetry,
     FindingLifecycleTelemetry,
@@ -390,6 +391,14 @@ async def collect_review_telemetry(
         cross_pr_deepen_context_count=run.cross_pr_deepen_context_count,
     )
 
+    cross_repo_intelligence = CrossRepoIntelligenceTelemetry(
+        cross_repo_peer_count=run.cross_repo_peer_count,
+        cross_repo_signal_count=run.cross_repo_signal_count,
+        cross_repo_explicit_contract_relation_count=run.cross_repo_explicit_contract_relation_count,
+        cross_repo_require_critic_count=run.cross_repo_require_critic_count,
+        cross_repo_deepen_context_count=run.cross_repo_deepen_context_count,
+    )
+
     return ReviewTelemetrySnapshot(
         schema_version=TELEMETRY_SCHEMA_VERSION,
         review_run_id=run.id,
@@ -419,4 +428,5 @@ async def collect_review_telemetry(
         repository_learnings=repository_learnings,
         trajectory_intelligence=trajectory_intelligence,
         cross_pr_intelligence=cross_pr_intelligence,
+        cross_repo_intelligence=cross_repo_intelligence,
     )
