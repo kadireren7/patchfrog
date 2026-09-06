@@ -353,6 +353,7 @@ class PullRequestReviewService:
         base_sha: str | None = None,
         title: str | None = None,
         body: str | None = None,
+        previous_generation_ancestry_verified: bool = False,
     ) -> ReviewRunSummary:
         """Review a repository already checked out on disk (CLI / dogfood
         use). Context is built against the same local checkout via
@@ -405,6 +406,17 @@ class PullRequestReviewService:
         ``graph_depth``) without duplicating any context-building logic.
         ``None`` (the default) is "Phase 8 doesn't exist" behavior --
         identical to today's per-candidate budget-derived config.
+
+        ``previous_generation_ancestry_verified`` (Trajectory Intelligence,
+        :mod:`patchfrog.trajectory_intelligence`) is Phase 7's own
+        already-computed answer to "is the PR's latest persisted review
+        generation's commit a real git ancestor of ``commit_sha``?" --
+        this run's ``PreparedReview.plan.selection.ancestry_verified``,
+        threaded through verbatim so Trajectory Intelligence never
+        re-runs that git-plumbing check itself. ``False`` (the default,
+        e.g. every caller without Phase 7 review-memory context) fails
+        closed: any persisted trajectory lineage is discarded and only
+        the current head is analyzed.
         """
 
         return await self._run(
@@ -422,6 +434,7 @@ class PullRequestReviewService:
             base_sha=base_sha,
             title=title,
             body=body,
+            previous_generation_ancestry_verified=previous_generation_ancestry_verified,
         )
 
     async def review_pull_request(
@@ -441,12 +454,14 @@ class PullRequestReviewService:
         base_sha: str | None = None,
         title: str | None = None,
         body: str | None = None,
+        previous_generation_ancestry_verified: bool = False,
     ) -> ReviewRunSummary:
         """Review a repository fetched from ``clone_url`` (production /
         Celery-task use). ``config`` is expected to already be resolved by
         the caller -- see :meth:`review_local`'s docstring, including for
         ``candidate_filter``/``incremental_context_fingerprint``/
-        ``context_config_override``/``base_sha``/``title``/``body``."""
+        ``context_config_override``/``base_sha``/``title``/``body``/
+        ``previous_generation_ancestry_verified``."""
 
         return await self._run(
             repository_id=repository_id,
@@ -462,6 +477,7 @@ class PullRequestReviewService:
             context_config_override=context_config_override,
             base_sha=base_sha,
             title=title,
+            previous_generation_ancestry_verified=previous_generation_ancestry_verified,
             body=body,
         )
 
@@ -487,6 +503,7 @@ class PullRequestReviewService:
         base_sha: str | None = None,
         title: str | None = None,
         body: str | None = None,
+        previous_generation_ancestry_verified: bool = False,
     ) -> ReviewRunSummary:
         start = time.monotonic()
         log = logger.bind(repository_id=str(repository_id), commit_sha=commit_sha)
@@ -549,6 +566,7 @@ class PullRequestReviewService:
                 body=body,
                 review_started_at=run.started_at,
                 pull_request_id=pull_request_id,
+                previous_generation_ancestry_verified=previous_generation_ancestry_verified,
             )
         except Exception as exc:
             async with self._session_factory() as session:
@@ -583,6 +601,7 @@ class PullRequestReviewService:
         body: str | None = None,
         review_started_at: datetime | None = None,
         pull_request_id: uuid.UUID | None = None,
+        previous_generation_ancestry_verified: bool = False,
     ) -> ReviewRunSummary:
         async with self._session_factory() as session:
             static_findings = []
@@ -716,13 +735,21 @@ class PullRequestReviewService:
             # ever feeds a bounded orchestration hint
             # (Quality + Cost Guard escalation, candidate ordering) for
             # a candidate that already exists; it never triggers a
-            # provider call on its own.
+            # provider call on its own. ``previous_generation_ancestry_verified``
+            # is Phase 7's own already-computed answer for *this exact
+            # run* (this run's own PreparedReview.plan.selection.ancestry_verified,
+            # threaded through by the caller) -- the edge from the
+            # latest persisted generation to this exact commit is never
+            # re-verified here; an unproven edge (force-push, or review
+            # memory inactive this run) fails closed, discarding any
+            # persisted trajectory lineage for this run.
             trajectory_report = await build_trajectory_intelligence_report(
                 session,
                 pull_request_id=pull_request_id,
                 current_commit_sha=commit_sha,
                 as_of=review_started_at or datetime.now(UTC),
                 change_units=change_intelligence_report.change_units,
+                previous_generation_ancestry_verified=previous_generation_ancestry_verified,
             )
 
             # Fold the Contract Story addendum, the Intent Story prefix,

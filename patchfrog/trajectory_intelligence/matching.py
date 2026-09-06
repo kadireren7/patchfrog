@@ -40,17 +40,22 @@ def _event_kind_for(file_path: str) -> TrajectoryEventKind:
 
 def derive_trajectory_events(
     *,
-    historical_heads: tuple[TrajectoryHead, ...],
+    heads: tuple[TrajectoryHead, ...],
     historical_surfaces_by_review_run: dict[uuid.UUID, tuple[tuple[str, str], ...]],
-    current_head: TrajectoryHead,
-    current_changed_surfaces: tuple[tuple[str, str], ...],
+    current_changed_surfaces: tuple[tuple[str, str], ...] = (),
 ) -> tuple[TrajectoryEvent, ...]:
-    """``historical_heads`` is oldest-first (see
-    :func:`patchfrog.trajectory_intelligence.queries.fetch_trajectory_heads`).
-    ``current_head`` is the synthetic entry for the in-progress review
-    (``generation_id=None``) -- always processed last, after every real
-    historical head, so ordering by event-append order already reflects
-    chronological order without needing a separate sort."""
+    """``heads`` is oldest-first -- the exact, already-decided lineage
+    :mod:`patchfrog.trajectory_intelligence.service` chose to use for
+    this run (real persisted heads, optionally followed by one
+    synthetic in-progress head with ``review_run_id=None``; see that
+    module's own docstring for the current-edge verification this
+    depends on). A head with a real ``review_run_id`` always reads its
+    surfaces from ``historical_surfaces_by_review_run`` (the persisted
+    truth for that exact head, never re-derived); a head with
+    ``review_run_id=None`` (there is ever at most one, and only ever
+    the last) reads from ``current_changed_surfaces`` instead -- Change
+    Intelligence's own already-computed current-run surfaces, since
+    that head's own review hasn't persisted a generation yet."""
 
     events: list[TrajectoryEvent] = []
     per_surface_count: dict[tuple[str, str], int] = {}
@@ -66,17 +71,15 @@ def derive_trajectory_events(
         events.append(TrajectoryEvent(head=head, file_path=file_path, qualified_name=qualified_name, event_kind=_event_kind_for(file_path)))
         return True
 
-    for head in historical_heads:
-        if head.review_run_id is None:
-            continue
-        surfaces = historical_surfaces_by_review_run.get(head.review_run_id, ())
+    for head in heads:
+        surfaces = (
+            historical_surfaces_by_review_run.get(head.review_run_id, ())
+            if head.review_run_id is not None
+            else current_changed_surfaces
+        )
         for file_path, qualified_name in surfaces:
             if not _add(head, file_path, qualified_name):
                 return tuple(events)
-
-    for file_path, qualified_name in current_changed_surfaces:
-        if not _add(current_head, file_path, qualified_name):
-            return tuple(events)
 
     return tuple(events)
 

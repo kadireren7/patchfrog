@@ -220,6 +220,7 @@ async def drive_scenario(
             candidate_filter=prepared.candidate_filter,
             incremental_context_fingerprint=prepared.incremental_context_fingerprint,
             config=ReviewConfig(max_concurrent_requests=1),
+            previous_generation_ancestry_verified=prepared.plan.selection.ancestry_verified,
         )
         reconciliation = await memory.finalize(
             review_run_id=summary.run_id, repository_id=repository_id, pull_request_id=pull_request_id,

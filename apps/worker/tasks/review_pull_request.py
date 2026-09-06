@@ -224,6 +224,7 @@ async def _review_pull_request(
             base_sha=current_metadata.base_sha,
             title=current_metadata.title,
             body=current_metadata.body,
+            previous_generation_ancestry_verified=prepared.plan.selection.ancestry_verified,
         )
 
         if prepared.memory_tracking_active and pull_request_id is not None:

@@ -41,7 +41,7 @@ def _rid(head: TrajectoryHead) -> uuid.UUID:
 
 def test_no_events_no_signals() -> None:
     events = derive_trajectory_events(
-        historical_heads=(), historical_surfaces_by_review_run={}, current_head=_head(sequence_number=1, current=True),
+        heads=(_head(sequence_number=1, current=True),), historical_surfaces_by_review_run={},
         current_changed_surfaces=(),
     )
     assert events == ()
@@ -50,10 +50,11 @@ def test_no_events_no_signals() -> None:
 
 def test_single_head_single_symbol_no_signal() -> None:
     head1 = _head(sequence_number=1)
+    current_head = _head(sequence_number=2, current=True)
     events = derive_trajectory_events(
-        historical_heads=(head1,),
+        heads=(head1, current_head),
         historical_surfaces_by_review_run={_rid(head1): (("service.py", "process_payment"),)},
-        current_head=_head(sequence_number=2, current=True), current_changed_surfaces=(),
+        current_changed_surfaces=(),
     )
     assert len(events) == 1
     assert events[0].event_kind is TrajectoryEventKind.SURFACE_CHANGED
@@ -65,13 +66,14 @@ def test_two_distinct_heads_below_threshold_no_signal() -> None:
     trigger the signal."""
 
     head1, head2 = _head(sequence_number=1), _head(sequence_number=2)
+    current_head = _head(sequence_number=3, current=True)
     surfaces: dict[uuid.UUID, tuple[tuple[str, str], ...]] = {
         _rid(head1): (("service.py", "process_payment"),),
         _rid(head2): (("service.py", "process_payment"),),
     }
     events = derive_trajectory_events(
-        historical_heads=(head1, head2), historical_surfaces_by_review_run=surfaces,
-        current_head=_head(sequence_number=3, current=True), current_changed_surfaces=(),
+        heads=(head1, head2, current_head), historical_surfaces_by_review_run=surfaces,
+        current_changed_surfaces=(),
     )
     signals = derive_trajectory_signals(events)
     assert signals == ()
@@ -86,8 +88,8 @@ def test_three_distinct_heads_at_threshold_triggers_churn() -> None:
     }
     current_head = _head(sequence_number=3, current=True)
     events = derive_trajectory_events(
-        historical_heads=(head1, head2), historical_surfaces_by_review_run=surfaces,
-        current_head=current_head, current_changed_surfaces=(("service.py", "process_payment"),),
+        heads=(head1, head2, current_head), historical_surfaces_by_review_run=surfaces,
+        current_changed_surfaces=(("service.py", "process_payment"),),
     )
     signals = derive_trajectory_signals(events)
     assert len(signals) == 1
@@ -99,28 +101,30 @@ def test_three_distinct_heads_at_threshold_triggers_churn() -> None:
 
 def test_unrelated_symbols_never_combine() -> None:
     head1, head2, head3 = _head(sequence_number=1), _head(sequence_number=2), _head(sequence_number=3)
+    current_head = _head(sequence_number=4, current=True)
     surfaces: dict[uuid.UUID, tuple[tuple[str, str], ...]] = {
         _rid(head1): (("a.py", "foo"),),
         _rid(head2): (("b.py", "bar"),),
         _rid(head3): (("c.py", "baz"),),
     }
     events = derive_trajectory_events(
-        historical_heads=(head1, head2, head3), historical_surfaces_by_review_run=surfaces,
-        current_head=_head(sequence_number=4, current=True), current_changed_surfaces=(),
+        heads=(head1, head2, head3, current_head), historical_surfaces_by_review_run=surfaces,
+        current_changed_surfaces=(),
     )
     assert derive_trajectory_signals(events) == ()
 
 
 def test_same_file_different_symbols_never_conflated() -> None:
     head1, head2, head3 = _head(sequence_number=1), _head(sequence_number=2), _head(sequence_number=3)
+    current_head = _head(sequence_number=4, current=True)
     surfaces: dict[uuid.UUID, tuple[tuple[str, str], ...]] = {
         _rid(head1): (("service.py", "foo"),),
         _rid(head2): (("service.py", "bar"),),
         _rid(head3): (("service.py", "baz"),),
     }
     events = derive_trajectory_events(
-        historical_heads=(head1, head2, head3), historical_surfaces_by_review_run=surfaces,
-        current_head=_head(sequence_number=4, current=True), current_changed_surfaces=(),
+        heads=(head1, head2, head3, current_head), historical_surfaces_by_review_run=surfaces,
+        current_changed_surfaces=(),
     )
     assert derive_trajectory_signals(events) == ()
 
@@ -132,19 +136,21 @@ def test_docs_only_trajectory_never_escalates() -> None:
     real repeated-surface pattern."""
 
     head1 = _head(sequence_number=1)
+    current_head = _head(sequence_number=2, current=True)
     events = derive_trajectory_events(
-        historical_heads=(head1,), historical_surfaces_by_review_run={_rid(head1): (("README.md", "intro"),)},
-        current_head=_head(sequence_number=2, current=True), current_changed_surfaces=(),
+        heads=(head1, current_head), historical_surfaces_by_review_run={_rid(head1): (("README.md", "intro"),)},
+        current_changed_surfaces=(),
     )
     assert derive_trajectory_signals(events) == ()
 
 
 def test_test_file_classified_as_test_surface_changed() -> None:
     head1 = _head(sequence_number=1)
+    current_head = _head(sequence_number=2, current=True)
     events = derive_trajectory_events(
-        historical_heads=(head1,),
+        heads=(head1, current_head),
         historical_surfaces_by_review_run={_rid(head1): (("test_service.py", "test_process_payment"),)},
-        current_head=_head(sequence_number=2, current=True), current_changed_surfaces=(),
+        current_changed_surfaces=(),
     )
     assert events[0].event_kind is TrajectoryEventKind.TEST_SURFACE_CHANGED
 
@@ -156,13 +162,14 @@ def test_select_review_hint_none_for_unrelated_candidate() -> None:
 
 def test_select_review_hint_none_for_module_region_candidate() -> None:
     head1, head2 = _head(sequence_number=1), _head(sequence_number=2)
+    current_head = _head(sequence_number=3, current=True)
     surfaces: dict[uuid.UUID, tuple[tuple[str, str], ...]] = {
         _rid(head1): (("service.py", "process_payment"),),
         _rid(head2): (("service.py", "process_payment"),),
     }
     events = derive_trajectory_events(
-        historical_heads=(head1, head2), historical_surfaces_by_review_run=surfaces,
-        current_head=_head(sequence_number=3, current=True), current_changed_surfaces=(("service.py", "process_payment"),),
+        heads=(head1, head2, current_head), historical_surfaces_by_review_run=surfaces,
+        current_changed_surfaces=(("service.py", "process_payment"),),
     )
     signals = derive_trajectory_signals(events)
     assert select_review_hint(signals, file_path="service.py", qualified_name=None) is TrajectoryReviewHint.NONE
@@ -171,13 +178,14 @@ def test_select_review_hint_none_for_module_region_candidate() -> None:
 def test_max_events_per_surface_bounded() -> None:
     from patchfrog.trajectory_intelligence.domain import MAX_EVENTS_PER_SURFACE
 
-    heads = tuple(_head(sequence_number=i) for i in range(1, MAX_EVENTS_PER_SURFACE + 4))
+    historical = tuple(_head(sequence_number=i) for i in range(1, MAX_EVENTS_PER_SURFACE + 4))
+    current_head = _head(sequence_number=99, current=True)
     surfaces: dict[uuid.UUID, tuple[tuple[str, str], ...]] = {
-        _rid(h): (("service.py", "process_payment"),) for h in heads
+        _rid(h): (("service.py", "process_payment"),) for h in historical
     }
     events = derive_trajectory_events(
-        historical_heads=heads, historical_surfaces_by_review_run=surfaces,
-        current_head=_head(sequence_number=99, current=True), current_changed_surfaces=(),
+        heads=(*historical, current_head), historical_surfaces_by_review_run=surfaces,
+        current_changed_surfaces=(),
     )
     assert len(events) == MAX_EVENTS_PER_SURFACE
 
@@ -186,10 +194,11 @@ def test_max_trajectory_events_bounded_across_surfaces() -> None:
     from patchfrog.trajectory_intelligence.domain import MAX_TRAJECTORY_EVENTS
 
     head1 = _head(sequence_number=1)
+    current_head = _head(sequence_number=2, current=True)
     many_surfaces = tuple((f"file_{i}.py", f"symbol_{i}") for i in range(MAX_TRAJECTORY_EVENTS + 10))
     events = derive_trajectory_events(
-        historical_heads=(head1,), historical_surfaces_by_review_run={_rid(head1): many_surfaces},
-        current_head=_head(sequence_number=2, current=True), current_changed_surfaces=(),
+        heads=(head1, current_head), historical_surfaces_by_review_run={_rid(head1): many_surfaces},
+        current_changed_surfaces=(),
     )
     assert len(events) == MAX_TRAJECTORY_EVENTS
 
@@ -200,21 +209,22 @@ def test_repeated_review_of_same_head_never_double_counts() -> None:
     the distinct-head count -- this is enforced at the query layer
     (fetch_trajectory_heads dedups by commit_sha), so at the matching
     layer this is proven by never receiving duplicate commit_shas in
-    historical_heads in the first place; here we prove that even if
-    duplicate SURFACE_CHANGED events for the exact same commit_sha
-    somehow reached this layer, distinct_head_count still counts
-    distinct SHAs, not raw event count."""
+    heads in the first place; here we prove that even if duplicate
+    SURFACE_CHANGED events for the exact same commit_sha somehow
+    reached this layer, distinct_head_count still counts distinct SHAs,
+    not raw event count."""
 
     shared_sha = "shared-commit"
     head_a = _head(sequence_number=1, commit_sha=shared_sha)
     head_b = _head(sequence_number=2)
-    surfaces = {
+    current_head = _head(sequence_number=3, current=True)
+    surfaces: dict[uuid.UUID, tuple[tuple[str, str], ...]] = {
         _rid(head_a): (("service.py", "process_payment"), ("service.py", "process_payment")),
         _rid(head_b): (("service.py", "process_payment"),),
     }
     events = derive_trajectory_events(
-        historical_heads=(head_a, head_b), historical_surfaces_by_review_run=surfaces,
-        current_head=_head(sequence_number=3, current=True), current_changed_surfaces=(("service.py", "process_payment"),),
+        heads=(head_a, head_b, current_head), historical_surfaces_by_review_run=surfaces,
+        current_changed_surfaces=(("service.py", "process_payment"),),
     )
     signals = derive_trajectory_signals(events)
     # Only 3 distinct commit_shas (head_a, head_b, current) even though

@@ -1,22 +1,24 @@
-"""The two bounded, indexed SQL queries this milestone needs -- both
+"""Bounded, indexed DB reads this milestone needs -- both functions
 read Phase 5/Phase 7's own already-persisted tables directly. **No new
 table, no new history database, zero new git operations, zero new
 GitHub API calls.** See
 ``validation/trajectory_intelligence/latest-summary.md`` sections 1-5
 for the full audit.
 
-**Query 1** (:func:`fetch_trajectory_heads`): walks
-``review_generations`` backward from the current PR's latest existing
-generation via ``previous_generation_id``, reusing each generation's
-own already-computed ``ancestry_verified`` flag (Phase 7's own real
-git-plumbing force-push detection, run once when that generation was
-created) -- stopping the moment a step's ``ancestry_verified`` is
-``False`` or the chain ends. Bounded to
+:func:`fetch_trajectory_heads` walks ``review_generations`` backward
+from the current PR's latest existing generation via
+``previous_generation_id``, reusing each generation's own already
+-computed ``ancestry_verified`` flag (Phase 7's own real git-plumbing
+force-push detection, run once when that generation was created) --
+stopping the moment a step's ``ancestry_verified`` is ``False`` or the
+chain ends. This is one initial ``SELECT`` followed by bounded,
+indexed-primary-key ``session.get()`` reads while walking the chain --
+never a literal single SQL statement, but always bounded to
 :data:`~patchfrog.trajectory_intelligence.domain.MAX_TRAJECTORY_HEADS`
-raw steps; never an unbounded walk.
+steps; never an unbounded walk, never a query loop over unindexed data.
 
-**Query 2** (:func:`fetch_changed_surfaces_for_heads`): one bounded
-``IN`` query across every valid head's ``review_run_id``, reading
+:func:`fetch_changed_surfaces_for_heads` is one bounded ``IN`` query
+across every valid head's ``review_run_id``, reading
 ``review_candidates`` rows with ``reason == CHANGED_SYMBOL`` and a
 non-``None`` ``qualified_name`` -- never a per-head query loop.
 """

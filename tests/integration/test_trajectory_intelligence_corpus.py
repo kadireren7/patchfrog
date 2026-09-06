@@ -180,7 +180,7 @@ async def test_case_one_head_one_symbol_no_signal(session_factory: async_session
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(2), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(2), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert report.signals == ()
 
@@ -229,7 +229,7 @@ async def test_case_two_distinct_heads_below_threshold(session_factory: async_se
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(3), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(3), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert report.signals == ()
 
@@ -257,7 +257,7 @@ async def test_case_three_distinct_heads_triggers_churn(session_factory: async_s
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert len(report.signals) == 1
     assert report.signals[0].signal_kind is TrajectorySignalKind.REPEATED_SURFACE_CHURN
@@ -287,7 +287,7 @@ async def test_case_unrelated_symbols_no_cross_contamination(session_factory: as
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert report.signals == ()
 
@@ -315,7 +315,7 @@ async def test_case_same_file_different_symbols_no_conflation(session_factory: a
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert report.signals == ()
 
@@ -335,7 +335,7 @@ async def test_case_docs_only_single_touch_no_escalation(session_factory: async_
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(2), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(2), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     hint = select_review_hint(report.signals, file_path="README.md", qualified_name="intro")
     from patchfrog.trajectory_intelligence.domain import TrajectoryReviewHint
@@ -368,7 +368,7 @@ async def test_case_test_only_surface_churn_treated_like_production(
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert len(report.signals) == 1
     assert report.signals[0].signal_kind is TrajectorySignalKind.REPEATED_SURFACE_CHURN
@@ -455,7 +455,7 @@ async def test_case_repeated_review_runs_same_sha_one_head(session_factory: asyn
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     # 3 distinct commit_shas total (shared_sha counted once, plus 2, plus current) -- exactly at threshold.
     assert len(report.signals) == 1
@@ -490,7 +490,7 @@ async def test_case_carried_forward_never_counts_as_change_event(session_factory
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     # Only 2 real events (gen1, gen3) -- below the 3-head threshold.
     assert report.signals == ()
@@ -520,7 +520,7 @@ async def test_case_no_current_candidate_no_escalation(session_factory: async_se
     async with session_factory() as session:
         # Current head does not touch the churned surface at all.
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     from patchfrog.trajectory_intelligence.domain import TrajectoryReviewHint
 
@@ -561,7 +561,7 @@ async def test_case_current_candidate_gets_require_critic_hint(session_factory: 
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(3), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(3), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
             change_units=change_units,
         )
     from patchfrog.trajectory_intelligence.domain import TrajectoryReviewHint
@@ -592,7 +592,7 @@ async def test_case_many_churn_events_still_one_signal_object(session_factory: a
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(6), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(6), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert len(report.signals) == 1  # never one signal per event
 
@@ -615,7 +615,7 @@ async def test_case_multiple_surfaces_produce_multiple_signals(session_factory: 
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert len(report.signals) == 2
 
@@ -657,7 +657,7 @@ async def test_case_large_per_surface_history_bounded(session_factory: async_ses
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(99), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(99), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert len(report.signals) == 1
     assert len(report.signals[0].supporting_events) == MAX_EVENTS_PER_SURFACE
@@ -683,7 +683,7 @@ async def test_case_renamed_symbol_never_falsely_continues_churn(session_factory
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(3), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(3), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert report.signals == ()  # neither name reaches the threshold alone
 
@@ -709,7 +709,7 @@ async def test_case_revert_like_pattern_never_produces_a_signal(session_factory:
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert all(s.signal_kind in _ALL_IMPLEMENTED_SIGNAL_KINDS for s in report.signals)
     assert not any(s.signal_kind is TrajectorySignalKind.REVERT_LIKE_CYCLE for s in report.signals)
@@ -736,7 +736,7 @@ async def test_case_reintroduced_surface_never_produces_a_signal(session_factory
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert not any(s.signal_kind is TrajectorySignalKind.REINTRODUCED_SURFACE for s in report.signals)
 
@@ -763,7 +763,7 @@ async def test_case_production_then_test_followup_never_produces_a_signal(
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert not any(s.signal_kind is TrajectorySignalKind.PRODUCTION_THEN_TEST_FOLLOWUP for s in report.signals)
 
@@ -800,7 +800,7 @@ async def test_case_trajectory_orthogonal_to_historical_regression_memory(
 
     async with session_factory() as session:
         report = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC),
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(4), as_of=datetime.now(UTC), previous_generation_ancestry_verified=True,
         )
     assert len(report.signals) == 1
     from dataclasses import fields
@@ -856,11 +856,11 @@ async def test_case_replay_same_inputs_produces_identical_report(session_factory
     as_of = datetime.now(UTC)
     async with session_factory() as session:
         report_a = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(3), as_of=as_of,
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(3), as_of=as_of, previous_generation_ancestry_verified=True,
         )
     async with session_factory() as session:
         report_b = await build_trajectory_intelligence_report(
-            session, pull_request_id=pull_request_id, current_commit_sha=_sha(3), as_of=as_of,
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(3), as_of=as_of, previous_generation_ancestry_verified=True,
         )
     assert report_a.head_count == report_b.head_count
     assert report_a.event_count == report_b.event_count
@@ -890,7 +890,12 @@ async def test_case_repository_isolation(session_factory: async_sessionmaker[Asy
             session, pull_request_id=pr_b, current_commit_sha=_sha(99), as_of=datetime.now(UTC),
         )
     assert report_b.signals == ()
-    assert report_b.heads_considered == ()
+    # pr_b has zero generations of its own -- repo A's real lineage is
+    # never visible to it. heads_considered holds only pr_b's own
+    # synthetic current head (fresh-PR fail-closed case), never repo
+    # A's real heads.
+    assert len(report_b.heads_considered) == 1
+    assert report_b.lineage_valid is False
 
 
 # ---- 28. Zero unconditional provider calls (structural proof) ----
@@ -933,3 +938,207 @@ async def test_case_quiet_pr_no_signal_no_hint(session_factory: async_sessionmak
 
     hint = select_review_hint(report.signals, file_path="service.py", qualified_name="apply_discount")
     assert hint is TrajectoryReviewHint.NONE
+
+
+# ==== External-review correction round: current-edge ancestry verification ====
+#
+# Blocker: the current, in-progress head was appended to persisted
+# historical lineage without ever proving the edge (latest persisted
+# generation -> this exact commit) was real ancestry. Fixed:
+# `previous_generation_ancestry_verified` (Phase 7's own already
+# -computed answer for this exact run, never re-derived) now gates
+# whether historical lineage may be combined with the current head at
+# all -- fail closed (current head only) when it is `False`. See
+# validation/trajectory_intelligence/latest-summary.md section 17 and
+# patchfrog.trajectory_intelligence.service's own docstring.
+
+
+# ---- 31. Real production timing: force-push to an unrelated head BEFORE
+#          that head's own ReviewGenerationModel exists -> historical
+#          lineage never joined, zero false churn, zero escalation ----
+
+
+async def test_case_force_push_before_current_generation_exists_discards_history(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """The exact real-world ordering: T1 generation A persisted: T2
+    generation B persisted (ancestry_verified=True, chained from A) --
+    both touch the same surface. T3: the PR is force-pushed to an
+    unrelated head X. T4: Trajectory Intelligence runs for X *before*
+    ReviewGeneration(X) exists (exactly when this package always runs
+    -- see the service module's own docstring) -- Phase 7's own
+    ancestry check for this run found the edge B -> X unverifiable, so
+    the caller passes `previous_generation_ancestry_verified=False`.
+    Even though X touches the *same* surface a third time (which would
+    trigger REPEATED_SURFACE_CHURN if wrongly connected to A/B),
+    historical lineage must be discarded entirely: zero signal, zero
+    critic escalation, X analyzed alone."""
+
+    full_name = "test/traj-force-push-real-timing"
+    repository_id = await _make_repo(session_factory, full_name)
+    pull_request_id = await _make_pull_request(session_factory, repository_id=repository_id, number=1)
+
+    # T1 + T2: two real, ancestry-verified persisted generations, both
+    # touching the same surface.
+    gen_a = await _stage_head(
+        session_factory, repository_id=repository_id, pull_request_id=pull_request_id, commit_sha=_sha(1),
+        surfaces=(("service.py", "apply_discount"),),
+    )
+    await _stage_head(
+        session_factory, repository_id=repository_id, pull_request_id=pull_request_id, commit_sha=_sha(2),
+        surfaces=(("service.py", "apply_discount"),), previous_generation=gen_a,
+    )
+
+    # T3 (conceptual): PR force-pushed to head X = _sha(999), unrelated
+    # to A/B's history.
+    # T4: Trajectory Intelligence runs for X. No ReviewGeneration(X) is
+    # ever staged here -- exactly modeling "before finalize() creates
+    # it." The same surface is touched a third time at X, which would
+    # trigger churn if (wrongly) connected to A/B.
+    from patchfrog.change_intelligence.domain import ChangeKind, ChangeUnit
+    from patchfrog.review.domain import ReviewCandidate
+
+    current_candidate = ReviewCandidate(
+        file_path="service.py", symbol_id=None, symbol_name="apply_discount", qualified_name="apply_discount",
+        start_line=1, end_line=5, changed_lines=(1,), static_finding_ids=(), reason=ReviewCandidateReason.CHANGED_SYMBOL,
+    )
+    change_units = (
+        ChangeUnit(id="u1", title="t", change_kind=ChangeKind.BEHAVIOR, changed_candidates=(current_candidate,)),
+    )
+
+    async with session_factory() as session:
+        report = await build_trajectory_intelligence_report(
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(999), as_of=datetime.now(UTC),
+            change_units=change_units, previous_generation_ancestry_verified=False,
+        )
+
+    assert report.lineage_valid is False
+    assert len(report.heads_considered) == 1  # X alone -- A/B never joined
+    assert report.heads_considered[0].commit_sha == _sha(999)
+    assert report.signals == ()  # zero false churn
+    hint = select_review_hint(report.signals, file_path="service.py", qualified_name="apply_discount")
+    from patchfrog.trajectory_intelligence.domain import TrajectoryReviewHint
+
+    assert hint is TrajectoryReviewHint.NONE  # zero critic escalation from the discarded lineage
+
+
+# ---- 32. Positive control: a valid current descendant (edge proven) BEFORE
+#          its own ReviewGenerationModel exists -> historical + current
+#          combine normally, real churn detected ----
+
+
+async def test_case_valid_current_descendant_before_generation_exists_combines_normally(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Proves the current-edge check does not kill legitimate
+    trajectory: A and B persisted (ancestry_verified=True); C is a real
+    descendant of B but C's own ReviewGeneration does not exist yet
+    (Trajectory Intelligence always runs before it does). The caller
+    supplies `previous_generation_ancestry_verified=True` (Phase 7's own
+    real proof for this run). The same surface touched at A, B, and C
+    (3 distinct heads) correctly triggers REPEATED_SURFACE_CHURN."""
+
+    full_name = "test/traj-valid-current-edge"
+    repository_id = await _make_repo(session_factory, full_name)
+    pull_request_id = await _make_pull_request(session_factory, repository_id=repository_id, number=1)
+
+    gen_a = await _stage_head(
+        session_factory, repository_id=repository_id, pull_request_id=pull_request_id, commit_sha=_sha(1),
+        surfaces=(("service.py", "apply_discount"),),
+    )
+    await _stage_head(
+        session_factory, repository_id=repository_id, pull_request_id=pull_request_id, commit_sha=_sha(2),
+        surfaces=(("service.py", "apply_discount"),), previous_generation=gen_a,
+    )
+
+    from patchfrog.change_intelligence.domain import ChangeKind, ChangeUnit
+    from patchfrog.review.domain import ReviewCandidate
+
+    current_candidate = ReviewCandidate(
+        file_path="service.py", symbol_id=None, symbol_name="apply_discount", qualified_name="apply_discount",
+        start_line=1, end_line=5, changed_lines=(1,), static_finding_ids=(), reason=ReviewCandidateReason.CHANGED_SYMBOL,
+    )
+    change_units = (
+        ChangeUnit(id="u1", title="t", change_kind=ChangeKind.BEHAVIOR, changed_candidates=(current_candidate,)),
+    )
+
+    async with session_factory() as session:
+        report = await build_trajectory_intelligence_report(
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(3), as_of=datetime.now(UTC),
+            change_units=change_units, previous_generation_ancestry_verified=True,
+        )
+
+    assert report.lineage_valid is True
+    assert len(report.heads_considered) == 3
+    assert len(report.signals) == 1
+    assert report.signals[0].distinct_head_count == 3
+    hint = select_review_hint(report.signals, file_path="service.py", qualified_name="apply_discount")
+    from patchfrog.trajectory_intelligence.domain import TrajectoryReviewHint
+
+    assert hint is TrajectoryReviewHint.REQUIRE_CRITIC
+
+
+# ---- 33. Same-SHA retry control: current head IS the latest persisted head ----
+
+
+async def test_case_same_sha_retry_not_double_counted(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """`current_commit_sha` equals the latest persisted generation's own
+    commit_sha -- this is a retry/replay of the exact same head, never a
+    new trajectory step, regardless of `previous_generation_ancestry_verified`
+    (deliberately passed as `False` here to prove the same-SHA branch
+    never even consults it)."""
+
+    full_name = "test/traj-same-sha-retry-control"
+    repository_id = await _make_repo(session_factory, full_name)
+    pull_request_id = await _make_pull_request(session_factory, repository_id=repository_id, number=1)
+
+    gen_a = await _stage_head(
+        session_factory, repository_id=repository_id, pull_request_id=pull_request_id, commit_sha=_sha(1),
+        surfaces=(("service.py", "apply_discount"),),
+    )
+    gen_c = await _stage_head(
+        session_factory, repository_id=repository_id, pull_request_id=pull_request_id, commit_sha=_sha(2),
+        surfaces=(("service.py", "apply_discount"),), previous_generation=gen_a,
+    )
+
+    async with session_factory() as session:
+        report = await build_trajectory_intelligence_report(
+            session, pull_request_id=pull_request_id, current_commit_sha=gen_c.commit_sha, as_of=datetime.now(UTC),
+            previous_generation_ancestry_verified=False,
+        )
+
+    assert report.lineage_valid is True
+    assert len(report.heads_considered) == 2  # gen_a + gen_c, no third synthetic entry
+    assert report.signals == ()  # only 2 distinct heads, below threshold
+
+
+# ---- 34. Force-pushed current head touching the same surface as discarded
+#          old lineage -> still no false churn (the surface repeats, but
+#          the connection to history is the thing being denied) ----
+
+
+async def test_case_force_pushed_head_same_surface_as_old_lineage_no_false_churn(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    full_name = "test/traj-force-push-same-surface"
+    repository_id = await _make_repo(session_factory, full_name)
+    pull_request_id = await _make_pull_request(session_factory, repository_id=repository_id, number=1)
+
+    gen_a = await _stage_head(
+        session_factory, repository_id=repository_id, pull_request_id=pull_request_id, commit_sha=_sha(1),
+        surfaces=(("service.py", "apply_discount"),),
+    )
+    await _stage_head(
+        session_factory, repository_id=repository_id, pull_request_id=pull_request_id, commit_sha=_sha(2),
+        surfaces=(("service.py", "apply_discount"),), previous_generation=gen_a,
+    )
+
+    async with session_factory() as session:
+        report = await build_trajectory_intelligence_report(
+            session, pull_request_id=pull_request_id, current_commit_sha=_sha(777), as_of=datetime.now(UTC),
+            previous_generation_ancestry_verified=False,
+        )
+
+    assert report.lineage_valid is False
+    assert len(report.heads_considered) == 1
+    assert report.signals == ()

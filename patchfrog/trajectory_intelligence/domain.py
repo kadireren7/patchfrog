@@ -184,10 +184,18 @@ class TrajectoryIntelligenceReport:
     Intelligence package in this lineage."""
 
     version: int
-    #: Whether *any* lineage could be established for this PR at all
-    #: (a fresh PR with no prior generation is correctly ``False`` here
-    #: -- never a hidden crash, never an ambiguous empty-vs-invalid
-    #: state).
+    #: Whether the lineage actually used to derive ``events``/``signals``
+    #: for this exact review includes real, verified historical
+    #: connection -- **not** merely whether historical generations
+    #: exist for this PR. ``False`` covers three distinct, deliberately
+    #: -collapsed cases: a fresh PR with no prior generation at all; the
+    #: edge from the latest persisted generation to this exact commit
+    #: was never proven this run (force-push, or review memory inactive)
+    #: and historical lineage was discarded (fail closed -- see
+    #: :mod:`patchfrog.trajectory_intelligence.service`'s own
+    #: docstring); or ``pull_request_id=None``. In every ``False`` case,
+    #: ``heads_considered`` holds only the current head (or is empty for
+    #: the no-PR case) -- never a silently-discarded larger set.
     lineage_valid: bool
     heads_considered: tuple[TrajectoryHead, ...]
     events: tuple[TrajectoryEvent, ...]

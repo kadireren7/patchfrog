@@ -51,6 +51,31 @@ generation's own link to its predecessor is unusable -- everything
 before that point is simply excluded from the current lineage, never
 guessed at or connected across the break.
 
+**The persisted chain above is only half the picture.** This package
+always runs *before* the current, in-progress review's own
+`ReviewGenerationModel` row exists (Phase 7's `finalize()` only creates
+it after the AI review completes and persists). The current head is
+represented as a synthetic entry, appended to the persisted chain --
+and the edge from *the latest persisted generation* to *this exact,
+in-progress commit* is a **separate edge that must itself be proven**,
+never assumed just because every generation before it verified
+cleanly. An external-review correction round found the original v1
+shape skipped this proof entirely, creating a real force-push hole
+(see `validation/trajectory_intelligence/latest-summary.md` section
+17). Fixed by reusing Phase 7's own already-computed answer for this
+exact edge -- `PreparedReview.plan.selection.ancestry_verified` from
+this run's own `IncrementalReviewMemoryService.prepare()` call, threaded
+through as `previous_generation_ancestry_verified` -- never a second,
+re-derived ancestry check. `build_trajectory_intelligence_report`
+combines historical and current heads only when that flag is `True`
+(or when the current commit is a same-SHA retry/replay of the latest
+persisted head, which needs no proof at all); otherwise it fails
+closed, discarding any persisted lineage and analyzing the current
+head alone. `TrajectoryIntelligenceReport.lineage_valid` reflects
+exactly this: whether the lineage *actually used* for this review
+includes a proven historical connection, never merely whether
+historical generations exist for the PR.
+
 ## Exact surface identity
 
 `(file_path, qualified_name)`, never `symbol_id` (a fresh UUID per

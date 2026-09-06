@@ -226,3 +226,86 @@ invalidate canonical-run reuse without needing a broader engine- or
 policy-version bump") is bumped 1 -> 2. `REVIEW_ENGINE_VERSION` (call
 shape/retry/execution architecture) is unchanged -- no new call shape,
 no new retry rule, no new agent role.
+
+## 17. External-review correction round (before merge): the current-edge ancestry hole
+
+PR #48's first shape had one real safety gap, found in external review
+before merge, not caught by the (passing) first-build corpus -- because
+the corpus only ever staged historical generations and called
+`build_trajectory_intelligence_report` afterward; it never modeled the
+one ordering property that actually matters in production: **this
+package always runs *before* the current review's own
+`ReviewGenerationModel` row exists** (see the service module's own
+docstring). The original code appended a synthetic current-head entry
+to the persisted historical chain unconditionally, having proven
+nothing about the one edge that mattered: *latest persisted generation
+-> this exact, in-progress commit*. A force-push between the last
+persisted generation and the current review (before Phase 7's own
+`finalize()` for this exact commit has ever run) could therefore
+connect historical churn events to an unrelated current head, wrongly
+triggering `REPEATED_SURFACE_CHURN` (and its `REQUIRE_CRITIC`
+escalation) across an incompatible lineage -- the "force-push does not
+connect incompatible lineage" acceptance criterion, violated.
+
+**Fix**: reuse, never re-derive. Phase 7's own
+`IncrementalReviewMemoryService.prepare()` already proves (or fails to
+prove) exactly this edge, once per run, via real git plumbing
+(`patchfrog.repository.ancestry.verify_ancestor_with_diff`) --
+its result is `PreparedReview.plan.selection.ancestry_verified`. A new
+`previous_generation_ancestry_verified: bool = False` parameter now
+flows through the whole call chain
+(`PullRequestReviewService.review_local`/`review_pull_request`/`_run`/
+`_execute_and_persist`, and every real caller: the worker task, the
+CLI's incremental path, the evaluation harness) so
+`build_trajectory_intelligence_report` receives this run's own
+already-computed answer verbatim -- **zero new git operations, zero
+second ancestry algorithm.**
+
+`build_trajectory_intelligence_report`'s combining logic now branches
+three ways:
+
+1. **Same-SHA retry** (`current_commit_sha == historical_heads[-1].commit_sha`):
+   the current review IS the latest persisted head -- reuse it as-is,
+   never append a duplicate synthetic entry, never consult
+   `previous_generation_ancestry_verified` at all (this branch is
+   unconditionally safe: that exact commit's ancestry was already
+   proven when *it* was originally reviewed).
+2. **Verified edge** (`previous_generation_ancestry_verified=True`,
+   historical heads exist): the edge was proven this run -- combine
+   normally.
+3. **Fail closed** (everything else -- no historical heads at all, or
+   the edge was never proven this run): any persisted historical
+   lineage is discarded entirely; the current head is analyzed alone.
+   `lineage_valid=False`.
+
+`TrajectoryIntelligenceReport.lineage_valid`'s own semantics were
+corrected to match: it no longer means "historical generations exist
+for this PR" (`bool(historical_heads)`, too weak -- true even when the
+current edge was never proven) but "the lineage actually used to
+derive `events`/`signals` for *this* review includes real, verified
+historical connection." `heads_considered` always reflects exactly
+what was used, never a larger set that was silently discarded.
+
+`derive_trajectory_events` was refactored from a
+`historical_heads`/`current_head` split into one unified, oldest-first
+`heads` tuple (with `current_changed_surfaces` used only by whichever
+head has `review_run_id=None`) -- this made the three-way branch above
+expressible without special-casing the same-SHA-retry case (which
+needs zero synthetic entries at all).
+
+**Corrected corpus and gates**: 4 new scenarios (real force-push timing
+regression modeling the actual T1-T4 production ordering; a positive
+control proving the current-edge check doesn't kill legitimate
+trajectory; an explicit same-SHA-retry control; a force-pushed head
+touching the same surface as discarded history, proving the surface
+repetition alone never fools the check) + 21 existing scenarios updated
+to pass `previous_generation_ancestry_verified=True` where they
+genuinely intend historical+current combination, for 34 total. Full
+suite result reported in the final merge report below.
+`TRAJECTORY_INTELLIGENCE_VERSION`
+stays `1` (never bumped mid-correction, since unmerged);
+`REVIEW_PROMPT_VERSION` 10, `TELEMETRY_SCHEMA_VERSION` 8,
+`QUALITY_COST_POLICY_VERSION` 2 all stand unchanged -- the prompt
+section, telemetry field, and tiering-policy shape are all still real,
+genuine additions with the exact same external shape, just with a
+corrected internal current-edge-verification algorithm.
