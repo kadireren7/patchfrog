@@ -12,20 +12,24 @@ external host fails with "Network is unreachable"); ``unshare --pid
 command becomes PID 1 inside its own namespace); ``prlimit
 --nproc=N --as=BYTES --cpu=SECONDS`` genuinely constrains resources.
 
-**Fails closed**: if ``unshare``/``prlimit`` are not both discoverable on
-this host/container, :meth:`VerificationSandbox.is_available` returns
-``False`` and no execution is ever attempted -- never a silent,
-unisolated fallback. This is a real, honest, host/container-dependent
-limitation (a hardened container's default seccomp/AppArmor profile may
-block creating new namespaces) -- see the latest-summary's own
-discussion of what this sandbox does and does not achieve (process/
-network/PID isolation, not a full container -- no mount namespace, no
-chroot).
+**Fails closed**: :func:`is_sandbox_available` does not stop at checking
+whether ``unshare``/``prlimit`` are discoverable on ``PATH`` -- it also
+runs a real, side-effect-free probe through this module's own exact
+isolation prefix. Binary presence alone is not sufficient evidence: a
+hardened host can have both installed while still refusing to create an
+unprivileged user namespace (Ubuntu 24.04+'s default AppArmor
+restriction on unprivileged ``CLONE_NEWUSER`` is a real, confirmed
+example -- reproduced on GitHub Actions' own ``ubuntu-latest`` runner).
+When the probe fails, no execution is ever attempted -- never a silent,
+unisolated fallback. See the latest-summary's own discussion of what
+this sandbox does and does not achieve (process/network/PID isolation,
+not a full container -- no mount namespace, no chroot).
 """
 
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 from patchfrog.analysis.subprocess_sandbox import SandboxedProcessResult, run_sandboxed
@@ -37,14 +41,39 @@ from patchfrog.executable_verification.domain import (
     MAX_STDOUT_EXCERPT_BYTES,
 )
 
+#: A cheap, side-effect-free command run through the exact isolation
+#: prefix this module actually uses, to prove namespace creation itself
+#: succeeds -- binary presence alone (``shutil.which``) is not enough. A
+#: hardened host may have both ``unshare``/``prlimit`` installed while
+#: still refusing to create an unprivileged user namespace (e.g. Ubuntu
+#: 24.04+'s default AppArmor restriction on unprivileged ``CLONE_NEWUSER``,
+#: confirmed to reproduce exactly this on GitHub Actions' own
+#: ``ubuntu-latest`` runner: ``unshare: write failed
+#: /proc/self/uid_map: Operation not permitted``).
+_PROBE_TIMEOUT_SECONDS = 5.0
+
+
+def _probe_isolation() -> bool:
+    try:
+        result = subprocess.run(
+            ["unshare", "--pid", "--fork", "--mount-proc", "--net", "--map-root-user", "--", "true"],
+            capture_output=True, timeout=_PROBE_TIMEOUT_SECONDS, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
 
 def is_sandbox_available() -> bool:
-    """``unshare`` and ``prlimit`` must both be discoverable -- checked
-    once, never assumed. Mirrors
+    """``unshare``/``prlimit`` must both be discoverable, and a real
+    ``unshare`` invocation using this module's own isolation flags must
+    actually succeed -- never assumed from binary presence alone. Mirrors
     :meth:`patchfrog.analysis.analyzers.base.Analyzer.discover`'s own
     "never raise, represent as unavailable" contract."""
 
-    return shutil.which("unshare") is not None and shutil.which("prlimit") is not None
+    if shutil.which("unshare") is None or shutil.which("prlimit") is None:
+        return False
+    return _probe_isolation()
 
 
 class VerificationSandbox:

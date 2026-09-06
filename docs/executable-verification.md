@@ -72,10 +72,18 @@ space, and CPU time.
 
 This is process/network/PID isolation, **not a full container** -- no
 mount namespace, no chroot, no disk-quota enforcement (deferred, see
-"Explicitly deferred" below). If `unshare`/`prlimit` are not both
-discoverable on the host, `is_sandbox_available()` returns `False` and
-verification fails closed to `SANDBOX_ERROR` -- never an unisolated
-fallback.
+"Explicitly deferred" below). `is_sandbox_available()` does not stop at
+checking whether `unshare`/`prlimit` are discoverable on `PATH` -- binary
+presence alone is not sufficient evidence the sandbox actually works. It
+also runs a real, side-effect-free probe through the exact isolation
+prefix used for real verification. This matters concretely: Ubuntu
+24.04+'s default AppArmor restriction on unprivileged `CLONE_NEWUSER`
+blocks `unshare --map-root-user` even when both binaries are present --
+confirmed on GitHub Actions' own `ubuntu-latest` runner. When the probe
+fails, verification fails closed to `SANDBOX_ERROR` before any pytest
+command is ever attempted -- never an unisolated fallback, and never
+misclassified as `UNSUPPORTED` (which means something different: the
+target repository's own test collection failed).
 
 ## No dependency installation, ever
 

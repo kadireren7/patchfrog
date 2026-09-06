@@ -146,6 +146,35 @@ seccomp/AppArmor profile. Verification therefore **fails closed**: if
 eligibility-check time, the result is `SANDBOX_ERROR`/no execution --
 never a silent, unisolated fallback.
 
+**Correction found via real CI, not merely local testing**: the first
+push of this milestone's PR failed 7 real integration tests on GitHub
+Actions' own `ubuntu-latest` runner. Root cause: `shutil.which` binary
+-presence alone is not sufficient evidence the sandbox actually works.
+Ubuntu 24.04+'s default AppArmor restriction on unprivileged
+`CLONE_NEWUSER` blocks `unshare --map-root-user` even when both
+`unshare`/`prlimit` are present on `PATH` -- confirmed exactly on that
+runner (`unshare: write failed /proc/self/uid_map: Operation not
+permitted`). Before the fix, this failure surfaced *inside* the wrapped
+command, so the pytest adapter's own collect-only step saw a non-zero
+exit code and misclassified it as `UNSUPPORTED` ("this test's own
+dependencies are missing") rather than `SANDBOX_ERROR` ("the sandbox
+itself could not run") -- two structurally different claims. Fixed by
+adding a real, side-effect-free functional probe
+(`patchfrog.executable_verification.sandbox._probe_isolation`, an actual
+`unshare --pid --fork --mount-proc --net --map-root-user -- true`
+invocation) to `is_sandbox_available()`, so a host that cannot actually
+create the isolation now fails closed *before* any pytest command is
+ever attempted, honestly reported as `SANDBOX_ERROR`. This also means
+`tests/integration/test_executable_verification_corpus.py`'s own
+module-level `skipif` now correctly skips the entire behavioral corpus
+on such a host (this is why the corpus was proven end-to-end on this
+development environment, which does support unprivileged user
+namespaces, but is expected to skip -- not fail -- on GitHub Actions'
+current runner image). New unit coverage:
+`tests/unit/test_executable_verification_sandbox.py` (10 tests) proves
+`is_sandbox_available`/`_probe_isolation`'s own logic deterministically,
+independent of host capability.
+
 ## 4. No dependency installation in v1
 
 Confirmed as a hard v1 rule, not merely a preference: verification never
