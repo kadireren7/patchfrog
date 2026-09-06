@@ -329,5 +329,134 @@ candidate (`qualified_name=None`, excluded).
 
 ## 16. Explicitly not started
 
-Cross-Repo Intelligence, per the standing instruction. Implementation
-proceeds now that this audit is complete.
+Cross-Repo Intelligence, per the standing instruction.
+
+## 17. Docs / validation artifacts (recap)
+
+`docs/cross-pr-intelligence.md`, `validation/cross_pr_intelligence/README.md`.
+
+## 18. Index audit (section 4 of the correction round below, recorded here for continuity)
+
+`ReviewGenerationModel` already carries a unique index on exactly
+`(pull_request_id, sequence_number)` (`uq_review_generations_pr_sequence`)
+-- this is precisely what serves both the `MAX(sequence_number) GROUP
+BY pull_request_id` subquery and the join back to the exact
+`(pull_request_id, sequence_number)` row in
+`fetch_cross_pr_peers`. No new index needed on that table.
+`PullRequestModel` had only a single-column index on `repository_id`
+plus the unique-constraint-backed index on `(repository_id,
+github_pr_number)` -- neither serves a `state = 'open'` filter or
+`updated_at`/`github_pr_number` ordering efficiently at scale. See
+section 19 for the composite index added to serve exactly the new
+bounded query's `WHERE`/`ORDER BY`/`LIMIT` shape.
+
+## 19. External-review correction round
+
+PR #49's first review (external, before merge) found one real
+boundedness gap and asked for three related hardening items. All four
+addressed below; no design change to peer eligibility semantics,
+overlap kinds, or orchestration integration (sections 0-15 above
+already describe the final, unchanged behavior).
+
+### 19.1 The blocker: peer discovery was not hard-bounded
+
+The original `fetch_cross_pr_peers` issued one *unbounded* `SELECT`
+for every open PR in the repository (no `LIMIT` at the SQL level),
+then looped in Python issuing one separate per-PR
+`_latest_generation_for_pr` query until `MAX_CROSS_PR_PEERS` eligible
+peers were found. `MAX_CROSS_PR_PEERS` bounded the *returned* peer
+count, but not the number of `PullRequestModel` rows loaded, the
+number of per-PR generation queries issued, or the amount of work
+spent on stale/unreviewed peers -- a repository with hundreds of open,
+never-reviewed PRs could cause hundreds of queries before finding a
+handful of eligible peers.
+
+**Fix**: one bounded SQL query. A subquery aggregates
+`MAX(sequence_number)` grouped by `pull_request_id` (using
+`uq_review_generations_pr_sequence`), joined back to
+`ReviewGenerationModel` on that exact `(pull_request_id,
+sequence_number)` pair to get the *authoritative* latest generation's
+`commit_sha`/`review_run_id`. Every eligibility condition (same
+repository, not the current PR, `state == "open"`,
+`commit_sha == head_sha`) is expressed in that single query's `WHERE`
+clause; `ORDER BY`/`LIMIT` are applied in the same query, before any
+row reaches Python. Empirically confirmed via a
+`before_cursor_execute` event-listener regression test
+(`test_case_many_open_most_ineligible_peer_discovery_is_bounded`):
+**exactly 1** SQL statement, regardless of how many open-but
+-ineligible PRs exist in the repository (tested at 23x
+`MAX_CROSS_PR_PEERS` candidate rows).
+
+### 19.2 Latest-generation authority
+
+Because eligibility now lives in one SQL query, it was critical to
+prove the "latest reviewed generation" is computed correctly -- never
+an older generation whose `commit_sha` happens to equal the peer's
+current `head_sha` by coincidence (e.g. after a revert-then-force-push
+sequence). The `GROUP BY pull_request_id` / `MAX(sequence_number)`
+subquery, joined back on the exact `(pull_request_id,
+sequence_number)` pair, structurally guarantees this: the join can
+only ever match the row at the true maximum sequence number for that
+PR. Two dedicated regression tests prove both directions:
+`test_case_latest_generation_authority_never_falls_back_to_older_match`
+(gen1=A, gen2=B, persisted `head_sha=A` -> excluded, never falls back
+to gen1) and
+`test_case_latest_generation_authority_matches_when_current` (gen1=A,
+gen2=B, persisted `head_sha=B` -> eligible exactly once, at
+`sequence_number=2`).
+
+### 19.3 `ancestry_verified` is deliberately never consulted
+
+Clarified (and now regression-tested via
+`test_case_peer_with_unverified_ancestry_still_eligible`) that Cross-PR
+Intelligence's peer-eligibility query never reads
+`ReviewGenerationModel.ancestry_verified` at all -- unlike Trajectory
+Intelligence's own lineage walk, which cares whether a *chain* of
+generations is provably connected, Cross-PR Intelligence cares only
+about a peer's *exact current* reviewed head. A peer whose latest
+generation has `ancestry_verified=False` (that peer's own review
+history included a force-push) is still a fully valid peer as long as
+its `commit_sha` matches its currently-persisted `head_sha` exactly.
+This was already true of the original query shape (it never referenced
+that column); the correction made it an explicit, tested invariant
+rather than an accidental omission.
+
+### 19.4 Duplicate surface rows never consume two budget slots
+
+`fetch_changed_surfaces_for_peers` now deduplicates by `(file_path,
+qualified_name)` per review run *before* counting against
+`MAX_CROSS_PR_SURFACES_PER_PEER` -- a duplicate `ReviewCandidateModel`
+row resolving to the same logical surface (structurally rare, but not
+impossible) previously could have consumed two slots of that peer's
+surface budget and, if it ever happened, does not have any observable
+double-overlap issue downstream since `derive_cross_pr_overlaps`
+already only ever emits once per (peer, surface) pair present in
+`peer_surfaces_by_review_run` -- but the *budget accounting* itself
+was wrong. Fixed with a per-run `seen` set; regression test
+`test_case_duplicate_surface_row_consumes_one_slot`.
+
+### 19.5 New composite index
+
+`ix_pull_requests_repo_state_updated` on `(repository_id, state,
+updated_at, github_pr_number)` (migration `0026_cross_pr_peer_index`)
+-- serves exactly the new query's `WHERE repository_id = ... AND
+state = 'open' ORDER BY updated_at DESC, github_pr_number DESC LIMIT
+N` shape. An ascending composite index is sufficient (no separate
+DESC-ordered index needed): Postgres can satisfy a fully-descending
+`ORDER BY` via a backward index scan. Verified via a real upgrade /
+downgrade / re-upgrade round trip against Postgres (not just SQLite).
+
+### 19.6 Gates (post-correction)
+
+35 corpus scenarios (5 new: boundedness, two latest-generation
+-authority directions, unverified-ancestry eligibility, duplicate
+-surface dedup) + unchanged unit coverage. Full suite, ruff/mypy,
+Alembic (two new migrations: `0025_cross_pr_intelligence`,
+`0026_cross_pr_peer_index`, single head), both Docker images, and the
+secret scan were all re-run after this correction -- see the PR's own
+final report for exact totals.
+
+## 20. Explicitly not started (recap)
+
+Cross-Repo Intelligence. Implementation, correction, and re
+-verification are now complete.

@@ -67,8 +67,36 @@ A PR in the same repository is a peer only if **all** of:
 
 Peers are ordered by `updated_at` descending (most recently active
 first), tie-broken by `github_pr_number` descending, before
-`MAX_CROSS_PR_PEERS` bounds the list -- never an unbounded scan of
-every PR a repository has ever seen.
+`MAX_CROSS_PR_PEERS` bounds the list.
+
+**All of this is expressed in one bounded SQL query** (`fetch_cross_pr_peers`):
+a subquery aggregates `MAX(sequence_number)` grouped by
+`pull_request_id` (reusing `ReviewGenerationModel`'s existing unique
+index on exactly those two columns) and joins back to the exact
+`(pull_request_id, sequence_number)` row to get the *authoritative*
+latest generation -- structurally incapable of falling back to an
+older generation whose `commit_sha` happens to match by coincidence.
+Every eligibility condition lives in that one query's `WHERE` clause,
+with `ORDER BY`/`LIMIT` applied before any row reaches Python -- never
+an unbounded scan of every open PR in the repository followed by a
+per-candidate Python loop. An external review of the original v1 shape
+found exactly that unbounded-scan pattern; empirically verified fixed
+(exactly one SQL statement, regardless of how many open-but-ineligible
+peers exist) -- see `validation/cross_pr_intelligence/latest-summary.md`
+section 19.
+
+**Deliberately never consults `ancestry_verified`.** Unlike Trajectory
+Intelligence's own lineage walk (which cares whether a *chain* of
+generations is provably connected), Cross-PR Intelligence cares only
+about a peer's *exact current* reviewed head. A peer whose latest
+generation has `ancestry_verified=False` (that peer's own review
+history included a force-push) is still a fully valid peer as long as
+its `commit_sha` matches its currently-persisted `head_sha` exactly.
+
+A composite index, `ix_pull_requests_repo_state_updated` on
+`(repository_id, state, updated_at, github_pr_number)` (migration
+`0026_cross_pr_peer_index`), serves this query's exact `WHERE`/
+`ORDER BY`/`LIMIT` shape.
 
 ## Exact surface identity
 

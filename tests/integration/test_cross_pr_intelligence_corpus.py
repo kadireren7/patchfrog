@@ -19,7 +19,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from patchfrog.change_intelligence.domain import ChangeKind, ChangeUnit
 from patchfrog.cross_pr_intelligence.domain import (
@@ -30,6 +31,7 @@ from patchfrog.cross_pr_intelligence.domain import (
     CrossPRReviewHint,
 )
 from patchfrog.cross_pr_intelligence.matching import select_review_hint
+from patchfrog.cross_pr_intelligence.queries import fetch_cross_pr_peers
 from patchfrog.cross_pr_intelligence.service import build_cross_pr_intelligence_report
 from patchfrog.persistence.models.review import ReviewCandidateModel, ReviewRunModel
 from patchfrog.persistence.repositories import RepositoryRepository
@@ -75,11 +77,18 @@ async def _stage_review(
     commit_sha: str,
     surfaces: tuple[tuple[str, str], ...],
     include_module_region: bool = False,
-) -> None:
+    ancestry_verified: bool = True,
+    duplicate_first_surface: bool = False,
+) -> uuid.UUID:
     """Stage one full, real reviewed head for a PR: a ReviewRunModel,
-    its ReviewCandidateModel rows, and one ReviewGenerationModel
-    (sequence_number=1, no prior generation -- a peer only ever needs
-    its one latest reviewed head)."""
+    its ReviewCandidateModel rows, and one ReviewGenerationModel.
+    ``sequence_number`` is auto-assigned by
+    :meth:`ReviewGenerationRepository.create` as ``MAX(sequence_number)
+    + 1`` for this exact ``pull_request_id`` -- calling this twice for
+    the same PR with different commits naturally produces a real,
+    ordered two-generation lineage (see
+    ``test_case_latest_generation_authority_never_falls_back_to_older_match``).
+    Returns the created ``ReviewGenerationModel.id``."""
 
     async with session_factory() as session:
         unique_suffix = uuid.uuid4().hex
@@ -102,6 +111,15 @@ async def _stage_review(
                     start_line=1, end_line=5, changed_lines="[1]", reason=ReviewCandidateReason.CHANGED_SYMBOL,
                 )
             )
+        if duplicate_first_surface and surfaces:
+            file_path, qualified_name = surfaces[0]
+            session.add(
+                ReviewCandidateModel(
+                    review_run_id=run.id, file_path=file_path, symbol_id=None,
+                    symbol_name=qualified_name.rsplit(".", 1)[-1], qualified_name=qualified_name,
+                    start_line=6, end_line=9, changed_lines="[7]", reason=ReviewCandidateReason.CHANGED_SYMBOL,
+                )
+            )
         if include_module_region:
             session.add(
                 ReviewCandidateModel(
@@ -114,13 +132,14 @@ async def _stage_review(
         run_id = run.id
 
     async with session_factory() as session:
-        await ReviewGenerationRepository().create(
+        generation = await ReviewGenerationRepository().create(
             session, repository_id=repository_id, pull_request_id=pull_request_id, review_run_id=run_id,
             commit_sha=commit_sha, previous_generation_id=None, previous_commit_sha=None,
-            ancestry_verified=True, mode=IncrementalRunMode.INCREMENTAL, compatibility_ok=True,
+            ancestry_verified=ancestry_verified, mode=IncrementalRunMode.INCREMENTAL, compatibility_ok=True,
             invalidation_reason=None, memory_compatibility_fingerprint="fp",
         )
         await session.commit()
+        return generation.id
 
 
 def _change_unit(surfaces: tuple[tuple[str, str], ...]) -> ChangeUnit:
@@ -806,3 +825,184 @@ async def test_case_signal_count_bounded(session_factory: async_sessionmaker[Asy
             session, repository_id=repository_id, pull_request_id=current_id, change_units=(_change_unit(surfaces),),
         )
     assert len(report.signals) <= MAX_CROSS_PR_SIGNALS
+
+
+# ---- External-review correction round: boundedness + latest-generation authority ----
+#
+# An external review of the original v1 shape found `fetch_cross_pr_peers`
+# issued one *unbounded* SELECT for every open PR in the repository, then
+# a separate per-PR generation query in a Python loop until enough
+# eligible peers were found -- MAX_CROSS_PR_PEERS bounded the *returned*
+# peer count, but not the DB/Python work needed to find them. Fixed by
+# expressing all eligibility (repository, not-self, state, non-stale
+# head) inside one SQL query's WHERE clause, with ORDER BY/LIMIT applied
+# before any row reaches Python. See
+# validation/cross_pr_intelligence/latest-summary.md section 19 for the
+# full correction narrative.
+
+
+async def test_case_many_open_most_ineligible_peer_discovery_is_bounded(
+    session_factory: async_sessionmaker[AsyncSession], db_engine: AsyncEngine,
+) -> None:
+    """Most of the newest open PRs in the repository are either never
+    reviewed or stale -- proves the eligible result is still capped at
+    MAX_CROSS_PR_PEERS *and* that peer discovery issues a fixed, small
+    number of SQL statements regardless of how many open-but-ineligible
+    PRs exist (never one query per candidate PR)."""
+
+    repository_id = await _make_repo(session_factory, "test/cpr-bounded-discovery")
+    current_id = await _make_pull_request(session_factory, repository_id=repository_id, number=1, head_sha=_sha(1))
+
+    ineligible_count = MAX_CROSS_PR_PEERS * 20
+    for i in range(ineligible_count):
+        # Every one of these is the *newest* by number/insertion order,
+        # yet none is reviewed at all -- if peer discovery ever scanned
+        # candidates in Python looking for eligible ones, this is exactly
+        # the shape that would make it slow/unbounded.
+        await _make_pull_request(
+            session_factory, repository_id=repository_id, number=1000 + i, head_sha=_sha(1000 + i),
+        )
+
+    eligible_count = MAX_CROSS_PR_PEERS + 3
+    for i in range(eligible_count):
+        peer_id = await _make_pull_request(
+            session_factory, repository_id=repository_id, number=2000 + i, head_sha=_sha(2000 + i),
+        )
+        await _stage_review(
+            session_factory, repository_id=repository_id, pull_request_id=peer_id, commit_sha=_sha(2000 + i),
+            surfaces=((f"file_{i}.py", f"symbol_{i}"),),
+        )
+
+    queries: list[str] = []
+
+    def _count(*_args: object, **_kwargs: object) -> None:
+        queries.append("q")
+
+    sync_engine = db_engine.sync_engine
+    event.listen(sync_engine, "before_cursor_execute", _count)
+    try:
+        async with session_factory() as session:
+            peers = await fetch_cross_pr_peers(
+                session, repository_id=repository_id, current_pull_request_id=current_id,
+            )
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _count)
+
+    assert len(peers) == MAX_CROSS_PR_PEERS
+    # Exactly one SQL statement -- a single SELECT with a joined
+    # subquery, empirically confirmed (not a guessed bound). Never one
+    # query per candidate PR: ineligible_count + eligible_count =
+    # 23x MAX_CROSS_PR_PEERS candidate PRs exist, so a per-candidate
+    # loop would show up as dozens of queries here, not one.
+    assert len(queries) == 1, queries
+
+
+async def test_case_latest_generation_authority_never_falls_back_to_older_match(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """gen1=A, gen2=B, persisted peer head_sha=A -- the peer must be
+    EXCLUDED. The latest reviewed generation is B, so A's own earlier,
+    superseded generation must never be treated as representing the
+    peer's current reviewed state, even though its commit_sha happens
+    to equal head_sha."""
+
+    repository_id = await _make_repo(session_factory, "test/cpr-latest-gen-authority-exclude")
+    current_id = await _make_pull_request(session_factory, repository_id=repository_id, number=1, head_sha=_sha(1))
+    # head_sha is persisted as A (_sha(2)) -- as if the peer PR was force
+    # -pushed back to an earlier commit after gen2 (B) was reviewed.
+    peer_id = await _make_pull_request(session_factory, repository_id=repository_id, number=2, head_sha=_sha(2))
+    await _stage_review(
+        session_factory, repository_id=repository_id, pull_request_id=peer_id, commit_sha=_sha(2),
+        surfaces=(("service.py", "apply_discount"),),
+    )
+    await _stage_review(
+        session_factory, repository_id=repository_id, pull_request_id=peer_id, commit_sha=_sha(3),
+        surfaces=(("service.py", "apply_discount"),),
+    )
+
+    async with session_factory() as session:
+        peers = await fetch_cross_pr_peers(
+            session, repository_id=repository_id, current_pull_request_id=current_id,
+        )
+    assert peers == ()
+
+
+async def test_case_latest_generation_authority_matches_when_current(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """gen1=A, gen2=B, persisted peer head_sha=B -- the peer is eligible
+    exactly once (never double-counted across its two generations)."""
+
+    repository_id = await _make_repo(session_factory, "test/cpr-latest-gen-authority-match")
+    current_id = await _make_pull_request(session_factory, repository_id=repository_id, number=1, head_sha=_sha(1))
+    peer_id = await _make_pull_request(session_factory, repository_id=repository_id, number=2, head_sha=_sha(3))
+    await _stage_review(
+        session_factory, repository_id=repository_id, pull_request_id=peer_id, commit_sha=_sha(2),
+        surfaces=(("service.py", "apply_discount"),),
+    )
+    await _stage_review(
+        session_factory, repository_id=repository_id, pull_request_id=peer_id, commit_sha=_sha(3),
+        surfaces=(("service.py", "apply_discount"),),
+    )
+
+    async with session_factory() as session:
+        peers = await fetch_cross_pr_peers(
+            session, repository_id=repository_id, current_pull_request_id=current_id,
+        )
+    assert len(peers) == 1
+    assert peers[0].pull_request_id == peer_id
+    assert peers[0].head_commit_sha == _sha(3)
+    assert peers[0].sequence_number == 2
+
+
+async def test_case_peer_with_unverified_ancestry_still_eligible(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Cross-PR Intelligence never consults `ancestry_verified` -- unlike
+    Trajectory Intelligence's own lineage walk, it cares only about a
+    peer's *exact current* reviewed head, never its historical lineage.
+    A peer whose latest generation has `ancestry_verified=False` (e.g.
+    because that peer's own review history included a force-push) is
+    still a valid peer as long as its commit_sha matches head_sha
+    exactly."""
+
+    repository_id = await _make_repo(session_factory, "test/cpr-unverified-ancestry")
+    current_id = await _make_pull_request(session_factory, repository_id=repository_id, number=1, head_sha=_sha(1))
+    peer_id = await _make_pull_request(session_factory, repository_id=repository_id, number=2, head_sha=_sha(2))
+    await _stage_review(
+        session_factory, repository_id=repository_id, pull_request_id=peer_id, commit_sha=_sha(2),
+        surfaces=(("service.py", "apply_discount"),), ancestry_verified=False,
+    )
+
+    async with session_factory() as session:
+        peers = await fetch_cross_pr_peers(
+            session, repository_id=repository_id, current_pull_request_id=current_id,
+        )
+    assert len(peers) == 1
+    assert peers[0].pull_request_id == peer_id
+
+
+async def test_case_duplicate_surface_row_consumes_one_slot(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Two ReviewCandidateModel rows resolving to the identical
+    (file_path, qualified_name) on the same peer review run must count
+    as one logical surface, never two -- a duplicate row must never
+    consume two slots of MAX_CROSS_PR_SURFACES_PER_PEER, and must never
+    produce two overlaps/signals for the current PR."""
+
+    repository_id = await _make_repo(session_factory, "test/cpr-duplicate-surface")
+    current_id = await _make_pull_request(session_factory, repository_id=repository_id, number=1, head_sha=_sha(1))
+    peer_id = await _make_pull_request(session_factory, repository_id=repository_id, number=2, head_sha=_sha(2))
+    await _stage_review(
+        session_factory, repository_id=repository_id, pull_request_id=peer_id, commit_sha=_sha(2),
+        surfaces=(("service.py", "apply_discount"),), duplicate_first_surface=True,
+    )
+
+    async with session_factory() as session:
+        report = await build_cross_pr_intelligence_report(
+            session, repository_id=repository_id, pull_request_id=current_id,
+            change_units=(_change_unit((("service.py", "apply_discount"),)),),
+        )
+    assert len(report.overlaps) == 1
+    assert len(report.signals) == 1

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -16,6 +16,14 @@ class PullRequestModel(Base):
     __tablename__ = "pull_requests"
     __table_args__ = (
         UniqueConstraint("repository_id", "github_pr_number", name="uq_pull_requests_repo_number"),
+        #: Serves Cross-PR Intelligence's own bounded peer-discovery
+        #: query (patchfrog.cross_pr_intelligence.queries.fetch_cross_pr_peers)
+        #: -- WHERE repository_id = ... AND state = 'open' ORDER BY
+        #: updated_at DESC, github_pr_number DESC LIMIT N. An ascending
+        #: composite index serves this exactly: Postgres can satisfy a
+        #: fully-descending ORDER BY via a backward index scan, so no
+        #: separate DESC-ordered index is needed.
+        Index("ix_pull_requests_repo_state_updated", "repository_id", "state", "updated_at", "github_pr_number"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
