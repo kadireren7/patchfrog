@@ -471,6 +471,7 @@ async def _review_local(
             config=config,
             candidate_filter=prepared.candidate_filter,
             incremental_context_fingerprint=prepared.incremental_context_fingerprint,
+            previous_generation_ancestry_verified=prepared.plan.selection.ancestry_verified,
         )
         if prepared.memory_tracking_active:
             await memory_service.finalize(

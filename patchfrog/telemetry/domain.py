@@ -105,7 +105,12 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 #: reasoning a sixth time -- ``ReviewTelemetrySnapshot`` gained the
 #: ``repository_learnings`` field (:class:`RepositoryLearningsTelemetry`),
 #: a real additional key in the exported JSON.
-TELEMETRY_SCHEMA_VERSION = 7
+#:
+#: Bumped 7 -> 8 for Trajectory Intelligence Foundation: the same
+#: reasoning a seventh time -- ``ReviewTelemetrySnapshot`` gained the
+#: ``trajectory_intelligence`` field (:class:`TrajectoryIntelligenceTelemetry`),
+#: a real additional key in the exported JSON.
+TELEMETRY_SCHEMA_VERSION = 8
 
 
 class FindingLifecycleOutcome(StrEnum):
@@ -460,6 +465,24 @@ class RepositoryLearningsTelemetry:
 
 
 @dataclass(frozen=True, slots=True)
+class TrajectoryIntelligenceTelemetry:
+    """Bounded, privacy-safe counts from
+    :mod:`patchfrog.trajectory_intelligence` for one review run.
+    Deliberately counts only -- no per-surface identity, no
+    developer-level churn metrics, no "unstable developer"/author
+    ranking of any kind (spec section 41). This package has no
+    standalone publication block at all, so there is no
+    ``*_summary_rendered`` field here either."""
+
+    trajectory_head_count: int
+    trajectory_event_count: int
+    trajectory_signal_count: int
+    repeated_surface_churn_count: int
+    trajectory_require_critic_count: int
+    trajectory_deepen_context_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewTelemetrySnapshot:
     """The complete, deterministic telemetry snapshot for one review run
     -- what :func:`patchfrog.telemetry.collector.collect_review_telemetry`
@@ -563,6 +586,19 @@ class ReviewTelemetrySnapshot:
         default_factory=lambda: RepositoryLearningsTelemetry(
             repository_learning_active_count=0,
             repository_learning_application_count=0,
+        )
+    )
+    #: All-zero/empty for a run that predates Trajectory Intelligence
+    #: Foundation -- same nullable-safe-default convention as
+    #: ``repository_learnings`` above. See :class:`TrajectoryIntelligenceTelemetry`.
+    trajectory_intelligence: TrajectoryIntelligenceTelemetry = field(
+        default_factory=lambda: TrajectoryIntelligenceTelemetry(
+            trajectory_head_count=0,
+            trajectory_event_count=0,
+            trajectory_signal_count=0,
+            repeated_surface_churn_count=0,
+            trajectory_require_critic_count=0,
+            trajectory_deepen_context_count=0,
         )
     )
 

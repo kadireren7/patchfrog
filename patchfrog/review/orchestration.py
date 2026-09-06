@@ -292,6 +292,7 @@ class AgentOrchestrator:
                 test_intelligence_text=evidence.test_intelligence_text,
                 historical_regression_text=evidence.historical_regression_text,
                 repository_learning_text=evidence.repository_learning_text,
+                trajectory_intelligence_text=evidence.trajectory_intelligence_text,
             )
             for role in selected_roles
         }

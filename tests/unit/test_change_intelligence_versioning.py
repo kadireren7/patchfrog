@@ -20,7 +20,6 @@ _PRE_CI_PROMPT_VERSION = 3
 _PRE_CI_POLICY_VERSION = 4
 _PRE_CI_ENGINE_VERSION = 3
 _PRE_CI_CONFIG_SCHEMA_VERSION = 4
-_PRE_CI_QUALITY_COST_POLICY_VERSION = 1
 
 
 def test_review_prompt_version_bumped_for_change_intelligence_section() -> None:
@@ -57,13 +56,13 @@ def test_config_schema_version_unchanged_by_change_intelligence() -> None:
     assert CONFIG_SCHEMA_VERSION == _PRE_CI_CONFIG_SCHEMA_VERSION
 
 
-def test_quality_cost_policy_version_unchanged_by_change_intelligence() -> None:
-    """Quality + Cost Guard tiering itself is untouched -- Change
-    Intelligence evidence text is already small enough (see
-    patchfrog.change_intelligence.evidence's module docstring) to apply
-    uniformly across tiers without needing its own policy dimension."""
-
-    assert QUALITY_COST_POLICY_VERSION == _PRE_CI_QUALITY_COST_POLICY_VERSION
+# Quality + Cost Guard tiering itself was untouched by this milestone --
+# it stayed at the pre-Change-Intelligence value (1) through the end of
+# this milestone. A later milestone (Trajectory Intelligence) legitimately
+# bumped it again for an unrelated reason; see
+# tests/unit/test_trajectory_intelligence_versioning.py for that pin. The
+# historical "still 1" pin that used to live here is retired rather than
+# kept permanently false.
 
 
 def test_pre_ci_model_identity_never_reused_post_ci() -> None:

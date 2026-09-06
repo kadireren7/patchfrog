@@ -27,7 +27,6 @@ _PRE_RL_PROMPT_VERSION = 8
 _PRE_RL_POLICY_VERSION = 4
 _PRE_RL_ENGINE_VERSION = 3
 _PRE_RL_CONFIG_SCHEMA_VERSION = 4
-_PRE_RL_QUALITY_COST_POLICY_VERSION = 1
 _PRE_RL_TELEMETRY_SCHEMA_VERSION = 6
 _PRE_RL_CHANGE_INTELLIGENCE_VERSION = 1
 _PRE_RL_CONTRACT_INTELLIGENCE_VERSION = 1
@@ -102,8 +101,13 @@ def test_config_schema_version_unchanged() -> None:
     assert CONFIG_SCHEMA_VERSION == _PRE_RL_CONFIG_SCHEMA_VERSION
 
 
-def test_quality_cost_policy_version_unchanged() -> None:
-    assert QUALITY_COST_POLICY_VERSION == _PRE_RL_QUALITY_COST_POLICY_VERSION
+# Quality + Cost Guard tiering itself was untouched by this milestone --
+# it stayed at the pre-Repository-Learnings value (1) through the end of
+# this milestone. A later milestone (Trajectory Intelligence) legitimately
+# bumped it again for an unrelated reason; see
+# tests/unit/test_trajectory_intelligence_versioning.py for that pin. The
+# historical "still 1" pin that used to live here is retired rather than
+# kept permanently false.
 
 
 def test_pre_rl_model_identity_never_reused_post_rl() -> None:

@@ -67,6 +67,7 @@ from patchfrog.telemetry.domain import (
     ReviewFeedbackEventTelemetry,
     ReviewTelemetrySnapshot,
     TestIntelligenceTelemetry,
+    TrajectoryIntelligenceTelemetry,
     classify_lifecycle_outcome,
 )
 
@@ -370,6 +371,15 @@ async def collect_review_telemetry(
         repository_learning_application_count=run.repository_learning_application_count,
     )
 
+    trajectory_intelligence = TrajectoryIntelligenceTelemetry(
+        trajectory_head_count=run.trajectory_head_count,
+        trajectory_event_count=run.trajectory_event_count,
+        trajectory_signal_count=run.trajectory_signal_count,
+        repeated_surface_churn_count=run.trajectory_repeated_surface_churn_count,
+        trajectory_require_critic_count=run.trajectory_require_critic_count,
+        trajectory_deepen_context_count=run.trajectory_deepen_context_count,
+    )
+
     return ReviewTelemetrySnapshot(
         schema_version=TELEMETRY_SCHEMA_VERSION,
         review_run_id=run.id,
@@ -397,4 +407,5 @@ async def collect_review_telemetry(
         test_intelligence=test_intelligence,
         historical_regression_memory=historical_regression_memory,
         repository_learnings=repository_learnings,
+        trajectory_intelligence=trajectory_intelligence,
     )
