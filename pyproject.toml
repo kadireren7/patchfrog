@@ -31,6 +31,12 @@ dependencies = [
     "ruff>=0.7,<1.0",
     "semgrep>=1.100,<2.0",
     "PyYAML>=6.0,<7.0",
+    # Executable Verification (Milestone S): pytest is invoked as the
+    # existing-targeted-test verification adapter's own subprocess at
+    # runtime (patchfrog.executable_verification), not just used to run
+    # PatchFrog's own test suite -- must be present outside a dev
+    # install too, exactly like ruff/semgrep above.
+    "pytest>=8.3,<9.0",
     # AI Reviewer (Phase 5): official Anthropic SDK for the Claude API
     # provider adapter (patchfrog.review.providers.anthropic_provider).
     "anthropic>=0.68,<1.0",
@@ -45,7 +51,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.3,<9.0",
+    # pytest itself is a base dependency now (see above) -- only its
+    # dev-only plugins/tooling remain here.
     "pytest-asyncio>=0.24,<1.0",
     "pytest-cov>=5.0,<6.0",
     "mypy>=1.13,<2.0",

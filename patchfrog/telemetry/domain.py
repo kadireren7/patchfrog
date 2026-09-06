@@ -120,7 +120,12 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 #: reasoning a ninth time -- ``ReviewTelemetrySnapshot`` gained the
 #: ``cross_repo_intelligence`` field (:class:`CrossRepoIntelligenceTelemetry`),
 #: a real additional key in the exported JSON.
-TELEMETRY_SCHEMA_VERSION = 10
+#:
+#: Bumped 10 -> 11 for Executable Verification Foundation: the same
+#: reasoning a tenth time -- ``ReviewTelemetrySnapshot`` gained the
+#: ``executable_verification`` field (:class:`ExecutableVerificationTelemetry`),
+#: a real additional key in the exported JSON.
+TELEMETRY_SCHEMA_VERSION = 11
 
 
 class FindingLifecycleOutcome(StrEnum):
@@ -526,6 +531,23 @@ class CrossRepoIntelligenceTelemetry:
 
 
 @dataclass(frozen=True, slots=True)
+class ExecutableVerificationTelemetry:
+    """Bounded, privacy-safe counts from
+    :mod:`patchfrog.executable_verification` for one review run.
+    Deliberately counts only -- no test target path, no stdout/stderr
+    excerpt, no commit SHA, no candidate identity anywhere. This package
+    has no standalone publication block at all, so there is no
+    ``*_summary_rendered`` field here either."""
+
+    executable_verification_attempted_count: int
+    executable_verification_confirmed_failure_count: int
+    executable_verification_passed_count: int
+    executable_verification_timeout_count: int
+    executable_verification_unsupported_count: int
+    executable_verification_inconclusive_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewTelemetrySnapshot:
     """The complete, deterministic telemetry snapshot for one review run
     -- what :func:`patchfrog.telemetry.collector.collect_review_telemetry`
@@ -667,6 +689,19 @@ class ReviewTelemetrySnapshot:
             cross_repo_explicit_contract_relation_count=0,
             cross_repo_require_critic_count=0,
             cross_repo_deepen_context_count=0,
+        )
+    )
+    #: All-zero/empty for a run that predates Executable Verification
+    #: Foundation -- same nullable-safe-default convention as
+    #: ``cross_repo_intelligence`` above. See :class:`ExecutableVerificationTelemetry`.
+    executable_verification: ExecutableVerificationTelemetry = field(
+        default_factory=lambda: ExecutableVerificationTelemetry(
+            executable_verification_attempted_count=0,
+            executable_verification_confirmed_failure_count=0,
+            executable_verification_passed_count=0,
+            executable_verification_timeout_count=0,
+            executable_verification_unsupported_count=0,
+            executable_verification_inconclusive_count=0,
         )
     )
 

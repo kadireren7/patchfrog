@@ -324,6 +324,20 @@ class ReviewRunModel(Base):
     cross_repo_require_critic_count: Mapped[int] = mapped_column(Integer, default=0)
     cross_repo_deepen_context_count: Mapped[int] = mapped_column(Integer, default=0)
 
+    #: Executable Verification Foundation
+    #: (:mod:`patchfrog.executable_verification`) run-level summary --
+    #: the bounded output of
+    #: :func:`patchfrog.executable_verification.telemetry.summarize_for_persistence`.
+    #: Counts only -- no test target path, no stdout/stderr excerpt, no
+    #: commit SHA, no candidate identity anywhere. All default to 0 --
+    #: nullable-safe for rows predating this milestone.
+    executable_verification_attempted_count: Mapped[int] = mapped_column(Integer, default=0)
+    executable_verification_confirmed_failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    executable_verification_passed_count: Mapped[int] = mapped_column(Integer, default=0)
+    executable_verification_timeout_count: Mapped[int] = mapped_column(Integer, default=0)
+    executable_verification_unsupported_count: Mapped[int] = mapped_column(Integer, default=0)
+    executable_verification_inconclusive_count: Mapped[int] = mapped_column(Integer, default=0)
+
 
 class ReviewCandidateModel(Base):
     """One symbol- (or module-region-) centered candidate considered for

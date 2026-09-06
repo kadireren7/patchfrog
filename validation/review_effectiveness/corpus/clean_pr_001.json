@@ -1,0 +1,8 @@
+{
+  "case_id": "clean_pr_001",
+  "category": "clean_pr",
+  "description": "A well-formed, bug-free change (a docstring clarification) -- the positive control for clean-case precision. PatchFrog must report zero findings.",
+  "ground_truth": {
+    "expected_clean": true
+  }
+}

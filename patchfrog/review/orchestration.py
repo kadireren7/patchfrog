@@ -58,13 +58,15 @@ reserved never publishes anyway -- see :data:`CRITIC_BUDGET_EXHAUSTED`.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 
 import structlog
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.context.tokens import estimate_tokens
+from patchfrog.executable_verification.domain import ExecutableVerificationReport
+from patchfrog.executable_verification.evidence import evidence_text_for_report
 from patchfrog.review.agents.cross_role import (
     group_cross_role,
     resolve_unresolved_contradictions,
@@ -152,6 +154,12 @@ class CandidateOrchestrationResult:
     #: the one it passed in, so a candidate that escalated here is never
     #: persisted under its stale pre-escalation tier.
     effort_decision: ReviewEffortDecision | None = None
+    #: Milestone S -- ``None`` unless ``executable_verifier`` was given
+    #: *and* actually invoked (at least one proposal was critiqued).
+    #: :mod:`patchfrog.review.service` aggregates this across every
+    #: candidate in the run for count-only telemetry -- never persisted
+    #: raw, never a standalone finding.
+    executable_verification_report: ExecutableVerificationReport | None = None
 
 
 def _detect_high_risk_proposal(
@@ -251,6 +259,7 @@ class AgentOrchestrator:
         budget_state: dict[str, int],
         log: structlog.stdlib.BoundLogger,
         allow_post_proposal_escalation: bool = True,
+        executable_verifier: Callable[[], Awaitable[ExecutableVerificationReport]] | None = None,
     ) -> CandidateOrchestrationResult:
         """``allow_post_proposal_escalation=False`` is the evaluation
         harness's "uniform baseline" ablation hook
@@ -259,7 +268,10 @@ class AgentOrchestrator:
         a genuinely *fixed* comparison baseline must never escalate,
         exactly like :meth:`~patchfrog.review.effort.ReviewEffortPolicy.finalize`
         is already skipped for it. Every real review leaves this at the
-        default ``True``."""
+        default ``True``.
+
+        ``executable_verifier`` (Milestone S) is passed straight through
+        to :meth:`_critique` -- see that method's own docstring."""
         # Fixed canonical order, not set iteration order, so zip()/log
         # output/tests are deterministic regardless of frozenset hashing.
         selected_roles = tuple(
@@ -397,7 +409,7 @@ class AgentOrchestrator:
         )
         critic_max_retries = min(self._max_retries, effort_decision.retry_limit)
 
-        proposals_t, critic_calls, critic_retries = await self._critique(
+        proposals_t, critic_calls, critic_retries, verification_report = await self._critique(
             proposals_t,
             candidate_evidence=evidence,
             contradiction_indices=grouping.contradiction_indices,
@@ -408,6 +420,7 @@ class AgentOrchestrator:
             budget_lock=budget_lock,
             budget_state=budget_state,
             log=log,
+            executable_verifier=executable_verifier,
         )
         retries_consumed += critic_retries
         proposals_t = resolve_unresolved_contradictions(
@@ -431,6 +444,7 @@ class AgentOrchestrator:
             retries_consumed=retries_consumed,
             effort_decision=effort_decision,
             reviewer_latency_ms=reviewer_latency_ms,
+            executable_verification_report=verification_report,
         )
 
     async def _call_role(
@@ -472,8 +486,19 @@ class AgentOrchestrator:
         budget_lock: asyncio.Lock,
         budget_state: dict[str, int],
         log: structlog.stdlib.BoundLogger,
-    ) -> tuple[tuple[AgentProposal, ...], int, int]:
-        """Returns ``(proposals, critic_calls, retries_consumed)``.
+        executable_verifier: Callable[[], Awaitable[ExecutableVerificationReport]] | None = None,
+    ) -> tuple[tuple[AgentProposal, ...], int, int, ExecutableVerificationReport | None]:
+        """Returns ``(proposals, critic_calls, retries_consumed, verification_report)``.
+
+        ``executable_verifier`` (Milestone S,
+        :mod:`patchfrog.executable_verification`), when given, is a
+        zero-argument async callable already bound to this exact
+        candidate by the caller (:mod:`patchfrog.review.service`) --
+        invoked **at most once**, only when at least one proposal is
+        actually about to be critiqued (never speculatively, never
+        before a real proposal exists). The resulting bounded evidence
+        text is reused for every proposal critiqued for this candidate
+        -- never a second, independent verification per proposal.
 
         ``critic_expectation`` (see :mod:`patchfrog.review.effort`)
         controls strictness without changing *what* the critic checks:
@@ -485,7 +510,7 @@ class AgentOrchestrator:
         """
 
         if self._critic is None or not self._critic_enabled:
-            return proposals, 0, 0
+            return proposals, 0, 0, None
 
         valid_indices = [
             i for i, p in enumerate(proposals)
@@ -520,7 +545,13 @@ class AgentOrchestrator:
                 to_critique.append(i)
 
         if not to_critique:
-            return proposals, 0, 0
+            return proposals, 0, 0, None
+
+        executable_verification_text = ""
+        verification_report: ExecutableVerificationReport | None = None
+        if executable_verifier is not None:
+            verification_report = await executable_verifier()
+            executable_verification_text = evidence_text_for_report(verification_report)
 
         # Reserve each candidate-for-critique's estimated input cost
         # atomically, in order, *before* issuing any provider call --
@@ -542,6 +573,7 @@ class AgentOrchestrator:
                 context_text=candidate_evidence.context_text,
                 finding=proposal.validated.finding,
                 conflicting_finding=conflicting,
+                executable_verification_text=executable_verification_text,
             )
             estimate = estimate_tokens(system_prompt) + estimate_tokens(user_prompt)
             async with budget_lock:
@@ -558,7 +590,7 @@ class AgentOrchestrator:
             reserved_estimates[i] = estimate
 
         if not reserved:
-            return tuple(result), 0, 0
+            return tuple(result), 0, 0, verification_report
 
         verdicts = await asyncio.gather(
             *(
@@ -568,6 +600,7 @@ class AgentOrchestrator:
                     contradiction_indices=contradiction_indices,
                     all_proposals=proposals,
                     max_retries=max_retries,
+                    executable_verification_text=executable_verification_text,
                 )
                 for i in reserved
             ),
@@ -601,7 +634,7 @@ class AgentOrchestrator:
                 0, budget_state["used_input_tokens"] - total_estimate + actual_total
             )
 
-        return tuple(result), critic_calls, retries_consumed
+        return tuple(result), critic_calls, retries_consumed, verification_report
 
     async def _critique_one(
         self,
@@ -611,6 +644,7 @@ class AgentOrchestrator:
         contradiction_indices: frozenset[int],
         all_proposals: tuple[AgentProposal, ...],
         max_retries: int,
+        executable_verification_text: str = "",
     ) -> tuple[CriticVerdict, TokenUsage, int]:
         critic = self._critic
         assert critic is not None
@@ -624,6 +658,7 @@ class AgentOrchestrator:
                 candidate=candidate_evidence.candidate,
                 context_text=candidate_evidence.context_text,
                 conflicting_finding=conflicting,
+                executable_verification_text=executable_verification_text,
             ),
             max_retries=max_retries,
         )

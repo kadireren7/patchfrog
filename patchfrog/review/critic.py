@@ -39,12 +39,14 @@ class CriticService:
         candidate: ReviewCandidate,
         context_text: str,
         conflicting_finding: AIReviewFinding | None = None,
+        executable_verification_text: str = "",
     ) -> CriticVerdict:
         system_prompt, user_prompt = build_critic_prompt(
             candidate=candidate,
             context_text=context_text,
             finding=validated.finding,
             conflicting_finding=conflicting_finding,
+            executable_verification_text=executable_verification_text,
         )
         request = ProviderRequest(
             system_prompt=system_prompt,

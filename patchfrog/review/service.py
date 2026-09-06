@@ -36,7 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patchfrog.analysis.queries import AnalysisQueryService
 from patchfrog.change_intelligence.change_map import render_change_map, select_change_map_unit
-from patchfrog.change_intelligence.domain import ChangeIntelligenceReport
+from patchfrog.change_intelligence.domain import ChangeIntelligenceReport, ExpectedCompanionChange
 from patchfrog.change_intelligence.evidence import evidence_text_for_candidate
 from patchfrog.change_intelligence.service import build_change_intelligence_report
 from patchfrog.change_intelligence.telemetry import (
@@ -82,6 +82,17 @@ from patchfrog.cross_repo_intelligence.telemetry import (
     summarize_for_persistence as summarize_cross_repo_intelligence,
 )
 from patchfrog.diff.models import DiffFile, DiffHunk
+from patchfrog.executable_verification.domain import (
+    EXECUTABLE_VERIFICATION_VERSION,
+    ExecutableVerificationReport,
+)
+from patchfrog.executable_verification.service import (
+    VerificationBudget,
+    build_executable_verification_report,
+)
+from patchfrog.executable_verification.telemetry import (
+    summarize_for_persistence as summarize_executable_verification,
+)
 from patchfrog.historical_regression_memory.domain import HistoricalRegressionReport
 from patchfrog.historical_regression_memory.evidence import (
     evidence_text_for_candidate as historical_evidence_text_for_candidate,
@@ -293,6 +304,7 @@ class _CandidateOutcome:
         "diff_excerpt",
         "effort_decision",
         "error",
+        "executable_verification_report",
         "failed",
         "final",
         "proposals",
@@ -325,6 +337,10 @@ class _CandidateOutcome:
         self.critic_calls = 0
         self.retries_consumed = 0
         self.reviewer_latency_ms = 0.0
+        #: Milestone S -- None unless a real verification attempt
+        #: happened for this candidate (see AgentOrchestrator._critique's
+        #: own docstring for exactly when).
+        self.executable_verification_report: ExecutableVerificationReport | None = None
 
 
 class PullRequestReviewService:
@@ -906,6 +922,7 @@ class PullRequestReviewService:
         budget_lock = asyncio.Lock()
         budget_state = {"used_input_tokens": 0}
         semaphore = asyncio.Semaphore(max(1, config.max_concurrent_requests))
+        verification_budget = VerificationBudget()
 
         orchestrator = AgentOrchestrator(
             reviewer_providers={
@@ -944,6 +961,8 @@ class PullRequestReviewService:
                     trajectory_report=trajectory_report,
                     cross_pr_report=cross_pr_report,
                     cross_repo_report=cross_repo_report,
+                    combined_companions=combined_companions,
+                    verification_budget=verification_budget,
                 )
 
         await asyncio.gather(*(_process(o) for o in outcomes))
@@ -984,6 +1003,14 @@ class PullRequestReviewService:
             critic_calls_total += o.critic_calls
             retries_total += o.retries_consumed
             reviewer_latency_ms_total += o.reviewer_latency_ms
+
+        # Milestone S: per-candidate reports collected across the whole
+        # run, purely for count-only telemetry -- never persisted raw,
+        # never a standalone finding (see
+        # patchfrog.executable_verification's own module docstring).
+        executable_verification_reports = tuple(
+            o.executable_verification_report for o in outcomes if o.executable_verification_report is not None
+        )
 
         duration_ms = (time.monotonic() - start) * 1000
 
@@ -1195,6 +1222,9 @@ class PullRequestReviewService:
                 trajectory_intelligence=summarize_trajectory_intelligence(trajectory_report),
                 cross_pr_intelligence=summarize_cross_pr_intelligence(cross_pr_report),
                 cross_repo_intelligence=summarize_cross_repo_intelligence(cross_repo_report),
+                executable_verification=summarize_executable_verification(
+                    executable_verification_reports, version=EXECUTABLE_VERIFICATION_VERSION
+                ),
             )
             await session.commit()
 
@@ -1258,6 +1288,8 @@ class PullRequestReviewService:
         trajectory_report: TrajectoryIntelligenceReport,
         cross_pr_report: CrossPRIntelligenceReport,
         cross_repo_report: CrossRepoIntelligenceReport,
+        combined_companions: tuple[ExpectedCompanionChange, ...],
+        verification_budget: VerificationBudget,
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
@@ -1419,6 +1451,24 @@ class PullRequestReviewService:
             )
         outcome.effort_decision = effort_decision
 
+        async def _verify() -> ExecutableVerificationReport:
+            # Milestone S: invoked by AgentOrchestrator._critique at most
+            # once, only when a real proposal is actually about to be
+            # critiqued for this candidate (see that method's own
+            # docstring) -- never speculatively, never before a
+            # hypothesis exists.
+            return await build_executable_verification_report(
+                candidate=candidate,
+                expected_companions=combined_companions,
+                commit_sha=commit_sha,
+                local=local,
+                root_path=context_kwargs.get("root_path") if local else None,  # type: ignore[arg-type]
+                clone_url=context_kwargs.get("clone_url") if not local else None,  # type: ignore[arg-type]
+                token=context_kwargs.get("token") if not local else None,  # type: ignore[arg-type]
+                repository_full_name=repository_full_name,
+                budget=verification_budget,
+            )
+
         result = await orchestrator.review_candidate(
             evidence,
             effort_decision=effort_decision,
@@ -1431,6 +1481,7 @@ class PullRequestReviewService:
             # must never escalate -- same reasoning as skipping finalize()
             # above.
             allow_post_proposal_escalation=self._effort_decision_override is None,
+            executable_verifier=_verify,
         )
 
         if result.skipped_budget:
@@ -1459,6 +1510,7 @@ class PullRequestReviewService:
         outcome.critic_calls = result.critic_calls
         outcome.retries_consumed = result.retries_consumed
         outcome.reviewer_latency_ms = result.reviewer_latency_ms
+        outcome.executable_verification_report = result.executable_verification_report
 
         for agent_proposal in outcome.proposals:
             v = agent_proposal.validated
