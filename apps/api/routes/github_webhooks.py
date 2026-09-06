@@ -154,6 +154,7 @@ async def receive_github_webhook(
         base_sha=event.base_sha,
         head_sha=event.head_sha,
         html_url=event.html_url,
+        merged=event.merged,
     )
 
     logger.info(

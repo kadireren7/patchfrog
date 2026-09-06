@@ -110,7 +110,12 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 #: reasoning a seventh time -- ``ReviewTelemetrySnapshot`` gained the
 #: ``trajectory_intelligence`` field (:class:`TrajectoryIntelligenceTelemetry`),
 #: a real additional key in the exported JSON.
-TELEMETRY_SCHEMA_VERSION = 8
+#:
+#: Bumped 8 -> 9 for Cross-PR Intelligence Foundation: the same
+#: reasoning an eighth time -- ``ReviewTelemetrySnapshot`` gained the
+#: ``cross_pr_intelligence`` field (:class:`CrossPRIntelligenceTelemetry`),
+#: a real additional key in the exported JSON.
+TELEMETRY_SCHEMA_VERSION = 9
 
 
 class FindingLifecycleOutcome(StrEnum):
@@ -483,6 +488,23 @@ class TrajectoryIntelligenceTelemetry:
 
 
 @dataclass(frozen=True, slots=True)
+class CrossPRIntelligenceTelemetry:
+    """Bounded, privacy-safe counts from
+    :mod:`patchfrog.cross_pr_intelligence` for one review run.
+    Deliberately counts only -- no PR number, no author, no title, no
+    developer ranking of any kind. This package has no standalone
+    publication block at all, so there is no ``*_summary_rendered``
+    field here either."""
+
+    cross_pr_peer_count: int
+    cross_pr_overlap_count: int
+    cross_pr_signal_count: int
+    cross_pr_same_changed_symbol_count: int
+    cross_pr_require_critic_count: int
+    cross_pr_deepen_context_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewTelemetrySnapshot:
     """The complete, deterministic telemetry snapshot for one review run
     -- what :func:`patchfrog.telemetry.collector.collect_review_telemetry`
@@ -599,6 +621,19 @@ class ReviewTelemetrySnapshot:
             repeated_surface_churn_count=0,
             trajectory_require_critic_count=0,
             trajectory_deepen_context_count=0,
+        )
+    )
+    #: All-zero/empty for a run that predates Cross-PR Intelligence
+    #: Foundation -- same nullable-safe-default convention as
+    #: ``trajectory_intelligence`` above. See :class:`CrossPRIntelligenceTelemetry`.
+    cross_pr_intelligence: CrossPRIntelligenceTelemetry = field(
+        default_factory=lambda: CrossPRIntelligenceTelemetry(
+            cross_pr_peer_count=0,
+            cross_pr_overlap_count=0,
+            cross_pr_signal_count=0,
+            cross_pr_same_changed_symbol_count=0,
+            cross_pr_require_critic_count=0,
+            cross_pr_deepen_context_count=0,
         )
     )
 

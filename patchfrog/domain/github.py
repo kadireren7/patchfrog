@@ -19,6 +19,7 @@ class PullRequestEventAction(StrEnum):
     OPENED = "opened"
     REOPENED = "reopened"
     SYNCHRONIZE = "synchronize"
+    CLOSED = "closed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,11 @@ class PullRequestWebhookEvent:
     base_sha: str
     head_sha: str
     html_url: str
+    #: GitHub's own `pull_request.merged` boolean. Only meaningful when
+    #: `action is PullRequestEventAction.CLOSED` -- distinguishes a real
+    #: merge from a close-without-merge. Always present on the raw
+    #: payload regardless of action, so it's always parsed.
+    merged: bool = False
 
 
 class InstallationEventAction(StrEnum):

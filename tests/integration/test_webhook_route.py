@@ -94,6 +94,30 @@ async def test_synchronize_event_is_queued(
     assert _stub_celery_delay[0]["pull_request_number"] == 14
 
 
+async def test_closed_event_is_queued_with_merged_flag(
+    client: httpx.AsyncClient, fixture_loader: Any, _stub_celery_delay: list[dict[str, Any]]
+) -> None:
+    payload = copy.deepcopy(fixture_loader("pull_request_closed.json"))
+    payload["pull_request"]["merged"] = True
+    body = json.dumps(payload).encode("utf-8")
+
+    response = await client.post(
+        "/webhooks/github",
+        content=body,
+        headers={
+            "X-Hub-Signature-256": _signature(body),
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-int-closed",
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 202
+    assert len(_stub_celery_delay) == 1
+    assert _stub_celery_delay[0]["action"] == "closed"
+    assert _stub_celery_delay[0]["merged"] is True
+
+
 async def test_invalid_signature_is_rejected(
     client: httpx.AsyncClient, fixture_loader: Any
 ) -> None:

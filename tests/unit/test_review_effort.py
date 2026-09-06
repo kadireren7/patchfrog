@@ -400,3 +400,67 @@ def test_trajectory_signal_forces_mandatory_critic_even_at_deep() -> None:
     )
     assert decision.tier is ReviewEffortTier.DEEP
     assert decision.critic_expectation is CriticExpectation.MANDATORY
+
+
+# -- Cross-PR Intelligence integration (Milestone Q) -------------------------
+
+
+def test_cross_pr_signal_absent_by_default_is_byte_identical() -> None:
+    """A run with no cross-PR signal at all (the default) behaves
+    exactly as before this milestone -- no reason, no tier change."""
+
+    decision = _decide(_candidate())
+    assert decision.tier is ReviewEffortTier.LIGHT
+    assert ReviewEffortReason.CROSS_PR_OVERLAP_PRESENT not in decision.reasons
+    assert decision.critic_expectation is CriticExpectation.OPTIONAL
+
+
+def test_cross_pr_signal_present_escalates_light_to_standard_and_forces_mandatory_critic() -> None:
+    decision = _POLICY.decide_provisional(
+        _candidate(), static_findings=(), max_retries=_MAX_RETRIES, cross_pr_signal_present=True
+    )
+    assert decision.tier is ReviewEffortTier.STANDARD
+    assert ReviewEffortReason.CROSS_PR_OVERLAP_PRESENT in decision.reasons
+    assert decision.critic_expectation is CriticExpectation.MANDATORY
+
+
+def test_cross_pr_signal_combines_with_another_signal_toward_deep() -> None:
+    """Cross-PR overlap contributes to the existing
+    MULTIPLE_STRUCTURAL_SIGNALS corroboration rule exactly like any
+    other structural signal -- never a separate escalation path."""
+
+    decision = _POLICY.decide_provisional(
+        _candidate(), static_findings=(_static_finding(category=FindingCategory.PERFORMANCE),),
+        max_retries=_MAX_RETRIES, cross_pr_signal_present=True,
+    )
+    assert decision.tier is ReviewEffortTier.DEEP
+    assert ReviewEffortReason.MULTIPLE_STRUCTURAL_SIGNALS in decision.reasons
+    assert decision.critic_expectation is CriticExpectation.MANDATORY
+
+
+def test_cross_pr_signal_forces_mandatory_critic_even_at_deep() -> None:
+    """A candidate already DEEP for an unrelated reason (e.g. a real
+    security signal) still gets MANDATORY critic either way."""
+
+    decision = _POLICY.decide_provisional(
+        _candidate(), static_findings=(_static_finding(category=FindingCategory.SECURITY, severity=Severity.HIGH),),
+        max_retries=_MAX_RETRIES, cross_pr_signal_present=True,
+    )
+    assert decision.tier is ReviewEffortTier.DEEP
+    assert decision.critic_expectation is CriticExpectation.MANDATORY
+
+
+def test_trajectory_and_cross_pr_signals_both_present_combine_toward_deep() -> None:
+    """Both signals present at once are two independent structural
+    signals, corroborating toward DEEP exactly like any other signal
+    pair -- never double-counted, never a special-cased combination."""
+
+    decision = _POLICY.decide_provisional(
+        _candidate(), static_findings=(), max_retries=_MAX_RETRIES,
+        trajectory_signal_present=True, cross_pr_signal_present=True,
+    )
+    assert decision.tier is ReviewEffortTier.DEEP
+    assert ReviewEffortReason.TRAJECTORY_SIGNAL_PRESENT in decision.reasons
+    assert ReviewEffortReason.CROSS_PR_OVERLAP_PRESENT in decision.reasons
+    assert ReviewEffortReason.MULTIPLE_STRUCTURAL_SIGNALS in decision.reasons
+    assert decision.critic_expectation is CriticExpectation.MANDATORY

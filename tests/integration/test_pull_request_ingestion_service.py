@@ -190,6 +190,108 @@ async def test_ingestion_status_is_persisted_as_lowercase_value(
     assert raw_status == "succeeded"
 
 
+class _ExplodingGitHubClient:
+    """Fails loudly on any call -- proves `ingest_closed` never touches
+    the GitHub API at all."""
+
+    async def get_pull_request(self, *, installation_id: int, ref: object) -> PullRequestMetadata:
+        raise AssertionError("ingest_closed must never call get_pull_request")
+
+    async def list_pull_request_files(
+        self, *, installation_id: int, ref: object
+    ) -> list[ChangedFile]:
+        raise AssertionError("ingest_closed must never call list_pull_request_files")
+
+
+async def test_ingest_closed_persists_closed_state_with_zero_github_calls(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    closed_event = dataclasses.replace(
+        EVENT, delivery_id="delivery-closed", action=PullRequestEventAction.CLOSED, merged=False
+    )
+    service = PullRequestIngestionService(
+        session_factory=session_factory,
+        github_client=_ExplodingGitHubClient(),  # type: ignore[arg-type]
+    )
+
+    outcome = await service.ingest_closed(closed_event)
+
+    assert outcome.status is IngestionOutcomeStatus.SUCCEEDED
+
+    async with session_factory() as session:
+        pr = (await session.execute(select(PullRequestModel))).scalar_one()
+        assert pr.state == "closed"
+
+
+async def test_ingest_closed_persists_merged_state(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    merged_event = dataclasses.replace(
+        EVENT, delivery_id="delivery-merged", action=PullRequestEventAction.CLOSED, merged=True
+    )
+    service = PullRequestIngestionService(
+        session_factory=session_factory,
+        github_client=_ExplodingGitHubClient(),  # type: ignore[arg-type]
+    )
+
+    outcome = await service.ingest_closed(merged_event)
+
+    assert outcome.status is IngestionOutcomeStatus.SUCCEEDED
+
+    async with session_factory() as session:
+        pr = (await session.execute(select(PullRequestModel))).scalar_one()
+        assert pr.state == "merged"
+
+
+async def test_ingest_closed_updates_state_of_pr_opened_by_prior_ingest(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """The realistic sequence: `opened` ingests via the full path (fetches
+    metadata/diff), then `closed` arrives later and must flip the
+    already-persisted row's `state` without needing a fresh GitHub call."""
+
+    fake_client = _FakeGitHubClient(metadata=PR_METADATA, files=CHANGED_FILES)
+    service = PullRequestIngestionService(
+        session_factory=session_factory,
+        github_client=fake_client,  # type: ignore[arg-type]
+    )
+    await service.ingest(EVENT)
+
+    closing_client = PullRequestIngestionService(
+        session_factory=session_factory,
+        github_client=_ExplodingGitHubClient(),  # type: ignore[arg-type]
+    )
+    closed_event = dataclasses.replace(
+        EVENT, delivery_id="delivery-closed-after-open", action=PullRequestEventAction.CLOSED, merged=True
+    )
+    outcome = await closing_client.ingest_closed(closed_event)
+
+    assert outcome.status is IngestionOutcomeStatus.SUCCEEDED
+
+    async with session_factory() as session:
+        prs = (await session.execute(select(PullRequestModel))).scalars().all()
+        assert len(prs) == 1
+        assert prs[0].state == "merged"
+
+
+async def test_ingest_closed_is_idempotent_on_duplicate_delivery(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    closed_event = dataclasses.replace(
+        EVENT, delivery_id="delivery-closed-dup", action=PullRequestEventAction.CLOSED, merged=False
+    )
+    service = PullRequestIngestionService(
+        session_factory=session_factory,
+        github_client=_ExplodingGitHubClient(),  # type: ignore[arg-type]
+    )
+
+    first = await service.ingest_closed(closed_event)
+    second = await service.ingest_closed(closed_event)
+
+    assert first.status is IngestionOutcomeStatus.SUCCEEDED
+    assert second.status is IngestionOutcomeStatus.DUPLICATE
+
+
 async def test_ingest_upserts_existing_repository_and_pull_request(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

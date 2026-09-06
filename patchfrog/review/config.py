@@ -104,8 +104,13 @@ CONFIG_SCHEMA_VERSION = 4
 #: patchfrog.trajectory_intelligence.evidence only for the exact
 #: candidate whose surface has undergone repeated structural change
 #: across the current PR's own verified lineage -- empty for every
-#: other candidate.
-REVIEW_PROMPT_VERSION = 10
+#: other candidate. Bumped to 11 for Cross-PR Intelligence Foundation:
+#: an eighth new optional `<cross_pr_intelligence>` user-prompt
+#: section, populated from patchfrog.cross_pr_intelligence.evidence
+#: only for the exact candidate whose surface is also directly changed
+#: in another PR's reviewed head in the same repository -- empty for
+#: every other candidate.
+REVIEW_PROMPT_VERSION = 11
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final
@@ -146,8 +151,14 @@ REVIEW_ENGINE_VERSION = 3
 #: provisional tier *and* unconditionally force mandatory critic
 #: verification for the exact candidate it applies to -- a real tiering
 #: -policy semantics change, defaulting to `False` (byte-identical
-#: behavior for any run with no trajectory signal).
-QUALITY_COST_POLICY_VERSION = 2
+#: behavior for any run with no trajectory signal). Bumped 2 -> 3 for
+#: Cross-PR Intelligence Foundation: `ReviewEffortPolicy.decide_provisional`
+#: gained a second new `cross_pr_signal_present` structural signal
+#: (`ReviewEffortReason.CROSS_PR_OVERLAP_PRESENT`), the same shape and
+#: justification as `trajectory_signal_present` -- a real tiering-policy
+#: semantics change, defaulting to `False` (byte-identical behavior for
+#: any run with no cross-PR overlap signal).
+QUALITY_COST_POLICY_VERSION = 3
 
 DEFAULT_MAX_CANDIDATES = 40
 DEFAULT_MAX_INPUT_TOKENS_PER_CANDIDATE = 12_000

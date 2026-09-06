@@ -296,6 +296,21 @@ class ReviewRunModel(Base):
     trajectory_require_critic_count: Mapped[int] = mapped_column(Integer, default=0)
     trajectory_deepen_context_count: Mapped[int] = mapped_column(Integer, default=0)
 
+    #: Cross-PR Intelligence Foundation
+    #: (:mod:`patchfrog.cross_pr_intelligence`) run-level summary -- the
+    #: bounded output of
+    #: :func:`patchfrog.cross_pr_intelligence.telemetry.summarize_for_persistence`.
+    #: Counts only -- no PR number/author/title column at all: this
+    #: package never publishes a standalone user-facing section and
+    #: its Change Story is never touched either. All default to 0 --
+    #: nullable-safe for rows predating this milestone.
+    cross_pr_peer_count: Mapped[int] = mapped_column(Integer, default=0)
+    cross_pr_overlap_count: Mapped[int] = mapped_column(Integer, default=0)
+    cross_pr_signal_count: Mapped[int] = mapped_column(Integer, default=0)
+    cross_pr_same_changed_symbol_count: Mapped[int] = mapped_column(Integer, default=0)
+    cross_pr_require_critic_count: Mapped[int] = mapped_column(Integer, default=0)
+    cross_pr_deepen_context_count: Mapped[int] = mapped_column(Integer, default=0)
+
 
 class ReviewCandidateModel(Base):
     """One symbol- (or module-region-) centered candidate considered for

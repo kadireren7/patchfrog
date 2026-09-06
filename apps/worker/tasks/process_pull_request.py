@@ -52,6 +52,7 @@ def _reconstruct_event(
     base_sha: str,
     head_sha: str,
     html_url: str,
+    merged: bool,
 ) -> PullRequestWebhookEvent:
     """Rebuild the domain event from the primitive arguments Celery serialized."""
 
@@ -74,6 +75,7 @@ def _reconstruct_event(
         base_sha=base_sha,
         head_sha=head_sha,
         html_url=html_url,
+        merged=merged,
     )
 
 
@@ -98,11 +100,17 @@ async def _ingest(event: PullRequestWebhookEvent, settings: Settings) -> Ingesti
             service = PullRequestIngestionService(
                 session_factory=session_factory, github_client=github_client
             )
-            outcome = await service.ingest(event)
+            # CLOSED (merge or non-merge close) only ever needs the
+            # already-verified webhook payload's own state -- never a
+            # fresh GitHub API fetch, and never a review. Every other
+            # action means "there is a commit that should be reviewed".
+            if event.action is PullRequestEventAction.CLOSED:
+                outcome = await service.ingest_closed(event)
+            else:
+                outcome = await service.ingest(event)
 
-        if outcome.status is IngestionOutcomeStatus.SUCCEEDED:
-            # Only opened/reopened/synchronize ever reach here (see
-            # patchfrog.github.webhooks.parse_pull_request_event) -- every
+        if outcome.status is IngestionOutcomeStatus.SUCCEEDED and event.action is not PullRequestEventAction.CLOSED:
+            # Only opened/reopened/synchronize ever reach here -- every
             # one of those actions means "there is a commit that should
             # be reviewed", so scheduling is unconditional on the action
             # itself; patchfrog.ops.eligibility is what actually decides
@@ -164,6 +172,7 @@ def process_pull_request_event(
     base_sha: str,
     head_sha: str,
     html_url: str,
+    merged: bool = False,
 ) -> str:
     event = _reconstruct_event(
         delivery_id=delivery_id,
@@ -182,6 +191,7 @@ def process_pull_request_event(
         base_sha=base_sha,
         head_sha=head_sha,
         html_url=html_url,
+        merged=merged,
     )
 
     outcome = asyncio.run(_ingest(event, get_settings()))
