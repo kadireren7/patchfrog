@@ -18,8 +18,19 @@ The long-term architecture prefers stronger verification, stronger evidence,
 better feedback calibration, agent interoperability, and explainable merge
 decisions -- over more review comments, more agents, more intelligence
 layers for their own sake, arbitrary numeric scores, or speculative
-architecture inference. See `CLAUDE.md`'s "False-positive discipline"
-section, which governs every milestone below.
+architecture inference.
+
+**False-positive discipline governs every milestone below.** PatchFrog's
+north star is not comment volume -- no milestone here should ship a feature
+whose main output is more review comments. Every milestone in this roadmap
+must be able to answer: what real user/reviewer problem does it solve; why
+does PatchFrog miss it today; what concrete issue can the new evidence
+expose or verify; can it be evaluated; does it increase useful findings
+without unacceptable false positives; and what should be removed or
+deferred if the evidence turns out weak. Signals such as churn, cross-PR
+overlap, cross-repo relation, repository history, or missing context must
+never automatically become defects -- they may only ever strengthen or
+deepen scrutiny of a candidate that already has independent evidence.
 
 ## Completed
 
@@ -36,8 +47,9 @@ section, which governs every milestone below.
 | R | Cross-Repo Intelligence |
 
 Each is a deterministic, non-LLM evidence layer over the repository/PR graph.
-See `CLAUDE.md`'s "Intelligence layer ownership" table and each package's own
-`docs/<package>.md` for what it owns and its exact scope decisions.
+See `docs/agent-orchestration.md`'s "Intelligence layer ownership" table and
+each package's own `docs/<package>.md` for what it owns and its exact scope
+decisions.
 
 ## Current — Review Engine
 
@@ -176,8 +188,14 @@ as available today.
 
 ## Test counts are not review quality
 
-See `CLAUDE.md`'s "Test counts are not review quality" section. A rising
-implementation-test count (engine correctness) is a different claim from
-rising review effectiveness (finding real bugs, not raising false
-positives). The latter is what `validation/review_effectiveness/`
-(introduced in Milestone S) exists to measure, separately.
+Implementation tests prove engine correctness. They do **not** prove
+PatchFrog is a good reviewer -- a rising implementation-test count is a
+different claim from rising review effectiveness (finding real bugs, not
+raising false positives). Never treat "N tests passing" as evidence of
+review quality; that claim needs its own, separate evaluation. The
+north-star metrics for review quality are things like known-bug recall,
+clean-PR precision, false positives per clean PR, critic save rate, and
+execution-confirmed findings -- not comments produced, agent count, or
+intelligence-layer count. `validation/review_effectiveness/` (introduced
+in Milestone S) exists to measure review effectiveness, separately from
+the engine-correctness corpus.

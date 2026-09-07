@@ -16,6 +16,7 @@ pass -> exit 0; at least one failure -> exit 1.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from patchfrog.executable_verification.domain import (
@@ -28,6 +29,16 @@ from patchfrog.executable_verification.sandbox import (
     stderr_excerpt,
     stdout_excerpt,
 )
+
+#: The exact interpreter running PatchFrog itself, resolved to an
+#: absolute path -- never a bare "python3" resolved through the
+#: sandbox's own PATH. This guarantees the sandboxed pytest run uses the
+#: identical interpreter that has pytest installed (a base dependency of
+#: this same install -- see pyproject.toml), whether that is the
+#: worker image's system Python under /usr or a local/CLI dev venv
+#: outside it; patchfrog.executable_verification.sandbox binds whichever
+#: one is actually in use read-only for exactly this reason.
+_PYTHON = sys.executable
 
 #: pytest's own documented exit codes -- see https://docs.pytest.org/en/stable/reference/exit-codes.html
 _EXIT_ALL_PASSED = 0
@@ -46,7 +57,7 @@ async def run_pytest_verification(
     sandbox: VerificationSandbox, *, workspace_root: Path, test_target_path: str, commit_sha: str
 ) -> ExecutableVerificationEvidence:
     collect_result = await sandbox.run(
-        ["python3", "-m", "pytest", "-q", "--collect-only", test_target_path], cwd=workspace_root,
+        [_PYTHON, "-m", "pytest", "-q", "--collect-only", test_target_path], cwd=workspace_root,
     )
     if collect_result.timed_out:
         return ExecutableVerificationEvidence(
@@ -64,7 +75,7 @@ async def run_pytest_verification(
         )
 
     run_result = await sandbox.run(
-        ["python3", "-m", "pytest", "-q", test_target_path], cwd=workspace_root,
+        [_PYTHON, "-m", "pytest", "-q", test_target_path], cwd=workspace_root,
     )
     if run_result.timed_out:
         outcome = VerificationOutcome.TIMEOUT

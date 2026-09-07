@@ -54,36 +54,100 @@ target never triggers a sandbox at all.
 `patchfrog.executable_verification.sandbox.VerificationSandbox` wraps
 the existing, unmodified
 `patchfrog.analysis.subprocess_sandbox.run_sandboxed` with a fixed
-isolation prefix -- it does not reimplement subprocess execution:
+isolation prefix built on `bwrap` (bubblewrap) -- the same purpose-built,
+widely-audited unprivileged-sandboxing primitive Flatpak uses, not
+hand-rolled `pivot_root`/mount-namespace logic:
 
 ```
-unshare --pid --fork --mount-proc --net --map-root-user --
-  prlimit --nproc=<N> --as=<BYTES> --cpu=<SECONDS> --
-    <the real, already-built argv>
+bwrap --unshare-all --die-with-parent --new-session --clearenv
+  --setenv HOME /tmp/home --setenv TMPDIR /tmp ...
+  --ro-bind /usr /usr --symlink usr/bin /bin ...
+  --tmpfs /tmp --dir /tmp/home
+  --bind <disposable workspace> <disposable workspace>
+  --proc /proc --dev /dev --chdir <disposable workspace> --
+    prlimit --nproc=<N> --as=<BYTES> --cpu=<SECONDS> --
+      <the real, already-built argv>
 ```
 
-Empirically verified on this environment (not merely asserted -- see
-latest-summary.md section 3): `--net --map-root-user` genuinely blocks
-network (loopback down by default; an external connection fails with
-"Network is unreachable"); `--pid --fork --mount-proc` genuinely
-isolates the process tree (the sandboxed command becomes PID 1 in its
-own namespace); `prlimit` genuinely constrains process count, address
-space, and CPU time.
+A fresh mount namespace exposes exactly: `/usr` read-only (the entire
+Python/pytest runtime -- the worker image's own system Python, with
+pytest installed as a base dependency, lives under `/usr/local`, nested
+inside `/usr`), the usr-merge symlinks recreated (`/bin`, `/lib`, etc.),
+a local/CLI dev environment's own venv root read-only when the running
+interpreter lives outside `/usr` (a no-op in production), the disposable
+verification workspace read-write, and a private `tmpfs` at `/tmp`
+hosting a throwaway sandbox-owned `HOME` -- never the real worker home,
+and requiring no host-side directory a caller must create or clean up.
+No other host path is bound. Network/PID isolation are unchanged from
+this module's first version.
 
-This is process/network/PID isolation, **not a full container** -- no
-mount namespace, no chroot, no disk-quota enforcement (deferred, see
-"Explicitly deferred" below). `is_sandbox_available()` does not stop at
-checking whether `unshare`/`prlimit` are discoverable on `PATH` -- binary
-presence alone is not sufficient evidence the sandbox actually works. It
-also runs a real, side-effect-free probe through the exact isolation
-prefix used for real verification. This matters concretely: Ubuntu
-24.04+'s default AppArmor restriction on unprivileged `CLONE_NEWUSER`
-blocks `unshare --map-root-user` even when both binaries are present --
-confirmed on GitHub Actions' own `ubuntu-latest` runner. When the probe
-fails, verification fails closed to `SANDBOX_ERROR` before any pytest
-command is ever attempted -- never an unisolated fallback, and never
-misclassified as `UNSUPPORTED` (which means something different: the
-target repository's own test collection failed).
+**Empirically verified, including a real filesystem escape found and
+fixed** (not merely asserted -- see latest-summary.md sections 3 and 22
+for the full transcript): the exact same malicious pytest target that
+previously read the real `$HOME`, an arbitrary file outside the
+disposable workspace (directly and via a planted symlink), and the real
+Docker socket now sees none of them; `/proc/self/environ` shows only the
+sandbox's own minimal environment; network (including loopback) remains
+unreachable; `prlimit` resource limits still genuinely enforce when
+applied *inside* the `bwrap` sandbox (a memory bomb past `--as` raises
+`MemoryError`, a fork bomb past `--nproc` raises `OSError`) -- applying
+`prlimit` *outside* `bwrap` was tried first and found to break `bwrap`'s
+own setup, since `RLIMIT_NPROC` counts against the calling real UID's
+entire host process count until a fresh user namespace scopes it.
+
+`is_sandbox_available()` does not stop at checking whether
+`bwrap`/`prlimit` are discoverable on `PATH` -- binary presence alone is
+not sufficient evidence the sandbox actually works. It runs a real,
+side-effect-free probe exercising the same categories of operation real
+execution depends on (fresh mount namespace, read-only bind, private
+`tmpfs`, fresh `/proc`/`/dev`) via the same cached helper the real
+sandbox uses, so the probe can never drift from what execution actually
+requires. When the probe fails, verification fails closed to
+`SANDBOX_ERROR` before any pytest command is ever attempted -- never an
+unisolated fallback, and never misclassified as `UNSUPPORTED` (which
+means something different: the target repository's own test collection
+failed). Two independent, empirically confirmed hosts fail this probe
+today: GitHub Actions' `ubuntu-latest` runner, and PatchFrog's own
+default, non-privileged worker Docker container -- see "Production
+readiness" below.
+
+## Production readiness
+
+**Executable Verification's real execution capability is currently
+`SANDBOX_ERROR` (unavailable) under PatchFrog's default self-hosted
+worker deployment, and this is by design, not a bug.** Confirmed by
+running the real capability probe inside an actual built `worker` image
+container, launched exactly as it ships (non-root, no `--privileged`, no
+added capabilities): `bwrap`/`prlimit` are both present, but the
+underlying `unshare`/mount operations they depend on fail under Docker's
+own default seccomp/AppArmor profile for a non-privileged container --
+the identical restriction category that blocks it on GitHub Actions'
+`ubuntu-latest` runner, confirmed to already have applied to the simpler
+mechanism this package originally shipped, not something this
+correction introduced.
+
+Making real execution available requires an explicit, operator-made
+infrastructure decision -- this repository does not make one silently.
+Systematic testing found no combination of `--cap-add SYS_ADMIN`,
+`--security-opt seccomp=unconfined`, and `--security-opt
+apparmor=unconfined` (individually or together) sufficient in a default
+`docker run`. Reaching a working configuration needs one of: granting
+the worker container broader capabilities the current Dockerfile
+deliberately does not request, adopting a container runtime purpose-built
+for nested unprivileged sandboxing (e.g. `sysbox-runc`), or running
+verification on a dedicated, non-containerized execution host. `bwrap`
+itself is installed in the worker image (`docker/Dockerfile`) precisely
+so the capability probe is correct the moment an operator's own
+deployment grants it -- installing the binary carries no security cost on
+its own, since the functional probe (not binary presence) gates whether
+it can ever be invoked.
+
+Until that infrastructure decision is made, every eligible candidate's
+verification attempt reports `SANDBOX_ERROR`, folded into the existing
+count-only telemetry -- never a crash, never a silently degraded
+alternate execution path. Domain model, eligibility, result model,
+telemetry, and the Review Effectiveness Benchmark foundation are all
+fully functional regardless of sandbox availability.
 
 ## No dependency installation, ever
 
@@ -213,8 +277,12 @@ package.
 
 `STATIC_REPRODUCTION`, `GENERATED_TARGETED_TEST`, non-Python language
 adapters, dependency installation of any kind, cross-head result
-caching, repository-config-controlled verification scope,
-mount-namespace/chroot filesystem isolation, disk-quota enforcement, and
-any generated-test or auto-fix capability. See
+caching, repository-config-controlled verification scope, disk-quota
+enforcement, and any generated-test or auto-fix capability. See
 `validation/executable_verification/latest-summary.md` section 20 for
 the full scope decision.
+
+Filesystem confinement (mount namespace + read-only runtime bind + a
+private, disposable `tmpfs`/`HOME`) was originally deferred here but has
+since been implemented -- see "Sandbox" above and latest-summary.md
+section 22.

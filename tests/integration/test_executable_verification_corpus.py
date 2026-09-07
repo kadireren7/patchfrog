@@ -6,15 +6,20 @@ round trip, except where a scenario is explicitly about pure
 classification logic already covered at the unit level).
 
 Every sandbox-level test in this file genuinely spawns
-``unshare``/``prlimit``/``python3`` subprocesses -- this is the
-strongest possible verification that the isolation guarantees in
+``bwrap``/``prlimit``/the real Python interpreter as subprocesses -- this
+is the strongest possible verification that the isolation guarantees in
 ``validation/executable_verification/latest-summary.md`` sections 2-3
-actually hold, not merely that the code compiles.
+actually hold, not merely that the code compiles. Sections 26+ cover the
+filesystem-confinement correction specifically: a real escape (real
+``$HOME``, an arbitrary outside-workspace file, and the real Docker
+socket, all readable/visible) was empirically confirmed against this
+package's first version before that correction landed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import tempfile
 import time
@@ -45,7 +50,9 @@ from patchfrog.executable_verification.service import (
 )
 from patchfrog.review.domain import ReviewCandidate, ReviewCandidateReason
 
-pytestmark = pytest.mark.skipif(not is_sandbox_available(), reason="unshare/prlimit not available on this host")
+pytestmark = pytest.mark.skipif(
+    not is_sandbox_available(), reason="bwrap/prlimit-based filesystem confinement not available on this host"
+)
 
 
 def _candidate(*, file_path: str = "src/capture.py", qualified_name: str | None = "capture_payment") -> ReviewCandidate:
@@ -559,5 +566,335 @@ async def test_case_report_stamped_with_current_version() -> None:
             local=True, budget=budget, root_path=workspace,
         )
         assert report.version == EXECUTABLE_VERIFICATION_VERSION
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+# ==== Filesystem confinement (security correction round) ====
+#
+# A real escape was empirically confirmed against this package's first
+# version, before this correction: a malicious pytest target could read
+# the real worker $HOME, an arbitrary file outside the disposable
+# workspace via both a direct absolute path and a symlink, and observe
+# the real Docker socket -- see
+# validation/executable_verification/latest-summary.md for the full
+# transcript (including inside a real, non-privileged worker Docker
+# container). Every test below genuinely spawns the real bwrap-based
+# sandbox against a synthetic sentinel value -- never a real credential
+# -- and proves the escape it names is now blocked.
+
+
+# ---- 26. Real HOME is never inherited ----
+
+
+async def test_case_real_home_not_inherited() -> None:
+    workspace = _workspace()
+    real_home = os.path.expanduser("~")
+    try:
+        _write(
+            workspace, "tests/test_home.py",
+            "import os\n\n"
+            f"def test_home_is_not_real():\n"
+            f"    assert os.environ.get('HOME') != {real_home!r}\n",
+        )
+        sandbox = VerificationSandbox(timeout_seconds=10.0)
+        evidence = await run_pytest_verification(
+            sandbox, workspace_root=workspace, test_target_path="tests/test_home.py", commit_sha="a" * 40,
+        )
+        assert evidence.outcome is VerificationOutcome.PASSED, evidence.stdout_excerpt
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+# ---- 27. External HOME sentinel cannot be read (synthetic value only) ----
+
+
+async def test_case_external_home_sentinel_unreadable() -> None:
+    workspace = _workspace()
+    real_home = Path(os.path.expanduser("~"))
+    sentinel_name = ".patchfrog_test_sentinel_do_not_commit"
+    sentinel_path = real_home / sentinel_name
+    sentinel_value = "synthetic-home-sentinel-value"
+    created_here = not sentinel_path.exists()
+    try:
+        if created_here:
+            sentinel_path.write_text(sentinel_value)
+        _write(
+            workspace, "tests/test_home_sentinel.py",
+            "import os\n\n"
+            "def test_cannot_read_home_sentinel():\n"
+            "    home = os.environ.get('HOME', '')\n"
+            f"    target = os.path.join(home, {sentinel_name!r})\n"
+            "    try:\n"
+            "        with open(target) as f:\n"
+            f"            assert f.read() != {sentinel_value!r}, 'escaped: read real home sentinel'\n"
+            "    except FileNotFoundError:\n"
+            "        pass\n",
+        )
+        sandbox = VerificationSandbox(timeout_seconds=10.0)
+        evidence = await run_pytest_verification(
+            sandbox, workspace_root=workspace, test_target_path="tests/test_home_sentinel.py", commit_sha="a" * 40,
+        )
+        assert evidence.outcome is VerificationOutcome.PASSED, evidence.stdout_excerpt
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+        if created_here:
+            sentinel_path.unlink(missing_ok=True)
+
+
+# ---- 28. External filesystem sentinel (outside workspace, outside HOME) cannot be read ----
+
+
+async def test_case_external_filesystem_sentinel_unreadable() -> None:
+    workspace = _workspace()
+    outside_dir = Path(tempfile.mkdtemp(prefix="patchfrog-verify-outside-"))
+    sentinel_value = "synthetic-outside-sentinel-value"
+    (outside_dir / "sentinel.txt").write_text(sentinel_value)
+    try:
+        _write(
+            workspace, "tests/test_outside.py",
+            "def test_cannot_read_outside_sentinel():\n"
+            "    try:\n"
+            f"        with open({str(outside_dir / 'sentinel.txt')!r}) as f:\n"
+            f"            assert f.read() != {sentinel_value!r}, 'escaped workspace confinement'\n"
+            "    except FileNotFoundError:\n"
+            "        pass\n",
+        )
+        sandbox = VerificationSandbox(timeout_seconds=10.0)
+        evidence = await run_pytest_verification(
+            sandbox, workspace_root=workspace, test_target_path="tests/test_outside.py", commit_sha="a" * 40,
+        )
+        assert evidence.outcome is VerificationOutcome.PASSED, evidence.stdout_excerpt
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+        shutil.rmtree(outside_dir, ignore_errors=True)
+
+
+# ---- 29. Verifier workspace itself remains fully readable/executable ----
+
+
+async def test_case_verifier_workspace_remains_readable() -> None:
+    workspace = _workspace()
+    try:
+        _write(workspace, "src/helper_data.txt", "workspace-local-data")
+        _write(
+            workspace, "tests/test_workspace_readable.py",
+            "def test_can_read_own_workspace_file():\n"
+            "    with open('src/helper_data.txt') as f:\n"
+            "        assert f.read() == 'workspace-local-data'\n",
+        )
+        sandbox = VerificationSandbox(timeout_seconds=10.0)
+        evidence = await run_pytest_verification(
+            sandbox, workspace_root=workspace, test_target_path="tests/test_workspace_readable.py", commit_sha="a" * 40,
+        )
+        assert evidence.outcome is VerificationOutcome.PASSED, evidence.stdout_excerpt
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+# ---- 30. Disposable sandbox HOME/tmp remain writable when pytest needs them ----
+
+
+async def test_case_disposable_home_and_tmp_writable() -> None:
+    workspace = _workspace()
+    try:
+        _write(
+            workspace, "tests/test_writable.py",
+            "import os\n\n"
+            "def test_can_write_under_home_and_tmp():\n"
+            "    home = os.environ['HOME']\n"
+            "    with open(os.path.join(home, 'scratch.txt'), 'w') as f:\n"
+            "        f.write('ok')\n"
+            "    with open('/tmp/scratch.txt', 'w') as f:\n"
+            "        f.write('ok')\n",
+        )
+        sandbox = VerificationSandbox(timeout_seconds=10.0)
+        evidence = await run_pytest_verification(
+            sandbox, workspace_root=workspace, test_target_path="tests/test_writable.py", commit_sha="a" * 40,
+        )
+        assert evidence.outcome is VerificationOutcome.PASSED, evidence.stdout_excerpt
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+# ---- 31. Docker socket unavailable ----
+
+
+async def test_case_docker_socket_unavailable() -> None:
+    workspace = _workspace()
+    try:
+        _write(
+            workspace, "tests/test_docker.py",
+            "import os\n\n"
+            "def test_no_docker_socket():\n"
+            "    assert not os.path.exists('/var/run/docker.sock')\n",
+        )
+        sandbox = VerificationSandbox(timeout_seconds=10.0)
+        evidence = await run_pytest_verification(
+            sandbox, workspace_root=workspace, test_target_path="tests/test_docker.py", commit_sha="a" * 40,
+        )
+        assert evidence.outcome is VerificationOutcome.PASSED, evidence.stdout_excerpt
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+# ---- 32. /proc/self/environ contains no parent/worker secrets ----
+
+
+async def test_case_proc_environ_has_no_parent_secrets() -> None:
+    workspace = _workspace()
+    marker = "patchfrog-secret-marker-should-never-appear"
+    try:
+        _write(
+            workspace, "tests/test_proc_environ.py",
+            "def test_proc_environ_is_minimal():\n"
+            "    with open('/proc/self/environ', 'rb') as f:\n"
+            "        content = f.read()\n"
+            f"    assert {marker!r}.encode() not in content\n"
+            "    assert b'DATABASE_URL' not in content\n"
+            "    assert b'GITHUB_PRIVATE_KEY' not in content\n",
+        )
+        sandbox = VerificationSandbox(timeout_seconds=10.0)
+        evidence = await run_pytest_verification(
+            sandbox, workspace_root=workspace, test_target_path="tests/test_proc_environ.py", commit_sha="a" * 40,
+        )
+        assert evidence.outcome is VerificationOutcome.PASSED, evidence.stdout_excerpt
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+# ---- 33. Malicious symlink cannot escape the intended filesystem boundary ----
+
+
+async def test_case_symlink_escape_blocked() -> None:
+    workspace = _workspace()
+    outside_dir = Path(tempfile.mkdtemp(prefix="patchfrog-verify-symlink-outside-"))
+    sentinel_value = "synthetic-symlink-target-sentinel"
+    (outside_dir / "sentinel.txt").write_text(sentinel_value)
+    try:
+        _write(workspace, "tests/__init__.py", "")
+        symlink_path = workspace / "tests" / "evil_link.txt"
+        symlink_path.symlink_to(outside_dir / "sentinel.txt")
+        _write(
+            workspace, "tests/test_symlink_escape.py",
+            "def test_symlink_escape_blocked():\n"
+            "    try:\n"
+            "        with open('tests/evil_link.txt') as f:\n"
+            f"            assert f.read() != {sentinel_value!r}, 'escaped via symlink'\n"
+            "    except FileNotFoundError:\n"
+            "        pass\n",
+        )
+        sandbox = VerificationSandbox(timeout_seconds=10.0)
+        evidence = await run_pytest_verification(
+            sandbox, workspace_root=workspace, test_target_path="tests/test_symlink_escape.py", commit_sha="a" * 40,
+        )
+        assert evidence.outcome is VerificationOutcome.PASSED, evidence.stdout_excerpt
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+        shutil.rmtree(outside_dir, ignore_errors=True)
+
+
+# ---- 34. No weaker fallback -- sandbox unavailable never silently runs unisolated ----
+
+
+async def test_case_no_weaker_fallback_when_sandbox_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    import patchfrog.executable_verification.service as svc
+
+    monkeypatch.setattr(svc, "is_sandbox_available", lambda: False)
+    workspace = _workspace()
+    try:
+        # Even a target that would trivially confirm a failure unsandboxed
+        # must never be executed once the capability check fails.
+        _write(workspace, "tests/test_capture.py", "def test_fail():\n    assert False\n")
+        companion = _companion(source_file_path="src/capture.py", expected_file_path="tests/test_capture.py")
+        budget = VerificationBudget()
+        report = await build_executable_verification_report(
+            candidate=_candidate(), expected_companions=(companion,), commit_sha="a" * 40, local=True,
+            budget=budget, root_path=workspace,
+        )
+        assert report.evidence is not None
+        assert report.evidence.outcome is VerificationOutcome.SANDBOX_ERROR
+        assert report.evidence.exit_code is None
+        assert report.evidence.stdout_excerpt == ""
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+# ---- 35. Internal disposable workspace copy is actually removed after a real run ----
+
+
+async def test_case_internal_disposable_copy_actually_removed() -> None:
+    """test_case_cleanup_after_success/_timeout above confirm the
+    *original* root_path is never deleted -- this confirms the other
+    half: the internal disposable copy build_executable_verification_report
+    makes (a fresh tempfile.mkdtemp under the system tmp root) is actually
+    removed afterward, success or timeout, not merely left to accumulate."""
+
+    tmp_root = Path(tempfile.gettempdir())
+
+    def _verify_dirs() -> set[str]:
+        return {p.name for p in tmp_root.glob("patchfrog-verify-*") if p.is_dir()}
+
+    workspace = _workspace()
+    try:
+        _write(workspace, "tests/test_capture.py", "def test_pass():\n    assert 1 == 1\n")
+        companion = _companion(source_file_path="src/capture.py", expected_file_path="tests/test_capture.py")
+        budget = VerificationBudget()
+        before = _verify_dirs()
+        await build_executable_verification_report(
+            candidate=_candidate(), expected_companions=(companion,), commit_sha="a" * 40, local=True,
+            budget=budget, root_path=workspace,
+        )
+        after = _verify_dirs()
+        # No new patchfrog-verify-* directory left behind by this call.
+        assert after - before == set()
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+# ---- 36. Timeout leaves no leaked sandbox process behind ----
+
+
+async def test_case_timeout_leaves_no_leaked_process() -> None:
+    workspace = _workspace()
+    try:
+        _write(workspace, "tests/test_capture.py", "import time\n\ndef test_hangs():\n    time.sleep(30)\n")
+        sandbox = VerificationSandbox(timeout_seconds=2.0)
+        await run_pytest_verification(
+            sandbox, workspace_root=workspace, test_target_path="tests/test_capture.py", commit_sha="a" * 40,
+        )
+        await asyncio.sleep(0.5)
+        proc = await asyncio.create_subprocess_exec(
+            "pgrep", "-f", "test_capture.py", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        assert stdout.strip() == b"", f"leaked process(es) after timeout: {stdout!r}"
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+# ---- 37. IPv6/loopback also denied by default, not merely the tested external host ----
+
+
+async def test_case_loopback_also_denied() -> None:
+    workspace = _workspace()
+    try:
+        _write(
+            workspace, "tests/test_loopback.py",
+            "import socket\n\n"
+            "def test_loopback_unreachable():\n"
+            "    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\n"
+            "    s.settimeout(1)\n"
+            "    try:\n"
+            "        s.connect(('127.0.0.1', 80))\n"
+            "        assert False, 'loopback was reachable'\n"
+            "    except OSError:\n"
+            "        pass\n",
+        )
+        sandbox = VerificationSandbox(timeout_seconds=10.0)
+        evidence = await run_pytest_verification(
+            sandbox, workspace_root=workspace, test_target_path="tests/test_loopback.py", commit_sha="a" * 40,
+        )
+        assert evidence.outcome is VerificationOutcome.PASSED, evidence.stdout_excerpt
     finally:
         shutil.rmtree(workspace, ignore_errors=True)

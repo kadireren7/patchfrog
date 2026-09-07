@@ -84,19 +84,20 @@ input, indexed source). Explicitly modeled threats and their mitigation:
 
 | Threat | Mitigation |
 |---|---|
-| Fork PR malicious code | Verification only ever targets one already-discovered test *file* (never arbitrary repository code), inside full process/network/PID isolation |
+| Fork PR malicious code | Verification only ever targets one already-discovered test *file* (never arbitrary repository code), inside full process/network/PID/filesystem isolation |
 | Package install scripts | **Never installed** (section 1's dependency finding; no `pip install`/`npm install`/lifecycle scripts of any kind triggered by verification, ever) |
 | Makefile arbitrary commands | Never invoked -- verification's only command shape is a fixed, deterministic `python3 -m pytest` argv, never a Makefile target |
-| pytest plugins / conftest.py / test fixtures / compiler hooks | Not specifically defended against beyond the sandbox boundary itself (see section 3's own limitation) -- a plugin/fixture executes as the same unprivileged, network-isolated, resource-capped process as the test itself |
+| pytest plugins / conftest.py / test fixtures / compiler hooks | Not specifically defended against beyond the sandbox boundary itself -- a plugin/fixture executes as the same unprivileged, network-isolated, filesystem-confined, resource-capped process as the test itself |
 | Shell injection | Structurally impossible -- argv arrays only, `shell=True` never used (reuses `run_sandboxed`'s own existing guarantee) |
-| Symlink / filesystem escape | Verification runs against a **fresh, disposable copy** of the snapshot (never the original), inside a temp directory it owns; a symlink inside the repository pointing outside that directory can still be *followed* by the OS (no mount-namespace/chroot in v1 -- see section 3), but there is nothing sensitive to read (no secrets in the sandboxed env) and no network to exfiltrate over |
-| Environment / credential theft | The sandboxed process receives only `PATH`/`HOME`/`LANG`/`LC_ALL` (`run_sandboxed`'s existing allowlist) -- no `GITHUB_*`, no `DATABASE_URL`, no `REDIS_URL`, no `ANTHROPIC_API_KEY`/`GEMINI_API_KEY`, no Cloud credentials of any kind |
-| Network exfiltration | `unshare --net --map-root-user` gives the process its own, unconfigured network namespace -- verified empirically (see section 4): even loopback is down by default, and a raw socket connection attempt to an external host fails with `Network is unreachable` |
-| Fork bombs / process explosion | `unshare --pid --fork --mount-proc` gives the process its own PID namespace (verified: the sandboxed command becomes PID 1 inside it), and `prlimit --nproc=N` caps the process count -- verified: exceeding it produces "Cannot fork" |
-| Memory / CPU exhaustion | `prlimit --as=BYTES --cpu=SECONDS` caps address space and CPU time; `run_sandboxed`'s own wall-clock timeout is the final backstop |
-| Disk exhaustion | Not separately capped in v1 (no disk-quota mechanism exists in this codebase) -- documented limitation, mitigated by the same wall-clock timeout and by the disposable workspace being deleted immediately after |
-| Docker socket / host mounts / cloud metadata endpoints | None are ever passed to the sandboxed process -- it inherits no Docker socket, no host bind mount, and the network-namespace isolation above also blocks reaching a cloud metadata endpoint (e.g. `169.254.169.254`) |
+| Symlink / filesystem escape | **Corrected (section 22)**: a symlink inside the workspace pointing outside it was empirically confirmed followable and readable in this package's first version -- now blocked by real mount-namespace confinement (`bwrap`): the symlink target simply does not exist inside the sandbox's own filesystem view, confirmed empirically against the exact same escape attempt that previously succeeded |
+| Environment / credential theft | The sandboxed process receives only a fixed, sandbox-owned `PATH`/`HOME`/`TMPDIR`/`XDG_CACHE_HOME`/`PYTHONPYCACHEPREFIX`/`LANG`/`LC_ALL` -- no `GITHUB_*`, no `DATABASE_URL`, no `REDIS_URL`, no `ANTHROPIC_API_KEY`/`GEMINI_API_KEY`, no Cloud credentials of any kind, and (since section 22) no real worker `HOME` either |
+| Network exfiltration | `bwrap --unshare-all` (without `--share-net`) gives the process its own, unconfigured network namespace -- verified empirically (see section 4 and 22.3): even loopback is down by default, and a raw socket connection attempt to an external host fails with `Network is unreachable` |
+| Fork bombs / process explosion | The fresh PID namespace (verified: the sandboxed command becomes an early PID inside it), and `prlimit --nproc=N` (applied *inside* the sandbox -- section 22.3) caps the process count -- verified: a real fork loop is blocked by `OSError` at the configured ceiling |
+| Memory / CPU exhaustion | `prlimit --as=BYTES --cpu=SECONDS` (applied inside the sandbox) caps address space and CPU time -- verified: a real memory allocation past the `--as` ceiling raises `MemoryError`; `run_sandboxed`'s own wall-clock timeout is the final backstop |
+| Disk exhaustion | Not separately capped in v1 (no disk-quota mechanism exists in this codebase) -- documented limitation, mitigated by the same wall-clock timeout, the disposable workspace being deleted immediately after, and `/tmp` now being a private, disposable `tmpfs` rather than shared host disk |
+| Docker socket / host mounts / cloud metadata endpoints | None are ever passed to the sandboxed process, and (since section 22) the mount namespace no longer exposes the host filesystem at all outside the explicit runtime/workspace binds -- empirically confirmed `/var/run/docker.sock` is not visible; the network-namespace isolation above also blocks reaching a cloud metadata endpoint (e.g. `169.254.169.254`) |
 | Git credentials / GitHub App tokens / provider keys | Never present in the sandboxed environment at all (allowlist, section above) |
+| Real host filesystem outside the workspace (e.g. worker `$HOME`, application state, arbitrary host paths) | **Corrected (section 22)**: this package's first version had no defense here at all -- a real escape was empirically confirmed and fixed by `bwrap`'s mount-namespace confinement, which now exposes only `/usr` (read-only, for the Python/pytest runtime), the disposable workspace (read-write), and a private, disposable `tmpfs`/`HOME` |
 
 ## 3. Absolute security requirements -- verified, not assumed
 
@@ -125,26 +126,36 @@ before being relied upon (not merely asserted):
   during collection correctly produces a collection error (exit 2) --
   never a crash, never a false "confirmed failure."
 
-**Known, honestly-documented limitation**: this is process/network/PID
--namespace isolation, **not** a full container (no mount namespace, no
-chroot, no pivot_root). The sandboxed process still sees the real host
-filesystem outside its own disposable workspace and runs as the same
-non-root user as the worker process itself (defense in depth: the Docker
-worker image already runs as `USER patchfrog`, never root). There is
-nothing sensitive for it to read (no secrets in its environment) and no
-network to exfiltrate anything over, but a sufficiently determined
-malicious test *could* still attempt to read arbitrary host files the
-invoking OS user already has permission to read. Full filesystem
-isolation (mount namespace + bind-mounted, read-only source +
-tmpfs-backed scratch) is deferred -- doing it *correctly* is
-meaningfully more infrastructure than a v1 foundation should attempt, and
-getting it subtly wrong would be worse than not attempting it. **This
-sandbox's strength is also host/container-dependent**: `unshare`
-creating new namespaces may be blocked by a hardened container's default
-seccomp/AppArmor profile. Verification therefore **fails closed**: if
-`unshare`/`prlimit` are not both discoverable (`shutil.which`) at
-eligibility-check time, the result is `SANDBOX_ERROR`/no execution --
-never a silent, unisolated fallback.
+**Corrected (see section 22 for the full narrative): this is now real
+filesystem confinement, not merely process/network/PID isolation.** An
+earlier version of this document claimed process/network/PID isolation
+alone was an acceptable v1 boundary because "there is nothing sensitive
+for [a malicious test] to read (no secrets in its environment)." A
+security correction round found that claim insufficient and demanded
+empirical proof -- the proof showed a real escape (the actual worker
+$HOME, an arbitrary file outside the disposable workspace, and the real
+Docker socket were all readable), which is now fixed by routing
+execution through `bwrap` (bubblewrap) with an explicit, minimal
+read-only runtime bind plus a private `tmpfs`, rather than the bare
+`unshare`/`prlimit` composition described above. Section 22 has the full
+empirical transcript, including a critical finding: the standard,
+non-privileged worker Docker container **cannot** create the required
+namespaces at all under its current default security configuration --
+true of both the original mechanism and this correction -- so
+verification fails closed there too, honestly, rather than silently
+degrading to unisolated execution. **This sandbox's strength is
+host/container-dependent, confirmed in two independent, empirically
+tested ways**: GitHub Actions' `ubuntu-latest` runner (AppArmor's
+unprivileged-`CLONE_NEWUSER` restriction) and PatchFrog's own default,
+non-privileged worker Docker container (Docker's own default seccomp
+profile blocking the `mount()` operations bwrap needs). Verification
+therefore **fails closed**: :func:`is_sandbox_available` runs a real
+functional probe exercising the same mount-namespace/bind/tmpfs
+operations real verification depends on -- binary presence
+(`shutil.which`) alone is never sufficient evidence. See section 22 for
+exactly what additional infrastructure would be required for production
+execution to actually activate, and why that decision is left to the
+operator rather than made silently here.
 
 **Correction found via real CI, not merely local testing**: the first
 push of this milestone's PR failed 7 real integration tests on GitHub
@@ -405,3 +416,219 @@ filesystem isolation, disk-quota enforcement.
 
 Agent Handoff / MCP, OpenAI provider, Model Router, Merge Readiness,
 Cloud. Implementation proceeds now that this audit is complete.
+
+## 22. Filesystem confinement -- security correction round
+
+This section documents a full correction round that happened **after**
+this milestone's PR was opened and CI-green, prompted by an explicit
+security review that refused to accept process/network/PID isolation
+alone as a credible boundary for executing hostile, repository-controlled
+code. It found the refusal correct.
+
+**22.1 -- Empirical escape, confirmed before any fix.** Using the
+merged, CI-passing `VerificationSandbox` exactly as it shipped (`unshare
+--pid --fork --mount-proc --net --map-root-user -- prlimit ... --
+python3 -m pytest ...`), a real pytest target running inside it was
+able to:
+
+- Read the real invoking user's `$HOME/.bashrc` in full.
+- Read an arbitrary synthetic-sentinel file placed outside the
+  disposable verification workspace, both via a direct absolute path and
+  via a symlink planted inside the workspace pointing at it.
+- Observe that `/var/run/docker.sock` exists (visible, not merely
+  guessed at).
+- Read `/proc/self/environ` and see the real `PATH`/`HOME` of the
+  invoking process (not secrets -- those were never in the allowlisted
+  environment to begin with -- but real host paths, confirming no
+  filesystem confinement existed at all).
+
+No credential or real secret was ever read (none was ever placed in the
+sandboxed environment, by design, both before and after this
+correction) -- but the filesystem boundary itself was proven absent, not
+merely theoretical.
+
+**22.2 -- Fix: bubblewrap-based mount-namespace confinement.**
+`patchfrog/executable_verification/sandbox.py` now routes every
+execution through `bwrap` (bubblewrap) -- the same purpose-built,
+widely-audited unprivileged-sandboxing primitive Flatpak uses -- rather
+than hand-rolled `pivot_root`/mount-namespace logic. A fresh mount
+namespace exposes exactly:
+
+- `/usr`, read-only (covers the entire Python/pytest runtime -- the
+  worker image's own system Python, with pytest installed as a base
+  dependency, lives under `/usr/local`, itself nested inside `/usr`).
+- The usr-merge symlinks (`/bin`, `/sbin`, `/lib`, `/lib64` -> `/usr/...`)
+  recreated as symlinks, not bound as directories (binding the symlink
+  file itself, rather than recreating it, was empirically found to break
+  the dynamic linker -- `execvp: No such file or directory` -- during
+  this correction).
+- A local/CLI dev environment's own venv root, read-only, *only* when
+  the running interpreter lives outside `/usr` (computed once from
+  `sys.prefix`, shared by the real sandbox and its own probe so they can
+  never drift apart) -- a no-op in production, where the system Python
+  already covers this.
+- The disposable verification workspace itself, read-write, and nothing
+  else from the host.
+- A private `tmpfs` at `/tmp`, hosting a throwaway, sandbox-owned `HOME`
+  (`/tmp/home`, created via `bwrap --dir`) -- never the real worker home,
+  and requiring no host-side directory for a caller to create or clean
+  up (it vanishes with the sandbox). `TMPDIR`, `XDG_CACHE_HOME`, and
+  `PYTHONPYCACHEPREFIX` all point inside this same private tmpfs.
+- A fresh `/proc` and minimal `/dev`.
+
+No other host path is bound, read-only or otherwise.
+
+**22.3 -- Empirical re-verification after the fix, same exact attack
+attempted.** The identical malicious test file used in 22.1 was re-run
+through the corrected sandbox:
+
+- Real `$HOME` read attempt: `FileNotFoundError` (the disposable
+  `/tmp/home` has no `.bashrc`).
+- Outside-workspace sentinel read attempt (direct path): not visible.
+- Outside-workspace sentinel read attempt (via a symlink planted inside
+  the workspace): not visible -- the symlink target resolves to nothing
+  inside the sandbox's own mount namespace.
+- `/var/run/docker.sock`: `os.path.exists` returns `False`.
+- `/proc/self/environ`: contains only the sandbox's own minimal,
+  disposable environment (`PATH`/`HOME`/`TMPDIR`/`XDG_CACHE_HOME`/
+  `PYTHONPYCACHEPREFIX`/`LANG`/`LC_ALL`/`PWD`) -- no real host path, no
+  real username.
+- Network: still denied (`Network is unreachable`), including loopback.
+- `prlimit` resource limits still genuinely enforce **when applied
+  inside the `bwrap` sandbox** (a memory allocation past `--as` raises
+  `MemoryError`; a fork loop past `--nproc` raises `OSError` after
+  ~62 successful forks against a `--nproc=64` ceiling) -- applying
+  `prlimit` *outside* `bwrap` was tried first and found to break
+  `bwrap`'s own internal setup entirely (`Creating new namespace failed:
+  Resource temporarily unavailable`), because `RLIMIT_NPROC` counts
+  against the calling **real UID's entire host process count** (every
+  unrelated process this developer's desktop was already running) until
+  a fresh user namespace exists to scope it -- exactly why `prlimit` must
+  run *inside* `bwrap`, never around it.
+- Timeout/kill: unchanged and re-verified -- a 30-second sleep under a
+  2-second sandbox timeout is killed in ~2s (not ~30s), `timed_out=True`,
+  and a `pgrep` sweep after the kill finds no leaked process.
+- Cleanup: unchanged and re-verified -- the internal disposable
+  workspace copy (a fresh `tempfile.mkdtemp`) is actually removed after
+  both a successful and a timed-out run, and the original `root_path`
+  passed in by the caller is never mutated (file mtimes unchanged, no
+  `.pytest_cache` written back into it).
+- A normal, non-malicious pytest run (collect-only then real run) still
+  passes end-to-end through the exact production code path
+  (`build_executable_verification_report` -> `run_pytest_verification` ->
+  `VerificationSandbox`), including the disposable `HOME`/`tmpfs` being
+  writable when pytest wants to write there.
+
+All of the above was run through the real, unmocked code path -- not a
+hand-constructed `ExecutableVerificationEvidence` standing in for a
+subprocess round trip -- and is now pinned by
+`tests/integration/test_executable_verification_corpus.py` sections
+26-37 (12 new scenarios) plus `tests/unit/test_executable_verification_sandbox.py`
+(18 tests covering `is_sandbox_available`/`_probe_isolation`/
+`_runtime_bind_args` deterministically).
+
+**22.4 -- The functional probe was extended to match, not just checked
+again.** `is_sandbox_available` no longer probes a bare
+`unshare --map-root-user`; `_probe_isolation` now runs the *exact same
+category* of operation the real sandbox depends on (fresh mount
+namespace, read-only `/usr` bind plus usr-merge symlinks, private
+`tmpfs`, fresh `/proc`/`/dev`) via the same cached `_runtime_bind_args()`
+helper the real sandbox uses, so the probe can never silently drift from
+what execution actually requires. A host that can create a plain PID/net
+namespace but cannot establish the filesystem confinement is correctly
+reported unavailable, not merely "isolated enough."
+
+**22.5 -- Critical finding: the standard worker Docker container cannot
+run this at all, and never could.** Testing this correction inside a
+*real* `docker run` of the actual `worker` image target -- not this
+development host -- with no extra flags beyond running as the same
+non-root `patchfrog`-equivalent user the Dockerfile already uses
+(`--user 1000:1000`, no `--privileged`, no added capabilities) found
+that even the plain `unshare --pid --fork --net --map-root-user`
+call **already merged before this correction** fails there
+(`unshare: unshare failed: Operation not permitted`) -- before ever
+reaching the filesystem-confinement logic this correction adds. This is
+a pre-existing limitation of the deployment shape, not a regression
+introduced here: the first version of this sandbox never actually
+worked inside PatchFrog's own default worker container either, and its
+own audit (section 3, original text) never tested that specific
+context -- only this bare development host.
+
+Systematic empirical testing of what it would take to make this work in
+a default `docker run` (no `--privileged`, no Docker-in-Docker) found no
+combination of `--cap-add SYS_ADMIN`, `--security-opt seccomp=unconfined`,
+and `--security-opt apparmor=unconfined` -- individually or all three
+together -- sufficient. Loosening AppArmor alone gets past an initial
+"cannot change root filesystem propagation" failure to a later "mount
+/proc failed: Operation not permitted," and adding `CAP_SYS_ADMIN` and an
+unconfined seccomp profile on top still does not resolve that second
+failure. Reaching a working configuration would require either
+`--privileged` (explicitly out of scope per this correction's own
+instructions), Docker-in-Docker (also explicitly out of scope), or moving
+to a container runtime purpose-built for nested unprivileged sandboxing
+(e.g. `sysbox-runc`) or a dedicated, non-containerized execution host --
+all of which are deployment/infrastructure decisions for an operator to
+make explicitly, not something this engine PR silently assumes, requests,
+or downgrades isolation to work around.
+
+**22.6 -- Production-readiness conclusion.** `is_sandbox_available()`'s
+real functional probe correctly returns `False` inside PatchFrog's own
+default, non-privileged worker Docker image (confirmed directly inside a
+built image, not inferred) -- meaning **Executable Verification's
+EXISTING_TARGETED_TEST execution reports `SANDBOX_ERROR` for every
+eligible candidate under the default self-hosted deployment, exactly as
+designed, and never runs unsandboxed.** This is the correct, safe,
+honest behavior, not a bug, and is unchanged from before this correction
+(the pre-existing mechanism had the identical gap). Real execution
+requires an explicit operator infrastructure decision -- granting the
+worker container the specific capabilities described in 22.5, or running
+verification on a differently-shaped execution host -- that this PR
+deliberately does not make. Domain model, eligibility, result model,
+telemetry, and the Review Effectiveness Benchmark foundation are all
+unaffected by this and remain fully functional regardless of sandbox
+availability, exactly as designed from the start (a review run with an
+unavailable sandbox produces `SANDBOX_ERROR`/no-attempt reports, folded
+into the existing count-only telemetry, never a crash or a degraded
+alternate path).
+
+**22.7 -- Versioning re-audit for this correction.** `EXECUTABLE_VERIFICATION_VERSION`
+stays at **1, unchanged**. Its own docstring says it bumps when "sandbox
+isolation shape... changes materially enough that a prior report can no
+longer be considered equivalent to what re-running now would produce" --
+but nothing in this codebase ever consumes it for an equivalence check:
+there is no cross-head result caching (by design, section 16) and no
+report is ever persisted raw, so there is no comparison this correction
+could silently invalidate. More importantly, the *public semantic
+contract* of a report is unchanged -- `VerificationOutcome.PASSED` still
+means exactly what it meant before ("the known, targeted test genuinely
+passed under a real, isolated sandboxed run"); this correction only
+strengthens *how* isolated that run is, never what the outcome asserts.
+`REVIEW_PROMPT_VERSION`, `TELEMETRY_SCHEMA_VERSION`,
+`QUALITY_COST_POLICY_VERSION`, `REVIEW_POLICY_VERSION`, and
+`REVIEW_ENGINE_VERSION` are unaffected for the same reason plus the
+original milestone's own reasoning (section 7 conditions, unchanged) --
+none of the critic prompt shape, telemetry field shape, tiering
+semantics, validation rules, or call shape changed in this correction
+round. No version constant changes as a result of this security fix.
+
+**22.8 -- A transient full-suite flake, investigated rather than
+dismissed.** One full `tests/integration` run during this correction's
+own gate-checking saw 4 of `test_executable_verification_corpus.py`'s
+tests fail (`test_case_confirmed_failure_classification`,
+`test_case_verifier_workspace_remains_readable`,
+`test_case_disposable_home_and_tmp_writable`,
+`test_case_docker_socket_unavailable`) while 597 others passed. Rather
+than assume flakiness, this was investigated directly: all 4 tests
+passed reliably when re-run in isolation; the full corpus file (38
+tests) passed reliably standalone, combined with its three immediately
+preceding files, and even under 300 artificially added background
+processes on this host. `docker ps -a` at the time showed unrelated
+third-party container activity on this shared development machine, and
+this session had also been running a concurrent `docker build` at the
+exact moment of the failing run. A subsequent clean, split run of the
+entire `tests/integration` suite (two halves, run separately, with no
+concurrent heavy background work from this session) passed completely:
+319 + 282 = 601 passed, 0 failed. This is real, environment-level
+contention on a shared development machine, not a defect in the
+corrected sandbox -- documented honestly rather than silently re-run
+until green.
