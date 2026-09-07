@@ -76,3 +76,29 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
 # Python code in this container runs, the metric objects already need
 # it to exist.
 CMD ["sh", "-c", "[ -n \"$PROMETHEUS_MULTIPROC_DIR\" ] && rm -rf \"$PROMETHEUS_MULTIPROC_DIR\" && mkdir -p \"$PROMETHEUS_MULTIPROC_DIR\"; exec celery -A apps.worker.celery_app worker --loglevel=INFO"]
+
+FROM base AS verifier
+# Milestone S6 (Production Execution Enablement): a separate, deliberately
+# credential-minimal image from `worker` above -- it never receives
+# DATABASE_URL, GITHUB_*, or ANTHROPIC_API_KEY/GEMINI_API_KEY (see
+# patchfrog.config.verifier_settings.VerifierSettings and
+# validation/production_execution/latest-summary.md for the full
+# trust-boundary rationale). No git/cppcheck/clang-tidy here -- this
+# process never clones a repository or runs static analysis; it only
+# reads an already-staged, integrity-checked snapshot the review worker
+# produced and runs the hardened bwrap sandbox against it.
+#
+# bubblewrap (bwrap): the same unprivileged filesystem-confinement
+# primitive patchfrog.executable_verification.sandbox already uses in the
+# `worker` image (see that image's own comment for why installing the
+# binary alone does not by itself make execution operational under this
+# container's default, non-privileged security profile -- see
+# docs/executable-verification.md's "Production readiness" section for
+# what deployment shape actually is empirically validated).
+RUN apt-get update && \
+    apt-get install --no-install-recommends -y bubblewrap && \
+    rm -rf /var/lib/apt/lists/*
+USER patchfrog
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD ["sh", "-c", "celery -A apps.verifier.celery_app inspect ping -d celery@$HOSTNAME --timeout 5"]
+CMD ["celery", "-A", "apps.verifier.celery_app", "worker", "--loglevel=INFO"]

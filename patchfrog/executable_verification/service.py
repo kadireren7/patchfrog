@@ -37,7 +37,7 @@ from patchfrog.repository.git import GitError
 from patchfrog.repository.snapshot import RepositorySnapshotProvider
 from patchfrog.review.domain import ReviewCandidate
 
-_EMPTY_REPORT = ExecutableVerificationReport(version=EXECUTABLE_VERIFICATION_VERSION, attempted=False)
+EMPTY_REPORT = ExecutableVerificationReport(version=EXECUTABLE_VERIFICATION_VERSION, attempted=False)
 
 
 class VerificationBudget:
@@ -70,12 +70,35 @@ class VerificationBudget:
             self._total_seconds += duration_ms / 1000.0
 
 
-def _sandbox_error_evidence(*, test_target_path: str, commit_sha: str) -> ExecutableVerificationEvidence:
+def sandbox_error_evidence(*, test_target_path: str, commit_sha: str) -> ExecutableVerificationEvidence:
     return ExecutableVerificationEvidence(
         kind=VerificationKind.EXISTING_TARGETED_TEST, outcome=VerificationOutcome.SANDBOX_ERROR,
         test_target_path=test_target_path, commit_sha=commit_sha, exit_code=None,
         stdout_excerpt="", stderr_excerpt="", duration_ms=0.0, timed_out=False,
     )
+
+
+async def execute_against_snapshot(
+    sandbox: VerificationSandbox, *, root_path: Path, test_target_path: str, commit_sha: str
+) -> ExecutableVerificationEvidence:
+    """Copy ``root_path`` into a fresh, disposable workspace and run the
+    already-determined ``test_target_path`` there -- the original
+    ``root_path`` is never mutated or deleted. Shared by
+    :func:`build_executable_verification_report`'s own ``local=True``
+    path (CLI/local review, single trust domain) and, since Milestone S6,
+    the separate verifier process's own task
+    (:mod:`apps.verifier.tasks`), which reuses this exact function
+    against a review-worker-staged snapshot rather than re-implementing
+    the same copy-then-sandbox sequence a second time."""
+
+    workspace = Path(tempfile.mkdtemp(prefix="patchfrog-verify-"))
+    try:
+        shutil.copytree(root_path, workspace, dirs_exist_ok=True)
+        return await run_pytest_verification(
+            sandbox, workspace_root=workspace, test_target_path=test_target_path, commit_sha=commit_sha,
+        )
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
 
 
 async def build_executable_verification_report(
@@ -101,16 +124,16 @@ async def build_executable_verification_report(
 
     target = determine_verification_target(candidate=candidate, expected_companions=expected_companions)
     if target is None:
-        return _EMPTY_REPORT
+        return EMPTY_REPORT
 
     if not is_sandbox_available():
         return ExecutableVerificationReport(
             version=EXECUTABLE_VERIFICATION_VERSION, attempted=True,
-            evidence=_sandbox_error_evidence(test_target_path=target, commit_sha=commit_sha),
+            evidence=sandbox_error_evidence(test_target_path=target, commit_sha=commit_sha),
         )
 
     if not await budget.try_reserve():
-        return _EMPTY_REPORT
+        return EMPTY_REPORT
 
     sandbox = VerificationSandbox(timeout_seconds=MAX_VERIFICATION_SECONDS)
     evidence: ExecutableVerificationEvidence
@@ -118,14 +141,9 @@ async def build_executable_verification_report(
         if local:
             if root_path is None:
                 raise ValueError("root_path is required when local=True")
-            workspace = Path(tempfile.mkdtemp(prefix="patchfrog-verify-"))
-            try:
-                shutil.copytree(root_path, workspace, dirs_exist_ok=True)
-                evidence = await run_pytest_verification(
-                    sandbox, workspace_root=workspace, test_target_path=target, commit_sha=commit_sha,
-                )
-            finally:
-                shutil.rmtree(workspace, ignore_errors=True)
+            evidence = await execute_against_snapshot(
+                sandbox, root_path=root_path, test_target_path=target, commit_sha=commit_sha,
+            )
         else:
             if clone_url is None:
                 raise ValueError("clone_url is required when local=False")
@@ -137,7 +155,7 @@ async def build_executable_verification_report(
                     sandbox, workspace_root=snapshot.root_path, test_target_path=target, commit_sha=commit_sha,
                 )
     except (GitError, OSError, ValueError):
-        evidence = _sandbox_error_evidence(test_target_path=target, commit_sha=commit_sha)
+        evidence = sandbox_error_evidence(test_target_path=target, commit_sha=commit_sha)
 
     await budget.record_duration(evidence.duration_ms)
     return ExecutableVerificationReport(version=EXECUTABLE_VERIFICATION_VERSION, attempted=True, evidence=evidence)

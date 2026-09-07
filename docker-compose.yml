@@ -81,6 +81,19 @@ services:
       # scrape this container at :9100/metrics as a second target,
       # alongside the API's :8000/metrics.
       PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus_multiproc
+      # Milestone S6 (Production Execution Enablement): both commented
+      # out (matching PATCHFROG_VERIFIER_ENABLED's own Settings default,
+      # False) so bringing this stack up never silently changes existing
+      # behavior. Uncomment both, together with the `verifier` service
+      # below, to route Executable Verification through the separate,
+      # credential-minimal verifier process instead of never attempting
+      # it -- see docs/executable-verification.md's "Production
+      # readiness" section for what this does and does not make
+      # operational by itself.
+      # PATCHFROG_VERIFIER_ENABLED: "true"
+      # VERIFICATION_SNAPSHOT_ROOT: /var/lib/patchfrog/verification-snapshots
+    # volumes:
+    #   - verification_snapshots:/var/lib/patchfrog/verification-snapshots
     # See the `api` service above for the GITHUB_PRIVATE_KEY_PATH bind-mount
     # pattern — this is the process that actually calls the GitHub API with it.
     ports:
@@ -91,5 +104,34 @@ services:
       redis:
         condition: service_healthy
 
+  # Milestone S6 (Production Execution Enablement): a deliberately
+  # credential-minimal process -- no DATABASE_URL, no GITHUB_*, no
+  # ANTHROPIC_API_KEY/GEMINI_API_KEY (see
+  # patchfrog.config.verifier_settings.VerifierSettings). Inert by
+  # default (nothing enqueues work here unless `worker`'s own
+  # PATCHFROG_VERIFIER_ENABLED is also turned on above). Under this
+  # container's default, non-privileged security profile, real
+  # bwrap-based sandbox isolation is NOT operational out of the box --
+  # see docs/executable-verification.md's "Production readiness" section
+  # and validation/production_execution/latest-summary.md for exactly
+  # why, and for the one deployment shape (a bare, non-containerized
+  # host process) this milestone can actually validate end to end. This
+  # service still starts and remains reachable either way, correctly
+  # reporting SANDBOX_ERROR for every eligible candidate until an
+  # operator makes an explicit infrastructure decision to change that.
+  verifier:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: verifier
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - verification_snapshots:/var/lib/patchfrog/verification-snapshots
+    depends_on:
+      redis:
+        condition: service_healthy
+
 volumes:
   postgres_data:
+  verification_snapshots:

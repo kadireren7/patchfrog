@@ -39,10 +39,14 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from patchfrog.config.settings import Settings
+from patchfrog.executable_verification.protocol import VERIFICATION_QUEUE_NAME
+from patchfrog.executable_verification.sandbox import is_sandbox_available
 from patchfrog.github.auth import build_app_jwt
 from patchfrog.ops.health import check_database, check_redis
 from patchfrog.persistence.database import create_engine
 from patchfrog.review.runtime_config import SUPPORTED_PROVIDERS, resolve_review_runtime_config
+
+_VERIFIER_INSPECT_TIMEOUT_SECONDS = 3.0
 
 #: Values copied verbatim from .env.example that a fresh operator is
 #: likely to leave unchanged by mistake -- structurally present (Settings
@@ -263,6 +267,61 @@ def _webhook_route_check() -> DoctorCheck:
     )
 
 
+def _verifier_check(settings: Settings) -> DoctorCheck:
+    """Milestone S6: distinguishes "the Executable Verification engine
+    exists" (always true -- it's part of this codebase) from "a separate
+    verifier process is configured for this deployment" from "sandbox
+    isolation is actually operational." This process's own local
+    ``is_sandbox_available()`` result is reported for information only --
+    it describes *this* process (typically the API or review worker),
+    never the separate verifier container's own capability, which this
+    check cannot observe directly without a live worker to ask. Never
+    prints a secret -- only presence/reachability."""
+
+    local_sandbox = "available" if is_sandbox_available() else "unavailable"
+
+    if not settings.verifier_enabled:
+        return DoctorCheck(
+            name="executable_verification",
+            status=DoctorStatus.PASS,
+            detail=(
+                "engine: available; verifier: not configured (PATCHFROG_VERIFIER_ENABLED=false) -- "
+                f"production verification will not be attempted; this process's own local sandbox "
+                f"capability: {local_sandbox} (informational only, not what production execution uses); "
+                "see docs/executable-verification.md"
+            ),
+        )
+
+    try:
+        from celery import Celery
+
+        probe_app = Celery("patchfrog-doctor-probe", broker=settings.redis_url, backend=settings.redis_url)
+        active = probe_app.control.inspect(timeout=_VERIFIER_INSPECT_TIMEOUT_SECONDS).active_queues() or {}
+    except Exception as exc:
+        return DoctorCheck(
+            name="executable_verification",
+            status=DoctorStatus.WARN,
+            detail=f"engine: available; verifier: configured but could not reach Redis to check for a consumer ({exc})",
+        )
+
+    consuming = any(queue.get("name") == VERIFICATION_QUEUE_NAME for queues in active.values() for queue in queues)
+    if not consuming:
+        return DoctorCheck(
+            name="executable_verification",
+            status=DoctorStatus.WARN,
+            detail=(
+                f"engine: available; verifier: configured but no worker is currently consuming the "
+                f"{VERIFICATION_QUEUE_NAME!r} queue -- verification will report SANDBOX_ERROR for every "
+                "eligible candidate until one is running; see docs/executable-verification.md"
+            ),
+        )
+    return DoctorCheck(
+        name="executable_verification",
+        status=DoctorStatus.PASS,
+        detail=f"engine: available; verifier: configured and reachable (a worker is consuming {VERIFICATION_QUEUE_NAME!r})",
+    )
+
+
 async def _github_app_auth_check(settings: Settings) -> DoctorCheck:
     """Best-effort, optional, read-only: proves the App ID + private key
     pair actually authenticates, which presence/shape checks alone
@@ -350,6 +409,7 @@ async def run_doctor(
     checks.append(_publication_gate_check(settings))
     checks.append(_hard_caps_check(settings))
     checks.extend(_provider_checks(settings))
+    checks.append(_verifier_check(settings))
 
     resolved_engine = engine if engine is not None else create_engine(settings.database_url)
     try:

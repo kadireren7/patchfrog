@@ -239,6 +239,53 @@ the full list and current defaults. Highlights:
 | `STALE_RUN_THRESHOLD_MINUTES` | `60` | See `patchfrog ops stale` |
 | `PROMETHEUS_MULTIPROC_DIR` | unset | Worker only. Required for the worker's own `:9100/metrics` to report anything -- see [Metrics](#metrics) |
 | `WORKER_METRICS_PORT` | `9100` | Worker only, only relevant when `PROMETHEUS_MULTIPROC_DIR` is set |
+| `PATCHFROG_VERIFIER_ENABLED` | `false` | Worker only. See [Executable Verification production deployment](#executable-verification-production-deployment) below |
+| `VERIFICATION_SNAPSHOT_ROOT` | unset (system temp dir) | Worker only, only relevant when `PATCHFROG_VERIFIER_ENABLED=true` |
+| `PATCHFROG_VERIFIER_WAIT_TIMEOUT_SECONDS` | `45.0` | Worker only, only relevant when `PATCHFROG_VERIFIER_ENABLED=true` |
+
+## Executable Verification production deployment
+
+Milestone S introduced Executable Verification: PatchFrog running one
+already-existing, targeted test inside a hardened `bwrap` sandbox to check
+a reviewer's own hypothesis. Milestone S6 (Production Execution
+Enablement) added a **separate, deliberately credential-minimal verifier
+process** (`apps/verifier/`, a second Celery app) so that hostile,
+repository-controlled test code never runs in the same process as the
+GitHub App private key, provider credentials, or the database
+connection -- see `docs/executable-verification.md` and
+`validation/production_execution/latest-summary.md` for the full
+trust-boundary rationale.
+
+**Off by default.** `PATCHFROG_VERIFIER_ENABLED=false` (the default) means
+the review worker never attempts Executable Verification in production at
+all -- not a fallback to less-isolated in-process execution, simply not
+attempted. Turning it on requires two things together:
+
+1. `PATCHFROG_VERIFIER_ENABLED=true` and `VERIFICATION_SNAPSHOT_ROOT` set
+   on the `worker` service, pointing at a directory shared with the
+   `verifier` service (a Docker volume mounted at the identical path in
+   both containers -- see the commented-out block in `docker-compose.yml`).
+2. The `verifier` service itself actually running and able to establish
+   real sandbox isolation.
+
+**(2) is not automatic under the default containerized deployment.**
+Confirmed by direct testing inside a real, non-privileged build of the
+`verifier` image: Docker's own default seccomp/AppArmor profile blocks
+the mount-namespace operations `bwrap` needs, exactly like the `worker`
+image's own embedded sandbox already had this limitation before
+Milestone S6 (see `validation/executable_verification/latest-summary.md`
+section 22.5 and `validation/production_execution/latest-summary.md`
+section 3, Option 3/4). Until an operator makes an explicit
+infrastructure decision (see `docs/executable-verification.md`'s
+"Production readiness" section), the `verifier` service starts and stays
+reachable, but every eligible candidate reports `SANDBOX_ERROR` -- safe,
+honest, by-design behavior, not a bug.
+
+The one deployment shape empirically validated end to end by this
+milestone is running the verifier as a **bare, non-containerized host
+process** (e.g. a systemd service, or a dedicated VM) -- outside any
+Docker nesting, `bwrap` is an ordinary unprivileged Linux mechanism with
+no special capability requirement at all.
 
 ## Migration process
 

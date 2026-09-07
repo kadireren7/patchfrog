@@ -136,6 +136,43 @@ class Settings(BaseSettings):
     #: counters otherwise).
     worker_metrics_port: int = Field(default=9100, alias="WORKER_METRICS_PORT")
 
+    # -- Milestone S6: Production Execution Enablement --
+
+    #: Where the review worker stages a review run's exact-head snapshot
+    #: for the verifier hand-off (see
+    #: patchfrog.executable_verification.snapshot_staging). Unset
+    #: (default): the system temp directory is used, exactly like every
+    #: other disposable-checkout path in this codebase -- correct for
+    #: CLI/local review (no separate verifier process exists there) and
+    #: for tests. In a containerized deployment with a separate
+    #: `verifier` service, this must point at a shared volume mount
+    #: path both the `worker` and `verifier` containers mount at the
+    #: identical path -- see docker-compose.yml. Never repository- or
+    #: environment-of-the-reviewed-code-controlled.
+    verification_snapshot_root: str | None = Field(default=None, alias="VERIFICATION_SNAPSHOT_ROOT")
+
+    #: Whether a verifier is part of this deployment at all -- default
+    #: False (opt-in), since most self-hosted deployments will not run
+    #: the separate `verifier` service. This is deliberately NOT a "how
+    #: execution behaves" toggle -- is_sandbox_available()'s own
+    #: functional probe already governs that, and this setting can never
+    #: expand what a verifier (if present) is allowed to do. Its only
+    #: purpose is operational: without it, the review worker would
+    #: enqueue a verification request and wait up to
+    #: verifier_wait_timeout_seconds for every eligible candidate even
+    #: when no verifier process is consuming the queue at all -- a real,
+    #: wasted-latency cost this setting exists to avoid, not a security
+    #: control. Operator/environment-only, exactly like every other
+    #: Settings field -- never read from .patchfrog.yml.
+    verifier_enabled: bool = Field(default=False, alias="PATCHFROG_VERIFIER_ENABLED")
+
+    #: How long the review worker waits for one verifier result before
+    #: treating it as unavailable (SANDBOX_ERROR) -- a network-level
+    #: ceiling on top of the verifier's own MAX_VERIFICATION_SECONDS,
+    #: covering queueing/dispatch/return latency the verifier's own
+    #: per-attempt timeout does not.
+    verifier_wait_timeout_seconds: float = Field(default=45.0, alias="PATCHFROG_VERIFIER_WAIT_TIMEOUT_SECONDS")
+
     @field_validator("log_level")
     @classmethod
     def _validate_log_level(cls, value: str) -> str:

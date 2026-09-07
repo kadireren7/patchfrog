@@ -37,6 +37,7 @@ from apps.worker.tasks.publish_review import publish_review_task
 from patchfrog.config.settings import Settings, get_settings
 from patchfrog.diff.parser import build_diff_file
 from patchfrog.domain.pull_request import PullRequestRef
+from patchfrog.executable_verification.dispatch import VerifierDispatcher
 from patchfrog.github.auth import InstallationTokenProvider
 from patchfrog.github.client import GitHubClient
 from patchfrog.ops import metrics
@@ -205,10 +206,25 @@ async def _review_pull_request(
             incremental_config=incremental_config,
         )
 
+        # Milestone S6: a verifier is only wired in when the operator has
+        # explicitly opted into running the separate verifier service
+        # (settings.verifier_enabled, default False) -- see
+        # PullRequestReviewService's own docstring and
+        # validation/production_execution/latest-summary.md. celery_app
+        # here is used purely as a task *producer* (send_task by name);
+        # this process never imports apps.verifier's own task module, so
+        # it never needs any of the verifier's own credentials.
+        verifier_dispatcher = (
+            VerifierDispatcher(celery_app=celery_app, wait_timeout_seconds=settings.verifier_wait_timeout_seconds)
+            if settings.verifier_enabled
+            else None
+        )
         service = PullRequestReviewService(
             session_factory=session_factory,
             reviewer_provider=reviewer_provider,
             critic_provider=critic_provider,
+            verifier_dispatcher=verifier_dispatcher,
+            verification_snapshot_root=settings.verification_snapshot_root,
         )
         summary = await service.review_pull_request(
             repository_id=repository_id,

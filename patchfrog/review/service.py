@@ -82,14 +82,27 @@ from patchfrog.cross_repo_intelligence.telemetry import (
     summarize_for_persistence as summarize_cross_repo_intelligence,
 )
 from patchfrog.diff.models import DiffFile, DiffHunk
+from patchfrog.executable_verification.dispatch import VerifierDispatcher
 from patchfrog.executable_verification.domain import (
     EXECUTABLE_VERIFICATION_VERSION,
+    MAX_VERIFICATION_SECONDS,
+    ExecutableVerificationEvidence,
     ExecutableVerificationReport,
+    VerificationKind,
+)
+from patchfrog.executable_verification.eligibility import determine_verification_target
+from patchfrog.executable_verification.protocol import (
+    VERIFIER_PROTOCOL_VERSION,
+    VerificationExecutionRequest,
+    compute_request_id,
 )
 from patchfrog.executable_verification.service import (
+    EMPTY_REPORT,
     VerificationBudget,
     build_executable_verification_report,
+    sandbox_error_evidence,
 )
+from patchfrog.executable_verification.snapshot_staging import stage_snapshot
 from patchfrog.executable_verification.telemetry import (
     summarize_for_persistence as summarize_executable_verification,
 )
@@ -123,6 +136,8 @@ from patchfrog.persistence.repositories import (
 )
 from patchfrog.persistence.repositories.analysis_run import AnalysisRunRepository
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
+from patchfrog.repository.git import GitError
+from patchfrog.repository.snapshot import RepositorySnapshot
 from patchfrog.repository_learnings.domain import RepositoryLearningsReport
 from patchfrog.repository_learnings.evidence import (
     evidence_text_for_candidate as repository_learning_evidence_text_for_candidate,
@@ -354,6 +369,8 @@ class PullRequestReviewService:
         candidate_generator: ReviewCandidateGenerator | None = None,
         context_service: ContextService | None = None,
         effort_decision_override: ReviewEffortDecision | None = None,
+        verifier_dispatcher: VerifierDispatcher | None = None,
+        verification_snapshot_root: str | None = None,
     ) -> None:
         """``effort_decision_override``: the Phase 8/evaluation-harness
         "uniform baseline" ablation hook (spec sections 24/25) --
@@ -363,12 +380,27 @@ class PullRequestReviewService:
         decision -- lets the evaluation harness compare "current/uniform
         effort" against "quality-cost guard" runs without duplicating
         any production tiering logic. ``None`` (the default) is real
-        Quality + Cost Guard behavior, used by every real review."""
+        Quality + Cost Guard behavior, used by every real review.
+
+        ``verifier_dispatcher`` (Milestone S6): when given and ``local``
+        is ``False`` (production/Celery use), Executable Verification is
+        routed through the separate, credential-minimal verifier process
+        instead of running in-process -- see
+        ``validation/production_execution/latest-summary.md``. ``None``
+        (the default) means no separate verifier is configured for this
+        deployment; production verification is then never attempted at
+        all (never a fallback to in-process execution -- see this
+        module's own ``_verify()`` closure). CLI/local review
+        (``local=True``) always runs in-process, unaffected by this
+        parameter, exactly as before this milestone -- there is no
+        separate trust domain to enforce there."""
 
         self._session_factory = session_factory
         self._reviewer_provider = reviewer_provider
         self._critic_provider = critic_provider
         self._effort_decision_override = effort_decision_override
+        self._verifier_dispatcher = verifier_dispatcher
+        self._verification_snapshot_root = verification_snapshot_root
         self._queries = query_service or RepositoryQueryService()
         self._candidates = candidate_generator or ReviewCandidateGenerator(query_service=self._queries)
         self._context_service = context_service or ContextService(session_factory=session_factory)
@@ -924,6 +956,28 @@ class PullRequestReviewService:
         semaphore = asyncio.Semaphore(max(1, config.max_concurrent_requests))
         verification_budget = VerificationBudget()
 
+        # Milestone S6: one exact-head snapshot staged for the entire
+        # review run (never per-candidate -- every candidate in this run
+        # shares the same commit_sha), only when a verifier is actually
+        # configured for this deployment and this is production
+        # (local=False) review. A staging failure (network error, bad
+        # token) never fails the review itself -- it just means
+        # verification is unavailable for this run, exactly like
+        # is_sandbox_available() returning False already means for the
+        # in-process path.
+        staged_snapshot: RepositorySnapshot | None = None
+        if not local and self._verifier_dispatcher is not None:
+            try:
+                staged_snapshot = stage_snapshot(
+                    clone_url=str(context_kwargs["clone_url"]),
+                    commit_sha=commit_sha,
+                    repository_full_name=repository_full_name,
+                    token=context_kwargs.get("token"),  # type: ignore[arg-type]
+                    shared_root=Path(self._verification_snapshot_root) if self._verification_snapshot_root else None,
+                )
+            except (GitError, OSError):
+                staged_snapshot = None
+
         orchestrator = AgentOrchestrator(
             reviewer_providers={
                 AgentRole.CORRECTNESS: self._reviewer_provider,
@@ -939,6 +993,7 @@ class PullRequestReviewService:
             async with semaphore:
                 await self._review_candidate(
                     outcome,
+                    run_id=run_id,
                     repository_id=repository_id,
                     repository_full_name=repository_full_name,
                     commit_sha=commit_sha,
@@ -963,9 +1018,14 @@ class PullRequestReviewService:
                     cross_repo_report=cross_repo_report,
                     combined_companions=combined_companions,
                     verification_budget=verification_budget,
+                    staged_snapshot=staged_snapshot,
                 )
 
-        await asyncio.gather(*(_process(o) for o in outcomes))
+        try:
+            await asyncio.gather(*(_process(o) for o in outcomes))
+        finally:
+            if staged_snapshot is not None:
+                staged_snapshot.cleanup()
 
         all_final: list[FinalAIFinding] = [f for o in outcomes for f in o.final]
         dedup_result = deduplicate(tuple(all_final))
@@ -1267,6 +1327,7 @@ class PullRequestReviewService:
         self,
         outcome: _CandidateOutcome,
         *,
+        run_id: uuid.UUID,
         repository_id: uuid.UUID,
         repository_full_name: str,
         commit_sha: str,
@@ -1290,6 +1351,7 @@ class PullRequestReviewService:
         cross_repo_report: CrossRepoIntelligenceReport,
         combined_companions: tuple[ExpectedCompanionChange, ...],
         verification_budget: VerificationBudget,
+        staged_snapshot: RepositorySnapshot | None = None,
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
@@ -1457,16 +1519,76 @@ class PullRequestReviewService:
             # critiqued for this candidate (see that method's own
             # docstring) -- never speculatively, never before a
             # hypothesis exists.
-            return await build_executable_verification_report(
-                candidate=candidate,
-                expected_companions=combined_companions,
+            #
+            # Milestone S6: local=True (CLI/local review, single trust
+            # domain) is unchanged -- always in-process. local=False
+            # (production) NEVER executes the hostile test in this
+            # process anymore: with no verifier configured (the default),
+            # verification is simply not attempted; with one configured,
+            # the review worker only determines eligibility (pure, no
+            # I/O) and reserves budget, then hands the actual execution
+            # to the separate, credential-minimal verifier process. Any
+            # dispatch failure renders as SANDBOX_ERROR, never a
+            # fallback to in-process execution -- see
+            # patchfrog.executable_verification.dispatch.VerifierDispatcher's
+            # own docstring.
+            if local:
+                return await build_executable_verification_report(
+                    candidate=candidate,
+                    expected_companions=combined_companions,
+                    commit_sha=commit_sha,
+                    local=True,
+                    root_path=context_kwargs.get("root_path"),  # type: ignore[arg-type]
+                    repository_full_name=repository_full_name,
+                    budget=verification_budget,
+                )
+
+            if self._verifier_dispatcher is None or staged_snapshot is None:
+                return EMPTY_REPORT
+
+            target = determine_verification_target(candidate=candidate, expected_companions=combined_companions)
+            if target is None:
+                return EMPTY_REPORT
+            if not await verification_budget.try_reserve():
+                return EMPTY_REPORT
+
+            request = VerificationExecutionRequest(
+                request_id=compute_request_id(
+                    repository_id=str(repository_id),
+                    review_run_id=str(run_id),
+                    commit_sha=commit_sha,
+                    file_path=candidate.file_path,
+                    qualified_name=candidate.qualified_name,
+                    verification_kind=VerificationKind.EXISTING_TARGETED_TEST,
+                    test_target_path=target,
+                ),
+                protocol_version=VERIFIER_PROTOCOL_VERSION,
+                repository_id=str(repository_id),
+                review_run_id=str(run_id),
                 commit_sha=commit_sha,
-                local=local,
-                root_path=context_kwargs.get("root_path") if local else None,  # type: ignore[arg-type]
-                clone_url=context_kwargs.get("clone_url") if not local else None,  # type: ignore[arg-type]
-                token=context_kwargs.get("token") if not local else None,  # type: ignore[arg-type]
-                repository_full_name=repository_full_name,
-                budget=verification_budget,
+                verification_kind=VerificationKind.EXISTING_TARGETED_TEST,
+                test_target_path=target,
+                snapshot_path=str(staged_snapshot.root_path),
+                timeout_seconds=MAX_VERIFICATION_SECONDS,
+            )
+            dispatched = await self._verifier_dispatcher.dispatch(request)
+            if dispatched is None:
+                evidence = sandbox_error_evidence(test_target_path=target, commit_sha=commit_sha)
+            else:
+                evidence = ExecutableVerificationEvidence(
+                    kind=dispatched.verification_kind,
+                    outcome=dispatched.outcome,
+                    test_target_path=dispatched.test_target_path,
+                    commit_sha=dispatched.commit_sha,
+                    exit_code=dispatched.exit_code,
+                    stdout_excerpt=dispatched.stdout_excerpt,
+                    stderr_excerpt=dispatched.stderr_excerpt,
+                    duration_ms=dispatched.duration_ms,
+                    timed_out=dispatched.timed_out,
+                )
+            await verification_budget.record_duration(evidence.duration_ms)
+            return ExecutableVerificationReport(
+                version=EXECUTABLE_VERIFICATION_VERSION, attempted=True, evidence=evidence,
             )
 
         result = await orchestrator.review_candidate(

@@ -45,32 +45,36 @@ deepen scrutiny of a candidate that already has independent evidence.
 | P | Trajectory Intelligence |
 | Q | Cross-PR Intelligence |
 | R | Cross-Repo Intelligence |
+| S | Executable Verification + Review Effectiveness Benchmark (S1-S5) |
 
 Each is a deterministic, non-LLM evidence layer over the repository/PR graph.
 See `docs/agent-orchestration.md`'s "Intelligence layer ownership" table and
 each package's own `docs/<package>.md` for what it owns and its exact scope
 decisions.
 
+Milestone S (S1 secure execution foundation, S2 existing-targeted-test
+verification, S3 runtime evidence integration, S4 review-effectiveness
+benchmark v1, S5 verification telemetry) shipped, then underwent a security
+correction round that replaced its original process/network/PID-only
+isolation with real `bwrap`-based filesystem confinement after an empirical
+escape was found and fixed -- see
+`validation/executable_verification/latest-summary.md` sections 3 and 22.
+
 ## Current — Review Engine
 
-**S — Executable Verification + Review Effectiveness Benchmark**
+**S6 — Production Execution Enablement**
 
-Conceptual sub-phases (not all necessarily implemented in one PR -- each
-milestone's own audit chooses the narrowest safe v1 subset; see that
-milestone's own `validation/executable_verification/latest-summary.md` for
-which sub-phases actually shipped and which were deferred):
-
-- **S1 — Secure Execution Foundation**: sandbox abstraction, isolation
-  guarantees, threat model.
-- **S2 — Existing Targeted Test Verification**: the narrowest verification
-  primitive (run one already-existing, structurally-related test, never the
-  full suite, never a generated test).
-- **S3 — Runtime Evidence Integration**: bounded runtime evidence reaches the
-  critic/verifier as additional evidence, never a standalone finding.
-- **S4 — Review Effectiveness Benchmark v1**: a durable corpus + metrics that
-  measure reviewer quality, separate from implementation-test correctness.
-- **S5 — Verification Telemetry**: bounded, privacy-safe counts describing
-  how much/what kind of verification ran.
+Milestone S's hardened sandbox correctly refuses to run at all under
+PatchFrog's default self-hosted Docker deployment (the container's own
+security profile blocks the namespaces `bwrap` needs) -- safe, but
+operationally incomplete. S6 splits the review worker (trusted: GitHub App
+key, provider keys, DB) from a separate, credential-minimal verifier
+process that actually executes hostile test code, connected by a narrow,
+independently-versioned request/result protocol over the existing Celery/
+Redis queue. See `validation/production_execution/latest-summary.md` for
+the full trust-boundary audit, architecture options considered, and exactly
+which deployment shape this milestone could and could not validate
+end-to-end.
 
 ## Next — Review Engine
 
