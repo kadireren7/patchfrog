@@ -42,9 +42,24 @@ FROM base AS worker
 # clang_tidy) — Phase 3 static analysis, must be present wherever
 # analysis actually runs, not just the dev venv.
 #
+# bubblewrap (bwrap): the unprivileged sandboxing primitive Executable
+# Verification's filesystem confinement is built on (see
+# patchfrog.executable_verification.sandbox). Installing the binary does
+# NOT by itself make verification able to run in this default,
+# non-privileged container — creating the mount/user namespaces it needs
+# is blocked here by Docker's own default seccomp/AppArmor profile
+# (empirically confirmed; see
+# validation/executable_verification/latest-summary.md and
+# docs/executable-verification.md's "Production readiness" section for
+# exactly what additional, explicit container-level grants an operator
+# would need to add — never silently assumed or requested by this image).
+# The binary is still installed so the capability probe is correct the
+# moment an operator's own deployment does grant it, and prlimit
+# (util-linux) is already present in the base image.
+#
 # Installed as root before switching to the unprivileged user.
 RUN apt-get update && \
-    apt-get install --no-install-recommends -y git cppcheck clang-tidy && \
+    apt-get install --no-install-recommends -y git cppcheck clang-tidy bubblewrap && \
     rm -rf /var/lib/apt/lists/*
 USER patchfrog
 # Aggregating /metrics endpoint (see patchfrog.ops.metrics) -- only

@@ -115,8 +115,14 @@ CONFIG_SCHEMA_VERSION = 4
 #: patchfrog.cross_repo_intelligence.evidence only for the exact
 #: candidate whose surface is an operator-registered contract
 #: explicitly consumed by another, authorized repository -- empty for
-#: every other candidate.
-REVIEW_PROMPT_VERSION = 12
+#: every other candidate. Bumped to 13 for Executable Verification
+#: Foundation: a tenth new optional `<executable_verification>`
+#: *critic-only* prompt section (patchfrog.review.prompt.build_critic_prompt,
+#: never the specialist prompt), populated from
+#: patchfrog.executable_verification.evidence only when a real, bounded,
+#: targeted test execution actually produced a PASSED/CONFIRMED_FAILURE
+#: result for the exact proposal being critiqued -- empty otherwise.
+REVIEW_PROMPT_VERSION = 13
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final

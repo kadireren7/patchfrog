@@ -347,13 +347,19 @@ def build_critic_prompt(
     context_text: str,
     finding: AIReviewFinding,
     conflicting_finding: AIReviewFinding | None = None,
+    executable_verification_text: str = "",
 ) -> tuple[str, str]:
     """Returns ``(system_prompt, user_prompt)`` for critiquing one proposed
     finding. ``conflicting_finding``, when given, is another specialist's
     proposal the cross-role contradiction heuristic (see
     :mod:`patchfrog.review.agents.cross_role`) flagged as making an
     incompatible claim about the same code -- shown to the critic
-    explicitly as data to weigh, never as an instruction."""
+    explicitly as data to weigh, never as an instruction.
+    ``executable_verification_text`` (Milestone S,
+    :mod:`patchfrog.executable_verification`) is bounded, critic-only
+    runtime evidence for this exact proposed finding -- empty string
+    unless a real, targeted verification actually ran and produced a
+    `PASSED`/`CONFIRMED_FAILURE` result."""
 
     evidence_lines = "\n".join(
         f"  - {e.file_path}:{e.start_line}-{e.end_line}: {e.quoted_text!r}" for e in finding.evidence
@@ -395,6 +401,11 @@ def build_critic_prompt(
             "evidence:",
             conflicting_evidence,
             "</conflicting_claim_from_another_specialist>",
+        ]
+
+    if executable_verification_text.strip():
+        lines += [
+            "", "<executable_verification>", executable_verification_text.strip(), "</executable_verification>",
         ]
 
     return _CRITIC_SYSTEM_PROMPT, "\n".join(lines)

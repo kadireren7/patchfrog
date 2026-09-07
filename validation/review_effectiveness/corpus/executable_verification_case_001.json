@@ -1,0 +1,12 @@
+{
+  "case_id": "executable_verification_case_001",
+  "category": "executable_verification_case",
+  "description": "A changed production function has a real, existing, discoverable pytest test file that genuinely fails on the new head -- Milestone S's EXISTING_TARGETED_TEST verification must classify this as CONFIRMED_FAILURE, never PASSED or UNSUPPORTED.",
+  "ground_truth": {
+    "expected_clean": false,
+    "must_find_file_path": "src/billing/capture.py",
+    "must_find_qualified_name": "capture_payment",
+    "expected_finding_category": "correctness",
+    "expected_execution_outcome": "confirmed_failure"
+  }
+}

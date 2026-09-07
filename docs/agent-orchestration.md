@@ -48,6 +48,34 @@ future milestone could route roles to different models without any
 repository-controlled field ever needing to exist for it -- v1 always
 maps both roles to the identical provider instance.
 
+## Intelligence layer ownership
+
+Each deterministic, non-LLM Intelligence package (`patchfrog/<name>_intelligence/`
+or equivalent) owns a distinct kind of evidence and never duplicates
+another layer's finding ownership. Specialist agents reason *over* this
+evidence -- there is deliberately no one-agent-per-intelligence-layer
+design (no Change Agent, Contract Agent, Trajectory Agent, Cross-Repo
+Agent, and so on); see "Specialist roles" above.
+
+| Layer | Owns |
+|---|---|
+| Change Intelligence | changed structural units, affected surfaces, expected companions, Change Story/Change Map |
+| Contract Intelligence | current contract deltas and stale in-repository consumers |
+| Intent Verification | explicit PR-title/body intent evidence |
+| Test Intelligence | current test evidence/gaps |
+| Historical Regression Memory | trusted historical finding/feedback evidence |
+| Repository Learnings | repeated trusted repository patterns (enrichment only) |
+| Trajectory Intelligence | current-PR evolution evidence |
+| Cross-PR Intelligence | concurrent same-repository PR structural overlap |
+| Cross-Repo Intelligence | explicit operator-registered cross-repository contract relations |
+| Executable Verification | bounded runtime evidence for an already-proposed candidate (critic-only, never a standalone finding) |
+
+Signals such as churn, cross-PR overlap, cross-repo relation, repository
+history, or missing context must never automatically become defects --
+they may only ever strengthen or deepen scrutiny of a candidate that
+already has independent evidence. See each package's own
+`docs/<package>.md` for its exact scope decisions.
+
 ## No free-form agent chat
 
 Agents never talk to each other. There is no message bus, no shared

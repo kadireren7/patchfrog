@@ -12,6 +12,7 @@ from patchfrog.change_intelligence.telemetry import ChangeIntelligenceSummary
 from patchfrog.contract_intelligence.telemetry import ContractIntelligenceSummary
 from patchfrog.cross_pr_intelligence.telemetry import CrossPRIntelligenceSummary
 from patchfrog.cross_repo_intelligence.telemetry import CrossRepoIntelligenceSummary
+from patchfrog.executable_verification.telemetry import ExecutableVerificationSummary
 from patchfrog.historical_regression_memory.telemetry import HistoricalRegressionMemorySummary
 from patchfrog.intent_verification.telemetry import IntentVerificationSummary
 from patchfrog.persistence.models.review import ReviewRunModel
@@ -223,6 +224,7 @@ class ReviewRunRepository:
         trajectory_intelligence: TrajectoryIntelligenceSummary | None = None,
         cross_pr_intelligence: CrossPRIntelligenceSummary | None = None,
         cross_repo_intelligence: CrossRepoIntelligenceSummary | None = None,
+        executable_verification: ExecutableVerificationSummary | None = None,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -348,6 +350,25 @@ class ReviewRunRepository:
             )
             model.cross_repo_require_critic_count = cross_repo_intelligence.cross_repo_require_critic_count
             model.cross_repo_deepen_context_count = cross_repo_intelligence.cross_repo_deepen_context_count
+        if executable_verification is not None:
+            model.executable_verification_attempted_count = (
+                executable_verification.executable_verification_attempted_count
+            )
+            model.executable_verification_confirmed_failure_count = (
+                executable_verification.executable_verification_confirmed_failure_count
+            )
+            model.executable_verification_passed_count = (
+                executable_verification.executable_verification_passed_count
+            )
+            model.executable_verification_timeout_count = (
+                executable_verification.executable_verification_timeout_count
+            )
+            model.executable_verification_unsupported_count = (
+                executable_verification.executable_verification_unsupported_count
+            )
+            model.executable_verification_inconclusive_count = (
+                executable_verification.executable_verification_inconclusive_count
+            )
         model.completed_at = datetime.now(UTC)
         await session.flush()
         return model

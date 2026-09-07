@@ -58,6 +58,7 @@ from patchfrog.telemetry.domain import (
     ContractIntelligenceTelemetry,
     CrossPRIntelligenceTelemetry,
     CrossRepoIntelligenceTelemetry,
+    ExecutableVerificationTelemetry,
     FeedbackScope,
     FeedbackTelemetry,
     FindingLifecycleTelemetry,
@@ -399,6 +400,15 @@ async def collect_review_telemetry(
         cross_repo_deepen_context_count=run.cross_repo_deepen_context_count,
     )
 
+    executable_verification = ExecutableVerificationTelemetry(
+        executable_verification_attempted_count=run.executable_verification_attempted_count,
+        executable_verification_confirmed_failure_count=run.executable_verification_confirmed_failure_count,
+        executable_verification_passed_count=run.executable_verification_passed_count,
+        executable_verification_timeout_count=run.executable_verification_timeout_count,
+        executable_verification_unsupported_count=run.executable_verification_unsupported_count,
+        executable_verification_inconclusive_count=run.executable_verification_inconclusive_count,
+    )
+
     return ReviewTelemetrySnapshot(
         schema_version=TELEMETRY_SCHEMA_VERSION,
         review_run_id=run.id,
@@ -429,4 +439,5 @@ async def collect_review_telemetry(
         trajectory_intelligence=trajectory_intelligence,
         cross_pr_intelligence=cross_pr_intelligence,
         cross_repo_intelligence=cross_repo_intelligence,
+        executable_verification=executable_verification,
     )

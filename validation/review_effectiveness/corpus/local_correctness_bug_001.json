@@ -1,0 +1,13 @@
+{
+  "case_id": "local_correctness_bug_001",
+  "category": "local_correctness_bug",
+  "description": "An off-by-one error introduced in a single function -- a real, self-contained correctness bug PatchFrog must find in the exact changed symbol.",
+  "ground_truth": {
+    "expected_clean": false,
+    "must_find_file_path": "src/pagination.py",
+    "must_find_qualified_name": "paginate",
+    "expected_finding_category": "correctness",
+    "acceptable_severity_min": "medium",
+    "acceptable_severity_max": "high"
+  }
+}
