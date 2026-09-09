@@ -33,6 +33,7 @@ from patchfrog.executable_verification.domain import (
 from patchfrog.executable_verification.eligibility import determine_verification_target
 from patchfrog.executable_verification.pytest_adapter import run_pytest_verification
 from patchfrog.executable_verification.sandbox import VerificationSandbox, is_sandbox_available
+from patchfrog.executable_verification.snapshot_staging import compute_artifact_digest
 from patchfrog.repository.git import GitError
 from patchfrog.repository.snapshot import RepositorySnapshotProvider
 from patchfrog.review.domain import ReviewCandidate
@@ -79,7 +80,12 @@ def sandbox_error_evidence(*, test_target_path: str, commit_sha: str) -> Executa
 
 
 async def execute_against_snapshot(
-    sandbox: VerificationSandbox, *, root_path: Path, test_target_path: str, commit_sha: str
+    sandbox: VerificationSandbox,
+    *,
+    root_path: Path,
+    test_target_path: str,
+    commit_sha: str,
+    expected_artifact_digest: str | None = None,
 ) -> ExecutableVerificationEvidence:
     """Copy ``root_path`` into a fresh, disposable workspace and run the
     already-determined ``test_target_path`` there -- the original
@@ -88,12 +94,34 @@ async def execute_against_snapshot(
     path (CLI/local review, single trust domain) and, since Milestone S6,
     the separate verifier process's own task
     (:mod:`apps.verifier.tasks`), which reuses this exact function
-    against a review-worker-staged snapshot rather than re-implementing
-    the same copy-then-sandbox sequence a second time."""
+    against a review-worker-staged, credential-free artifact rather than
+    re-implementing the same copy-then-sandbox sequence a second time.
+
+    ``symlinks=True`` on the copy -- a committed symlink is preserved
+    *as a symlink*, never dereferenced. The default (``symlinks=False``)
+    was found, empirically, to silently copy a symlink's *target's*
+    content in under the symlink's own name (confirmed with a symlink
+    pointing outside the repository tree) -- a real information-
+    disclosure path this milestone's own security correction fixed here,
+    for every caller, not only the verifier's new artifact model.
+
+    ``expected_artifact_digest``, when given (Milestone S6's verifier
+    path only -- never set for the ``local=True`` CLI path, which has no
+    separate trust domain to prove anything to): the digest is recomputed
+    over the disposable *copy* just made -- never the shared source --
+    immediately before running anything. This is deliberate TOCTOU
+    -closure: the bytes that get digest-checked are the exact, private,
+    already-copied bytes that are about to be executed, so nothing can
+    change between the check and the run. A mismatch returns
+    ``SANDBOX_ERROR`` and the target is never executed at all."""
 
     workspace = Path(tempfile.mkdtemp(prefix="patchfrog-verify-"))
     try:
-        shutil.copytree(root_path, workspace, dirs_exist_ok=True)
+        shutil.copytree(root_path, workspace, dirs_exist_ok=True, symlinks=True)
+        if expected_artifact_digest is not None:
+            actual_digest = compute_artifact_digest(workspace)
+            if actual_digest != expected_artifact_digest:
+                return sandbox_error_evidence(test_target_path=test_target_path, commit_sha=commit_sha)
         return await run_pytest_verification(
             sandbox, workspace_root=workspace, test_target_path=test_target_path, commit_sha=commit_sha,
         )

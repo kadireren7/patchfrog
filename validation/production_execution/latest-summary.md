@@ -356,3 +356,159 @@ review run's `request_id` is structurally different from an old one's
 under a new run's identity in the first place. Adding a table here would
 have been exactly the "make the architecture look complete" anti-pattern
 Part AG explicitly warns against, not a genuine requirement.
+
+## 11. Security correction round: credential leak via staged `.git/config`
+
+A post-merge-review security correction found that the S6 trust-boundary
+claim ("the verifier never receives a GitHub credential") was **not yet
+true**. `RepositorySnapshotProvider._fetch_commit` (pre-existing code,
+reused unchanged by S6's own `stage_snapshot`) injects the GitHub
+installation token directly into the git remote URL via `_inject_token`,
+and `git remote add origin <that URL>` stores it in **plaintext** inside
+`.git/config`. S6's own `stage_snapshot` staged the *entire* checkout,
+`.git/` included, into the verifier-visible shared volume, and
+`execute_against_snapshot`'s `shutil.copytree` copied that `.git/config`
+straight into the hostile pytest execution workspace.
+
+**Empirically reproduced, synthetic token only** (`ghs_SYNTHETIC_SENTINEL_
+TOKEN_DO_NOT_USE_...`, never a real credential): a real
+`RepositorySnapshotProvider.acquire()` call left the sentinel in plaintext
+at `<snapshot>/.git/config`'s `[remote "origin"] url =` line; a real
+sandboxed pytest test (`open(".git/config").read()`) run through
+`execute_against_snapshot` **successfully read it and passed an assertion
+proving the token string was present** inside the bwrap-sandboxed
+workspace. This is a real, confirmed credential-exfiltration path, not a
+theoretical one.
+
+**A second, related finding** while designing the fix: `shutil.copytree`'s
+default (`symlinks=False`) *dereferences* symlinks -- a malicious
+repository-committed symlink pointing outside the repository tree gets
+its **target's content** silently copied into the disposable workspace,
+disguised as an ordinary file (`Path.is_symlink()` is `False` on the
+copy). Empirically confirmed with a synthetic outside file. This affected
+Milestone S's own original `local=True` CLI path too, not only S6 --
+fixed everywhere `execute_against_snapshot` is used.
+
+### Fix: Option A -- credential-free staged artifact
+
+The review worker no longer stages the credential-bearing git checkout
+into the shared volume at all. New flow:
+
+1. `RepositorySnapshotProvider.acquire()` clones into an **isolated,
+   never-shared** temp directory, exactly as before (still uses the
+   GitHub token -- the review worker is still trusted and still needs
+   it).
+2. `git archive <commit_sha>`, extracted into a **separate, fresh
+   directory under the shared staging root** -- `git archive` is a real,
+   already-battle-tested git primitive that exports *only tracked,
+   committed content* directly from the object database; it has no
+   concept of `.git/`, remotes, or credentials at all, so there is
+   nothing to leak by construction, not merely by careful exclusion.
+3. A deterministic content manifest digest
+   (`patchfrog.executable_verification.snapshot_staging.compute_artifact_digest`)
+   is computed over the *exported artifact itself* (never git metadata) --
+   relative path + entry kind (file/symlink/dir) + content hash (files) or
+   raw target string (symlinks, never dereferenced), sorted for stable
+   ordering.
+4. The isolated, credential-bearing clone from step 1 is deleted
+   immediately after the archive is extracted -- it never touches the
+   shared volume and its lifetime ends before any request is even built.
+5. The wire request carries an opaque `artifact_id` (a directory name
+   under a configured staging root -- never a full filesystem path) plus
+   the digest -- see section 13 below for why a bare path was rejected
+   too (Blocker 5).
+
+The verifier resolves `artifact_id` under its own operator-configured
+`VerifierSettings.staging_root`, copies it into a **fresh disposable
+workspace first**, then recomputes the digest over that disposable copy
+(not the shared source) before ever running pytest -- this is also the
+TOCTOU fix (section 12): the content that gets digest-checked is
+*exactly* the content that gets executed, because they are the same,
+already-private, already-copied bytes; nothing else can mutate them
+between the check and the run. A mismatch is `SANDBOX_ERROR`, never
+executed.
+
+`shutil.copytree` calls throughout `execute_against_snapshot` now pass
+`symlinks=True` -- a committed symlink is preserved *as a symlink*
+(and hashed as one, by its target string) in the disposable workspace,
+never dereferenced during the copy.
+
+## 12. Correction-round completion pass: two real gaps found and closed
+
+The correction described in section 11 above (credential-free artifact,
+content-manifest digest, TOCTOU closure, protocol-version enforcement,
+strict wire parsing, staging-root path trust) had already been
+implemented when this pass started. Auditing it end to end against the
+full security-correction spec (rather than trusting the prior summary
+alone) found two remaining, real gaps -- both fixed here, not merely
+documented:
+
+**Gap 1 -- a real test-assertion bug, caught by actually running the
+corpus.** `test_real_distributed_round_trip_rejects_protocol_version_zero`
+asserted `result is not None`, but `apps/verifier/tasks.py::_error_result`
+always echoes back the verifier's own current `VERIFIER_PROTOCOL_VERSION`
+in its rejection reply, never the mismatched request's `protocol_version`
+-- so `protocol.result_matches_request`'s own identity check (which pins
+`result.protocol_version == request.protocol_version` *and*
+`== VERIFIER_PROTOCOL_VERSION`) correctly never trusts that reply, and
+`VerifierDispatcher.dispatch` correctly returns `None`. Running the test
+for real reproduced exactly this: `assert None is not None` failed. This
+is not a security bug -- both branches (a same-shaped `SANDBOX_ERROR`
+result, or a dispatcher-level `None`) guarantee the one property that
+actually matters, that the hostile test target is never executed -- it is
+a test-assertion bug that hadn't yet been run to confirm. Fixed by
+loosening the assertion to match the adjacent
+`test_real_distributed_round_trip_rejects_future_protocol_version` test's
+own already-correct tolerant assertion (`result is None or
+result.outcome is SANDBOX_ERROR`).
+
+**Gap 2 -- `docker-compose.yml`'s `verifier` service never set
+`VERIFIER_STAGING_ROOT`.** `VerifierSettings.staging_root` is a required
+field with no default (deliberately -- an operator must explicitly decide
+the one trusted staging root, never inferred). `apps/verifier/
+celery_app.py` calls `get_verifier_settings()` at *module import time*,
+so the container as shipped in `docker-compose.yml` would have crashed
+immediately on startup (`pydantic.ValidationError: VERIFIER_STAGING_ROOT
+Field required`) the moment an operator uncommented the verifier-enablement
+block and brought the stack up -- confirmed by actually building the
+`verifier` image and running it with only `REDIS_URL` set, which fails
+exactly as predicted, then re-running with `VERIFIER_STAGING_ROOT` also
+set, which starts cleanly and registers exactly one task
+(`patchfrog.verify_candidate`) on exactly one queue
+(`patchfrog-verification`). Fixed by adding `VERIFIER_STAGING_ROOT:
+/var/lib/patchfrog/verification-snapshots` to the `verifier` service's
+`environment:` block in `docker-compose.yml`, matching the shared volume
+path already mounted there (and already documented, but not wired, for
+the worker side's own `VERIFICATION_SNAPSHOT_ROOT`). `docs/deployment.md`
+and `docs/executable-verification.md` are updated to describe the
+corrected credential-free/content-digest/staging-root-trust/TOCTOU/
+protocol-version architecture in detail -- both previously still
+described the pre-correction ("stages the snapshot... still using the
+GitHub token", "git rev-parse HEAD" integrity) design.
+
+Both gaps were found by actually executing the corpus and actually
+building and running the verifier container -- not by re-reading the
+implementation and assuming it matched its own docstrings.
+
+### Fresh full-gate results after this pass
+
+- `ruff check .`: clean (two findings in the corrected test file --
+  an unused `shutil` import and an unsorted import block -- fixed).
+- `mypy . --strict`: clean, 579 source files.
+- `pytest tests/unit`: 1486 passed.
+- `pytest tests/integration`: 619 passed (includes the 16-case
+  `test_production_execution_corpus.py` security corpus).
+- `alembic heads`: single head (`0028_executable_verification`),
+  unaffected by this correction (no migration).
+- Docker: all three images (`api`, `worker`, `verifier`) build clean;
+  the `verifier` image was run standalone against the real Redis
+  container with `VERIFIER_STAGING_ROOT` set and reached `celery@...
+  ready.`, registering exactly `patchfrog.verify_candidate` on exactly
+  `patchfrog-verification`.
+- Tracked-file secret scan (git diff of every file this correction
+  touched) for GitHub-token-shaped/PEM-shaped/`api_key=`-shaped strings:
+  no matches other than the documented, intentional
+  `ghs_SYNTHETIC_SENTINEL_TOKEN_DO_NOT_USE_...` test fixture. This proves
+  only tracked-file diff content -- it is not a claim about terminal
+  scrollback, CI logs, or any other local/UI display surface.
+- No live Anthropic/Gemini/OpenAI call made at any point in this pass.

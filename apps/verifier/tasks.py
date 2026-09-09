@@ -1,14 +1,14 @@
 """The one task this process runs: execute one bounded, already-eligible
-verification request against an already-staged, integrity-checked
-repository snapshot.
+verification request against an already-staged, credential-free,
+integrity-checked artifact.
 
 Reuses :func:`patchfrog.executable_verification.service.execute_against_snapshot`
 -- the exact same "copy into a disposable workspace, then run the
 hardened bwrap sandbox" sequence Milestone S's own ``local=True`` (CLI)
 path already uses, completely unmodified. This task adds nothing to the
-sandbox itself; it only decides *whether* to call it (snapshot integrity
-first) and translates between the wire protocol and the existing
-in-process types.
+sandbox itself; it only decides *whether* to call it (protocol version,
+artifact-path safety, content integrity, all fail-closed) and translates
+between the wire protocol and the existing in-process types.
 
 Eligibility (which test file to run) is **not** re-derived here -- the
 review worker already determined ``test_target_path`` authoritatively
@@ -28,6 +28,7 @@ import asyncio
 from pathlib import Path
 
 from apps.verifier.celery_app import verifier_celery_app
+from patchfrog.config.verifier_settings import get_verifier_settings
 from patchfrog.executable_verification.domain import (
     MAX_VERIFICATION_SECONDS,
     VerificationKind,
@@ -38,10 +39,10 @@ from patchfrog.executable_verification.protocol import (
     VERIFIER_PROTOCOL_VERSION,
     VerificationExecutionRequest,
     VerificationExecutionResult,
+    enforce_request_protocol_version,
 )
 from patchfrog.executable_verification.sandbox import VerificationSandbox, is_sandbox_available
 from patchfrog.executable_verification.service import execute_against_snapshot
-from patchfrog.executable_verification.snapshot_staging import verify_snapshot_integrity
 
 
 def _error_result(request: VerificationExecutionRequest, *, outcome: VerificationOutcome) -> dict[str, object]:
@@ -60,14 +61,44 @@ def _error_result(request: VerificationExecutionRequest, *, outcome: Verificatio
     ).to_wire()
 
 
+def resolve_artifact_path(artifact_id: str, *, staging_root: Path) -> Path | None:
+    """Security correction (Part 5): a request's ``artifact_id`` is never
+    trusted as a filesystem path -- it must be a bare directory name (no
+    path separators, no ``.``/``..``) directly under this verifier's own
+    operator-configured ``staging_root``, and the *canonically resolved*
+    result must still be beneath that root (rejects a traversal or
+    symlink-escape attempt). Returns ``None`` on any violation -- the
+    caller must treat that exactly like any other integrity failure:
+    ``SANDBOX_ERROR``, never executed."""
+
+    if not artifact_id or "/" in artifact_id or "\\" in artifact_id or artifact_id in (".", ".."):
+        return None
+
+    resolved_root = staging_root.resolve()
+    candidate = (resolved_root / artifact_id).resolve()
+    try:
+        candidate.relative_to(resolved_root)
+    except ValueError:
+        return None
+    if not candidate.is_dir():
+        return None
+    return candidate
+
+
 async def _run_verification(request: VerificationExecutionRequest) -> dict[str, object]:
+    if not enforce_request_protocol_version(request):
+        # Fail closed before anything else -- an old/future/malformed
+        # protocol version is never partially trusted, never executed.
+        return _error_result(request, outcome=VerificationOutcome.SANDBOX_ERROR)
+
     if request.verification_kind is not VerificationKind.EXISTING_TARGETED_TEST:
         # v1 implements exactly one kind -- see domain.py's own docstring.
         # Never guessed at or silently substituted.
         return _error_result(request, outcome=VerificationOutcome.UNSUPPORTED)
 
-    snapshot_path = Path(request.snapshot_path)
-    if not verify_snapshot_integrity(root_path=snapshot_path, expected_commit_sha=request.commit_sha):
+    settings = get_verifier_settings()
+    artifact_path = resolve_artifact_path(request.artifact_id, staging_root=Path(settings.staging_root))
+    if artifact_path is None:
         return _error_result(request, outcome=VerificationOutcome.SANDBOX_ERROR)
 
     if not is_sandbox_available():
@@ -75,8 +106,18 @@ async def _run_verification(request: VerificationExecutionRequest) -> dict[str, 
 
     timeout_seconds = min(request.timeout_seconds, MAX_VERIFICATION_SECONDS)
     sandbox = VerificationSandbox(timeout_seconds=timeout_seconds)
+    # execute_against_snapshot copies artifact_path into a fresh disposable
+    # workspace FIRST, then (because expected_artifact_digest is given)
+    # recomputes the content digest over that private copy -- never the
+    # shared source -- immediately before running anything. This is the
+    # TOCTOU fix: the bytes that get digest-checked are the exact bytes
+    # about to execute, because they are the same, already-private copy.
     evidence = await execute_against_snapshot(
-        sandbox, root_path=snapshot_path, test_target_path=request.test_target_path, commit_sha=request.commit_sha,
+        sandbox,
+        root_path=artifact_path,
+        test_target_path=request.test_target_path,
+        commit_sha=request.commit_sha,
+        expected_artifact_digest=request.artifact_digest,
     )
 
     return VerificationExecutionResult(

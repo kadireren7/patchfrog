@@ -126,6 +126,14 @@ services:
       target: verifier
     environment:
       REDIS_URL: redis://redis:6379/0
+      # Security correction (Milestone S6 correction round, Part 5): the
+      # one directory this container will ever resolve a request's
+      # `artifact_id` beneath -- must be the exact same shared volume path
+      # `worker` stages credential-free artifacts into. Required, no
+      # default (patchfrog.config.verifier_settings.VerifierSettings) --
+      # an operator must set this explicitly; it is never inferred from a
+      # request or from repository-controlled configuration.
+      VERIFIER_STAGING_ROOT: /var/lib/patchfrog/verification-snapshots
     volumes:
       - verification_snapshots:/var/lib/patchfrog/verification-snapshots
     depends_on:

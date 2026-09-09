@@ -50,6 +50,17 @@ class VerifierSettings(BaseSettings):
     #: allowlist, unchanged by this milestone).
     redis_url: str = Field(alias="REDIS_URL")
 
+    #: Security correction (Part 5): the one operator-owned root directory
+    #: the verifier will ever read a staged artifact from. A request's own
+    #: `artifact_id` is *never* a raw filesystem path -- it is resolved as
+    #: `(staging_root / artifact_id).resolve()` and rejected (SANDBOX_ERROR)
+    #: unless the result is still beneath this exact root (see
+    #: apps.verifier.tasks.resolve_artifact_path). Required, no default:
+    #: an operator deploying the verifier must explicitly decide where its
+    #: one trusted read location is -- it can never be inferred from a
+    #: request, and never from repository-controlled configuration.
+    staging_root: str = Field(alias="VERIFIER_STAGING_ROOT")
+
     @field_validator("log_level")
     @classmethod
     def _validate_log_level(cls, value: str) -> str:

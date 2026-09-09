@@ -131,20 +131,44 @@ Review worker (trusted plane)              Verifier (execution plane)
     DB -- never a hostile test          -- NO provider key
   - determines eligibility (pure,       -- NO GitHub App key/token
     no I/O)                             -- NO DATABASE_URL
-  - stages one exact-head snapshot      -- only a Redis credential
-    once per review run, into a           (its own dedicated queue)
-    shared volume (still using the
-    GitHub token -- it already has
-    one)                                -- reads the pre-staged
-  - dispatches a bounded                   snapshot, verifies its
-    VerificationExecutionRequest             identity + content
-    by name onto the verifier's              (patchfrog.executable_
-    own queue                                verification.snapshot_staging)
-  - awaits a bounded                    -- runs the *exact same*,
-    VerificationExecutionResult              completely unmodified
-    (never falls back to running             bwrap sandbox Milestone S
-    the test itself on any failure)          already built
+  - exports a credential-free,          -- only a Redis credential
+    exact-head artifact (git archive,      (its own dedicated queue)
+    no .git/, no remote, no token) --
+    once per review run, into a         -- resolves the request's opaque
+    shared staging volume                  artifact_id strictly beneath
+  - dispatches a bounded                   its own configured staging
+    VerificationExecutionRequest             root (rejects traversal/
+    (opaque artifact_id + content            symlink escape)
+    digest, never a filesystem path)     -- copies it into a fresh
+    by name onto the verifier's              disposable workspace, then
+    own queue                                recomputes the content
+  - awaits a bounded                         digest over THAT copy
+    VerificationExecutionResult          -- runs the *exact same*,
+    (never falls back to running             completely unmodified
+    the test itself on any failure)          bwrap sandbox Milestone S
+                                              already built
 ```
+
+**Security correction (post-S6 review round).** The first version of
+this design staged the *entire git checkout* -- `.git/` included -- into
+the shared volume. `RepositorySnapshotProvider` stores the GitHub
+installation token directly in the git remote URL, which git writes in
+plaintext to `.git/config`; a real, synthetic-token reproduction proved a
+sandboxed hostile pytest test could read that file and recover it (see
+`validation/production_execution/latest-summary.md` section 11 for the
+full empirical transcript). Network denial does not mitigate this kind of
+leak -- a credential read from disk and printed to bounded stdout still
+crosses back into the trusted review worker as "evidence." The fix,
+described in the diagram above and implemented in
+`patchfrog.executable_verification.snapshot_staging.export_artifact`, is
+that the worker never stages anything with `.git/` in it at all: `git
+archive` -- a real git primitive with no concept of remotes or
+credentials -- exports only the tracked, committed content at the exact
+commit, directly from the object database. There is nothing to leak by
+construction, not merely by careful exclusion. The credential-bearing
+clone the worker still needs internally (to reach the commit in the first
+place) lives in an isolated, never-shared temp directory and is deleted
+before any verifier-visible artifact or request exists.
 
 The verifier's own task
 (`apps/verifier/tasks.py::verify_candidate_task`) calls
@@ -153,17 +177,74 @@ the identical "copy into a disposable workspace, then sandbox it"
 function Milestone S's own CLI/local path already uses. Nothing about the
 sandbox mechanism itself changed for S6; only which process invokes it,
 and how the repository content gets there without a GitHub credential.
+That same correction also fixed `shutil.copytree`'s default
+(`symlinks=False`) *dereferencing* symlinks during this copy -- a
+committed symlink pointing outside the repository tree previously had its
+**target's content** silently copied in under the symlink's own name.
+Every `copytree` call in this path now passes `symlinks=True`: a symlink
+is preserved and hashed as a symlink, never dereferenced.
 
-**Snapshot integrity, not signing**: the verifier independently
-recomputes `git rev-parse HEAD` (identity) and `git diff-index --quiet
-HEAD --` (real on-disk content matches that commit, byte for byte) against
-the snapshot path it's given -- any tampering between staging and
-verification is rejected, fail closed, before any test runs. **Result
-authenticity**: the review worker checks the returned result's
-`request_id`/`commit_sha`/`verification_kind`/`test_target_path` all match
-what it actually asked for before trusting it -- no cryptographic signing
-(the transport is the operator's own internal Redis, not a public
-network), but never a blind accept either.
+**Content-manifest integrity, not git-metadata integrity, and no
+signing.** The earlier design tried `git rev-parse HEAD` (identity) plus
+`git diff-index --quiet HEAD --` (tracked content unchanged) -- a false
+integrity signal, because it only proves *tracked* content matches; it
+says nothing about an injected *untracked* file, which can still
+influence pytest/import behavior. The corrected design instead computes a
+deterministic content-manifest digest
+(`snapshot_staging.compute_artifact_digest`) directly over the exported
+artifact's actual bytes -- relative path, entry kind (file/symlink/
+directory), and content hash (files) or raw link target (symlinks, never
+dereferenced) -- which represents every byte the sandbox could possibly
+see, tracked or not, by construction (there is no untracked-vs-tracked
+distinction left once `.git/` itself is gone). **This is also the TOCTOU
+fix**: the verifier does not check one tree and then execute a separately
+mutable one. It first copies the shared artifact into its own fresh,
+private, disposable workspace, and *only then* recomputes the digest --
+over that already-private copy, not the shared source -- immediately
+before running anything. The bytes that get checked are, by construction,
+the exact bytes about to execute; nothing else can mutate them in
+between. A digest mismatch (whether from real tampering or a corrupted
+shared volume) is `SANDBOX_ERROR`, never executed. No cryptographic
+signing on top of this (the transport is the operator's own internal
+Redis, not a public network) -- integrity is content-addressed, not
+merely asserted.
+
+**Staging-root path trust.** A request's `artifact_id` is never trusted
+as a filesystem path. It must be a bare directory name (no path
+separators, no `.`/`..`) directly under the verifier's own
+operator-configured `VERIFIER_STAGING_ROOT` (`VerifierSettings.
+staging_root`); the *canonically resolved* result must still be beneath
+that root, or the request is rejected (`SANDBOX_ERROR`) before anything
+is read. This closes off both `../` traversal and a symlink planted
+inside the staging root pointing outside it. The root itself is a
+required, no-default operator setting -- never inferred from a request,
+and never repository-controlled.
+
+**Protocol version enforcement, not just carrying.** Every request and
+result carries `protocol_version`. The verifier rejects (before any
+execution) a request whose version does not exactly equal
+`VERIFIER_PROTOCOL_VERSION`; the review worker independently rejects a
+result whose `protocol_version` doesn't match what it asked for, as part
+of the same identity check described next. No range tolerance for this
+still-unreleased v1 contract -- a mismatch is always treated as a bug or
+an attack, never smoothed over.
+
+**Strict wire parsing.** `VerificationExecutionRequest.from_wire`/
+`VerificationExecutionResult.from_wire` (`patchfrog.executable_
+verification.protocol`) validate each field's actual decoded JSON type
+before use -- a stray `"false"` string is never silently coerced to the
+bool `True` (`bool("false") == True` is exactly the class of trap this
+refuses to let through), a bool is never accepted where an int is
+expected, and every numeric/string field is bounds-checked. Any violation
+raises and is always treated as a fail-closed rejection by the caller,
+never a best-effort partial parse.
+
+**Result authenticity**: the review worker checks the returned result's
+`request_id`/`protocol_version`/`commit_sha`/`verification_kind`/
+`test_target_path` all match what it actually asked for
+(`protocol.result_matches_request`) before trusting it -- no
+cryptographic signing (the transport is the operator's own internal
+Redis, not a public network), but never a blind accept either.
 
 **Off by default** (`PATCHFROG_VERIFIER_ENABLED=false`): the review worker
 never attempts production verification at all until an operator
@@ -272,14 +353,17 @@ after every attempt regardless of outcome.
 
 ## No source mutation
 
-Local-mode verification (`local=True`) copies the existing checkout
-(`shutil.copytree`) into a fresh, disposable temp directory before
-running anything there -- the caller's own working tree is never
-written to. Remote-mode verification (`local=False`) acquires its own
-fresh, exclusive `RepositorySnapshotProvider` clone, exactly like
-`patchfrog.context.service.ContextService` already does per candidate,
-cleaned up via its own context manager. Either way, the workspace used
-for execution is always disposed of afterward, success or failure.
+Local-mode verification (`local=True`, CLI/local review, single trust
+domain) copies the existing checkout (`shutil.copytree`, `symlinks=True`)
+into a fresh, disposable temp directory before running anything there --
+the caller's own working tree is never written to. Production
+(`local=False`) never executes in the review worker process at all (see
+"Architecture" above): the worker exports a credential-free artifact and
+dispatches to the separate verifier process, which makes its own fresh
+disposable copy of that artifact before running anything. Either way, the
+workspace actually used for execution is always a fresh disposable copy,
+disposed of afterward, success or failure -- never the original checkout
+or the shared staged artifact itself.
 
 ## Exact-head binding, no caching
 

@@ -240,8 +240,9 @@ the full list and current defaults. Highlights:
 | `PROMETHEUS_MULTIPROC_DIR` | unset | Worker only. Required for the worker's own `:9100/metrics` to report anything -- see [Metrics](#metrics) |
 | `WORKER_METRICS_PORT` | `9100` | Worker only, only relevant when `PROMETHEUS_MULTIPROC_DIR` is set |
 | `PATCHFROG_VERIFIER_ENABLED` | `false` | Worker only. See [Executable Verification production deployment](#executable-verification-production-deployment) below |
-| `VERIFICATION_SNAPSHOT_ROOT` | unset (system temp dir) | Worker only, only relevant when `PATCHFROG_VERIFIER_ENABLED=true` |
+| `VERIFICATION_SNAPSHOT_ROOT` | unset (system temp dir) | Worker only, only relevant when `PATCHFROG_VERIFIER_ENABLED=true`. The worker's own credential-free artifact staging root -- must be the same shared volume/path as the verifier's `VERIFIER_STAGING_ROOT` below |
 | `PATCHFROG_VERIFIER_WAIT_TIMEOUT_SECONDS` | `45.0` | Worker only, only relevant when `PATCHFROG_VERIFIER_ENABLED=true` |
+| `VERIFIER_STAGING_ROOT` | required (no default) | Verifier only. The one directory the verifier will ever resolve a request's opaque `artifact_id` beneath -- see [Executable Verification production deployment](#executable-verification-production-deployment) |
 
 ## Executable Verification production deployment
 
@@ -253,19 +254,38 @@ process** (`apps/verifier/`, a second Celery app) so that hostile,
 repository-controlled test code never runs in the same process as the
 GitHub App private key, provider credentials, or the database
 connection -- see `docs/executable-verification.md` and
-`validation/production_execution/latest-summary.md` for the full
-trust-boundary rationale.
+`validation/production_execution/latest-summary.md` (including its
+section 11 security correction round) for the full trust-boundary
+rationale.
+
+**The `worker` service never hands the verifier a GitHub credential, or
+`.git/` at all.** The worker exports the exact-head commit's tracked
+content only (`git archive`, which has no concept of remotes or
+credentials) into a fresh, credential-free artifact directory under the
+shared volume, and computes a content-manifest digest over it. The
+credential-bearing clone the worker used to reach that commit lives in an
+isolated, never-shared temp directory and is deleted before the request
+is even built. The wire request carries only an opaque `artifact_id`
+(a bare directory name, never a filesystem path) plus that digest -- see
+"Snapshot integrity, not signing" in `docs/executable-verification.md`.
 
 **Off by default.** `PATCHFROG_VERIFIER_ENABLED=false` (the default) means
 the review worker never attempts Executable Verification in production at
 all -- not a fallback to less-isolated in-process execution, simply not
-attempted. Turning it on requires two things together:
+attempted. Turning it on requires three things together:
 
 1. `PATCHFROG_VERIFIER_ENABLED=true` and `VERIFICATION_SNAPSHOT_ROOT` set
    on the `worker` service, pointing at a directory shared with the
    `verifier` service (a Docker volume mounted at the identical path in
    both containers -- see the commented-out block in `docker-compose.yml`).
-2. The `verifier` service itself actually running and able to establish
+2. `VERIFIER_STAGING_ROOT` set on the `verifier` service to that exact
+   same shared path -- required, no default. The verifier resolves every
+   request's `artifact_id` strictly beneath this one operator-owned root
+   (canonical-path resolution, symlink-escape and `../` traversal both
+   rejected as `SANDBOX_ERROR`) -- a request can never select an
+   arbitrary host path, and repository-controlled configuration can never
+   influence this value.
+3. The `verifier` service itself actually running and able to establish
    real sandbox isolation.
 
 **(2) is not automatic under the default containerized deployment.**
@@ -286,6 +306,25 @@ milestone is running the verifier as a **bare, non-containerized host
 process** (e.g. a systemd service, or a dedicated VM) -- outside any
 Docker nesting, `bwrap` is an ordinary unprivileged Linux mechanism with
 no special capability requirement at all.
+
+**Staging permissions -- a documented limitation, not a silent gap.**
+Architecturally, the worker should write staged artifacts and the
+verifier should need only read access to them, with the hostile pytest
+subprocess mutating only its own separate disposable copy. On a bare-host
+deployment where both processes run as the *same* Unix user (the
+simplest, and this milestone's own validated, deployment shape),
+filesystem permissions cannot meaningfully separate "worker can write" from
+"verifier can only read" -- both processes share one user's write access
+to the shared volume. This is compensated for, not ignored: the verifier
+always makes its own **disposable copy** of the staged artifact first and
+recomputes the content digest over that copy -- never the shared
+source -- immediately before executing anything, so a mutation to the
+shared artifact after digest computation is either caught by the digest
+mismatch or simply never observed by the copy already in flight (never a
+silent execution of tampered content). An operator running the worker and
+verifier as genuinely separate Unix users (or separate hosts with a
+read-only NFS/bind-mount for the verifier's side) gets real OS-level
+write separation for free, with no PatchFrog code change.
 
 ## Migration process
 

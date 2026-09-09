@@ -24,10 +24,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import shutil
+import tempfile
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -102,7 +104,11 @@ from patchfrog.executable_verification.service import (
     build_executable_verification_report,
     sandbox_error_evidence,
 )
-from patchfrog.executable_verification.snapshot_staging import stage_snapshot
+from patchfrog.executable_verification.snapshot_staging import (
+    ArtifactExportError,
+    compute_artifact_digest,
+    export_artifact,
+)
 from patchfrog.executable_verification.telemetry import (
     summarize_for_persistence as summarize_executable_verification,
 )
@@ -136,8 +142,6 @@ from patchfrog.persistence.repositories import (
 )
 from patchfrog.persistence.repositories.analysis_run import AnalysisRunRepository
 from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
-from patchfrog.repository.git import GitError
-from patchfrog.repository.snapshot import RepositorySnapshot
 from patchfrog.repository_learnings.domain import RepositoryLearningsReport
 from patchfrog.repository_learnings.evidence import (
     evidence_text_for_candidate as repository_learning_evidence_text_for_candidate,
@@ -306,6 +310,20 @@ async def persist_malformed_config_failure(
         await session.commit()
     logger.error("review_run_failed_malformed_config", run_id=str(run.id), error=str(exc))
     return failed_run
+
+
+@dataclass(frozen=True, slots=True)
+class _StagedArtifact:
+    """Milestone S6: one review run's credential-free, exact-head
+    artifact (see snapshot_staging.export_artifact) plus its
+    content-manifest digest -- ``artifact_id`` (a bare directory name,
+    never a full path) and ``digest`` are what actually cross the wire to
+    the verifier; ``path`` is this process's own handle for cleanup after
+    the run."""
+
+    path: Path
+    artifact_id: str
+    digest: str
 
 
 class _CandidateOutcome:
@@ -956,27 +974,37 @@ class PullRequestReviewService:
         semaphore = asyncio.Semaphore(max(1, config.max_concurrent_requests))
         verification_budget = VerificationBudget()
 
-        # Milestone S6: one exact-head snapshot staged for the entire
-        # review run (never per-candidate -- every candidate in this run
-        # shares the same commit_sha), only when a verifier is actually
-        # configured for this deployment and this is production
-        # (local=False) review. A staging failure (network error, bad
-        # token) never fails the review itself -- it just means
-        # verification is unavailable for this run, exactly like
-        # is_sandbox_available() returning False already means for the
-        # in-process path.
-        staged_snapshot: RepositorySnapshot | None = None
+        # Milestone S6: one exact-head, credential-free artifact exported
+        # for the entire review run (never per-candidate -- every
+        # candidate in this run shares the same commit_sha), only when a
+        # verifier is actually configured for this deployment and this is
+        # production (local=False) review. export_artifact never stages
+        # .git/ (or the GitHub-token-bearing remote URL git would
+        # otherwise store in it) into the shared, verifier-visible
+        # location at all -- see snapshot_staging.py's own docstring and
+        # validation/production_execution/latest-summary.md section 11
+        # for the security correction this replaced. A staging failure
+        # (network error, bad token) never fails the review itself -- it
+        # just means verification is unavailable for this run, exactly
+        # like is_sandbox_available() returning False already means for
+        # the in-process path.
+        staged_artifact: _StagedArtifact | None = None
         if not local and self._verifier_dispatcher is not None:
             try:
-                staged_snapshot = stage_snapshot(
+                artifact_dir = export_artifact(
                     clone_url=str(context_kwargs["clone_url"]),
                     commit_sha=commit_sha,
                     repository_full_name=repository_full_name,
                     token=context_kwargs.get("token"),  # type: ignore[arg-type]
-                    shared_root=Path(self._verification_snapshot_root) if self._verification_snapshot_root else None,
+                    destination_root=Path(self._verification_snapshot_root or tempfile.gettempdir()),
                 )
-            except (GitError, OSError):
-                staged_snapshot = None
+                staged_artifact = _StagedArtifact(
+                    path=artifact_dir,
+                    artifact_id=artifact_dir.name,
+                    digest=compute_artifact_digest(artifact_dir),
+                )
+            except (ArtifactExportError, OSError):
+                staged_artifact = None
 
         orchestrator = AgentOrchestrator(
             reviewer_providers={
@@ -1018,14 +1046,14 @@ class PullRequestReviewService:
                     cross_repo_report=cross_repo_report,
                     combined_companions=combined_companions,
                     verification_budget=verification_budget,
-                    staged_snapshot=staged_snapshot,
+                    staged_artifact=staged_artifact,
                 )
 
         try:
             await asyncio.gather(*(_process(o) for o in outcomes))
         finally:
-            if staged_snapshot is not None:
-                staged_snapshot.cleanup()
+            if staged_artifact is not None:
+                shutil.rmtree(staged_artifact.path, ignore_errors=True)
 
         all_final: list[FinalAIFinding] = [f for o in outcomes for f in o.final]
         dedup_result = deduplicate(tuple(all_final))
@@ -1351,7 +1379,7 @@ class PullRequestReviewService:
         cross_repo_report: CrossRepoIntelligenceReport,
         combined_companions: tuple[ExpectedCompanionChange, ...],
         verification_budget: VerificationBudget,
-        staged_snapshot: RepositorySnapshot | None = None,
+        staged_artifact: _StagedArtifact | None = None,
         context_config_override: ContextConfig | None = None,
     ) -> None:
         candidate = outcome.candidate
@@ -1543,7 +1571,7 @@ class PullRequestReviewService:
                     budget=verification_budget,
                 )
 
-            if self._verifier_dispatcher is None or staged_snapshot is None:
+            if self._verifier_dispatcher is None or staged_artifact is None:
                 return EMPTY_REPORT
 
             target = determine_verification_target(candidate=candidate, expected_companions=combined_companions)
@@ -1568,7 +1596,8 @@ class PullRequestReviewService:
                 commit_sha=commit_sha,
                 verification_kind=VerificationKind.EXISTING_TARGETED_TEST,
                 test_target_path=target,
-                snapshot_path=str(staged_snapshot.root_path),
+                artifact_id=staged_artifact.artifact_id,
+                artifact_digest=staged_artifact.digest,
                 timeout_seconds=MAX_VERIFICATION_SECONDS,
             )
             dispatched = await self._verifier_dispatcher.dispatch(request)

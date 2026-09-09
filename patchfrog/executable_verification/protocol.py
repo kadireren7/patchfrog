@@ -4,13 +4,14 @@ A narrow, independently-versioned request/result contract for handing a
 *bounded* verification job from the trusted review worker to a
 credential-minimal verifier process/container over the existing Celery/
 Redis queue. See ``validation/production_execution/latest-summary.md``
-for the full trust-boundary audit and architecture decision.
+for the full trust-boundary audit, architecture decision, and the
+security correction round this exact shape was hardened by.
 
 **This is transport only.** The verifier's own execution logic is
 entirely unchanged from Milestone S --
-:func:`patchfrog.executable_verification.service.build_executable_verification_report`
+:func:`patchfrog.executable_verification.service.execute_against_snapshot`
 is called exactly as before; only *which process* calls it, and *how the
-repository snapshot gets there*, are new. ``ExecutableVerificationReport``/
+repository content gets there*, are new. ``ExecutableVerificationReport``/
 ``ExecutableVerificationEvidence`` remain the one, unconverted true result
 model everywhere except this thin wire boundary -- never a second,
 competing result model.
@@ -19,19 +20,43 @@ competing result model.
 list): no provider key, no GitHub App private key, no arbitrary
 environment, no arbitrary shell command, no arbitrary mounts, no PR body,
 no raw secrets. A request carries only what execution genuinely needs:
-identity, exact commit SHA, verification kind/target, a pre-staged
-snapshot location, and bounded timeout data. Snapshot integrity is
-verified from the commit SHA itself against real on-disk content (see
-:mod:`patchfrog.executable_verification.snapshot_staging`) -- no
-separate digest field is needed.
+identity, exact commit SHA, verification kind/target, an *opaque artifact
+identifier* (never a raw filesystem path -- the verifier resolves it under
+its own operator-configured staging root; see
+:mod:`apps.verifier.tasks` for why a bare path was rejected) plus its
+content digest, and bounded timeout data.
+
+**Strict wire parsing** (this module's own security correction): a
+malformed or adversarial wire payload must never be silently coerced into
+something plausible-looking. ``bool("false") == True`` is exactly the
+class of Python-coercion trap this module refuses to let through --
+every field's actual JSON-decoded type is checked before use, and
+anything unexpected raises, which the caller
+(:class:`patchfrog.executable_verification.dispatch.VerifierDispatcher`,
+:func:`apps.verifier.tasks._run_verification`) always turns into a fail
+-closed rejection, never a best-effort parse.
+
+**Protocol version is enforced, not merely carried.** A request whose
+``protocol_version`` does not exactly equal
+:data:`VERIFIER_PROTOCOL_VERSION` is rejected by the verifier before any
+execution; a result whose ``protocol_version`` doesn't match is rejected
+by the review worker before being trusted. No range tolerance -- this is
+the initial, still-unreleased v1 contract; a mismatch is always a bug or
+an attack, never a compatibility case to smooth over.
 """
 
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass
 
-from patchfrog.executable_verification.domain import VerificationKind, VerificationOutcome
+from patchfrog.executable_verification.domain import (
+    MAX_STDERR_EXCERPT_BYTES,
+    MAX_STDOUT_EXCERPT_BYTES,
+    VerificationKind,
+    VerificationOutcome,
+)
 
 #: Independently versioned from EXECUTABLE_VERIFICATION_VERSION -- this
 #: describes the *wire shape* of the request/result contract crossing the
@@ -52,6 +77,99 @@ VERIFICATION_QUEUE_NAME = "patchfrog-verification"
 #: never imports apps.verifier's own task module, so it never needs (and
 #: never gets) any of the verifier's own credential-minimal settings.
 VERIFICATION_TASK_NAME = "patchfrog.verify_candidate"
+
+#: Defensive wire-level bounds -- independent of (and tighter than or
+#: equal to) the sandbox's own MAX_VERIFICATION_SECONDS/MAX_*_EXCERPT_BYTES
+#: enforcement, so a malformed or adversarial payload is rejected at parse
+#: time, before it ever reaches execution or is trusted as a result.
+_MIN_WIRE_TIMEOUT_SECONDS = 0.1
+_MAX_WIRE_TIMEOUT_SECONDS = 300.0
+_MAX_WIRE_DURATION_MS = 600_000.0
+#: A generous multiple over the sandbox's own excerpt caps -- allows for
+#: the "...(truncated)" marker and UTF-8 multi-byte slop, while still
+#: rejecting a wildly oversized payload a malformed/malicious verifier
+#: reply should never be able to smuggle through.
+_MAX_WIRE_EXCERPT_BYTES = 4 * max(MAX_STDOUT_EXCERPT_BYTES, MAX_STDERR_EXCERPT_BYTES)
+
+
+class ProtocolValidationError(ValueError):
+    """A wire payload failed strict validation -- the caller must treat
+    this exactly like any other unrecoverable dispatch/parse failure
+    (fail closed), never attempt a best-effort partial parse."""
+
+
+def _require_str(data: dict[str, object], key: str) -> str:
+    value = data.get(key)
+    if not isinstance(value, str) or not value:
+        raise ProtocolValidationError(f"{key!r} must be a non-empty string, got {value!r}")
+    return value
+
+
+def _require_int(data: dict[str, object], key: str) -> int:
+    value = data.get(key)
+    # bool is a subclass of int in Python -- explicitly excluded so a
+    # stray `true`/`false` in the wire payload is never silently accepted
+    # as 1/0.
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ProtocolValidationError(f"{key!r} must be an int, got {value!r}")
+    return value
+
+
+def _require_bool(data: dict[str, object], key: str) -> bool:
+    value = data.get(key)
+    if not isinstance(value, bool):
+        raise ProtocolValidationError(f"{key!r} must be a bool, got {value!r} ({type(value).__name__})")
+    return value
+
+
+def _require_finite_float(data: dict[str, object], key: str, *, minimum: float, maximum: float) -> float:
+    value = data.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ProtocolValidationError(f"{key!r} must be numeric, got {value!r}")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ProtocolValidationError(f"{key!r} must be finite, got {result!r}")
+    if not (minimum <= result <= maximum):
+        raise ProtocolValidationError(f"{key!r}={result!r} out of bounds [{minimum}, {maximum}]")
+    return result
+
+
+def _require_optional_int(data: dict[str, object], key: str) -> int | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ProtocolValidationError(f"{key!r} must be an int or null, got {value!r}")
+    return value
+
+
+def _require_bounded_str(data: dict[str, object], key: str, *, max_bytes: int) -> str:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ProtocolValidationError(f"{key!r} must be a string, got {value!r}")
+    if len(value.encode("utf-8")) > max_bytes:
+        raise ProtocolValidationError(f"{key!r} exceeds {max_bytes} bytes")
+    return value
+
+
+def _require_verification_kind(data: dict[str, object], key: str) -> VerificationKind:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ProtocolValidationError(f"{key!r} must be a string, got {value!r}")
+    try:
+        return VerificationKind(value)
+    except ValueError as exc:
+        raise ProtocolValidationError(f"{key!r}={value!r} is not a known VerificationKind") from exc
+
+
+def _require_verification_outcome(data: dict[str, object], key: str) -> VerificationOutcome:
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ProtocolValidationError(f"{key!r} must be a string, got {value!r}")
+    try:
+        return VerificationOutcome(value)
+    except ValueError as exc:
+        raise ProtocolValidationError(f"{key!r}={value!r} is not a known VerificationOutcome") from exc
 
 
 def compute_request_id(
@@ -90,7 +208,17 @@ def compute_request_id(
 class VerificationExecutionRequest:
     """Everything the verifier needs, and nothing more. Never carries a
     provider key, GitHub credential, arbitrary environment, or arbitrary
-    command -- see this module's own docstring."""
+    command -- see this module's own docstring.
+
+    ``artifact_id`` is an opaque identifier (never a raw filesystem
+    path) -- the verifier resolves it under its own operator-configured
+    staging root and rejects anything that would escape it (path
+    traversal, symlink escape). ``artifact_digest`` is the deterministic
+    content-manifest digest
+    (:func:`patchfrog.executable_verification.snapshot_staging.compute_artifact_digest`)
+    the review worker computed over the credential-free artifact right
+    after staging it -- the verifier recomputes the identical digest over
+    its own disposable copy before ever executing anything."""
 
     request_id: str
     protocol_version: int
@@ -99,7 +227,8 @@ class VerificationExecutionRequest:
     commit_sha: str
     verification_kind: VerificationKind
     test_target_path: str
-    snapshot_path: str
+    artifact_id: str
+    artifact_digest: str
     timeout_seconds: float
 
     def to_wire(self) -> dict[str, object]:
@@ -111,23 +240,35 @@ class VerificationExecutionRequest:
             "commit_sha": self.commit_sha,
             "verification_kind": self.verification_kind.value,
             "test_target_path": self.test_target_path,
-            "snapshot_path": self.snapshot_path,
+            "artifact_id": self.artifact_id,
+            "artifact_digest": self.artifact_digest,
             "timeout_seconds": self.timeout_seconds,
         }
 
     @staticmethod
     def from_wire(data: dict[str, object]) -> VerificationExecutionRequest:
         return VerificationExecutionRequest(
-            request_id=str(data["request_id"]),
-            protocol_version=int(data["protocol_version"]),  # type: ignore[call-overload]
-            repository_id=str(data["repository_id"]),
-            review_run_id=str(data["review_run_id"]),
-            commit_sha=str(data["commit_sha"]),
-            verification_kind=VerificationKind(str(data["verification_kind"])),
-            test_target_path=str(data["test_target_path"]),
-            snapshot_path=str(data["snapshot_path"]),
-            timeout_seconds=float(data["timeout_seconds"]),  # type: ignore[arg-type]
+            request_id=_require_str(data, "request_id"),
+            protocol_version=_require_int(data, "protocol_version"),
+            repository_id=_require_str(data, "repository_id"),
+            review_run_id=_require_str(data, "review_run_id"),
+            commit_sha=_require_str(data, "commit_sha"),
+            verification_kind=_require_verification_kind(data, "verification_kind"),
+            test_target_path=_require_str(data, "test_target_path"),
+            artifact_id=_require_str(data, "artifact_id"),
+            artifact_digest=_require_str(data, "artifact_digest"),
+            timeout_seconds=_require_finite_float(
+                data, "timeout_seconds", minimum=_MIN_WIRE_TIMEOUT_SECONDS, maximum=_MAX_WIRE_TIMEOUT_SECONDS,
+            ),
         )
+
+
+def enforce_request_protocol_version(request: VerificationExecutionRequest) -> bool:
+    """The verifier's own gate: a request whose protocol_version does not
+    exactly match VERIFIER_PROTOCOL_VERSION is never executed. No range
+    tolerance for this still-unreleased v1 contract."""
+
+    return request.protocol_version == VERIFIER_PROTOCOL_VERSION
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,17 +310,17 @@ class VerificationExecutionResult:
     @staticmethod
     def from_wire(data: dict[str, object]) -> VerificationExecutionResult:
         return VerificationExecutionResult(
-            request_id=str(data["request_id"]),
-            protocol_version=int(data["protocol_version"]),  # type: ignore[call-overload]
-            commit_sha=str(data["commit_sha"]),
-            verification_kind=VerificationKind(str(data["verification_kind"])),
-            test_target_path=str(data["test_target_path"]),
-            outcome=VerificationOutcome(str(data["outcome"])),
-            exit_code=data["exit_code"],  # type: ignore[arg-type]
-            stdout_excerpt=str(data["stdout_excerpt"]),
-            stderr_excerpt=str(data["stderr_excerpt"]),
-            duration_ms=float(data["duration_ms"]),  # type: ignore[arg-type]
-            timed_out=bool(data["timed_out"]),
+            request_id=_require_str(data, "request_id"),
+            protocol_version=_require_int(data, "protocol_version"),
+            commit_sha=_require_str(data, "commit_sha"),
+            verification_kind=_require_verification_kind(data, "verification_kind"),
+            test_target_path=_require_str(data, "test_target_path"),
+            outcome=_require_verification_outcome(data, "outcome"),
+            exit_code=_require_optional_int(data, "exit_code"),
+            stdout_excerpt=_require_bounded_str(data, "stdout_excerpt", max_bytes=_MAX_WIRE_EXCERPT_BYTES),
+            stderr_excerpt=_require_bounded_str(data, "stderr_excerpt", max_bytes=_MAX_WIRE_EXCERPT_BYTES),
+            duration_ms=_require_finite_float(data, "duration_ms", minimum=0.0, maximum=_MAX_WIRE_DURATION_MS),
+            timed_out=_require_bool(data, "timed_out"),
         )
 
 
@@ -192,10 +333,17 @@ def result_matches_request(
     operator's own trusted internal Redis, not a public network (Part L
     explicitly allows skipping signing "unless architecture genuinely
     needs it"); mismatched identity is rejected exactly like an
-    infrastructure failure, never partially trusted."""
+    infrastructure failure, never partially trusted.
+
+    Includes protocol_version: a result claiming a different protocol
+    version than the request that produced it is rejected outright, on
+    top of the verifier's own independent
+    :func:`enforce_request_protocol_version` gate on the request side."""
 
     return (
         result.request_id == request.request_id
+        and result.protocol_version == request.protocol_version
+        and result.protocol_version == VERIFIER_PROTOCOL_VERSION
         and result.commit_sha == request.commit_sha
         and result.verification_kind == request.verification_kind
         and result.test_target_path == request.test_target_path

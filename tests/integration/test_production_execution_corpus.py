@@ -8,6 +8,14 @@ real distributed round trip -- see
 ``validation/production_execution/latest-summary.md`` Part AA's own
 explicit demand for this.
 
+Security correction round (section 11 of the same document): the original
+version of this file staged the full git checkout (`.git/` included) into
+the shared volume, which a real, synthetic-token reproduction proved leaks
+the GitHub installation token into the hostile execution workspace. Every
+test here now uses the corrected, credential-free artifact model
+(`export_artifact`/`artifact_id`/`artifact_digest`) -- see
+`patchfrog.executable_verification.snapshot_staging`.
+
 Skipped entirely when either Redis or the sandbox capability (bwrap/
 prlimit + a real functional probe -- see
 :mod:`patchfrog.executable_verification.sandbox`) is unavailable on this
@@ -18,10 +26,9 @@ discipline.
 
 from __future__ import annotations
 
-import shutil
+import os
 import subprocess
 import sys
-import tempfile
 import time
 import uuid
 from collections.abc import Iterator
@@ -39,10 +46,15 @@ from patchfrog.executable_verification.protocol import (
     compute_request_id,
 )
 from patchfrog.executable_verification.sandbox import is_sandbox_available
+from patchfrog.executable_verification.snapshot_staging import (
+    compute_artifact_digest,
+    export_artifact,
+)
 from patchfrog.repository.git import run_git
 
 _REDIS_URL = "redis://localhost:6379/0"
 _WORKER_READY_TIMEOUT_SECONDS = 20.0
+_SYNTHETIC_TOKEN = "ghs_SYNTHETIC_SENTINEL_TOKEN_DO_NOT_USE_1234567890"
 
 
 def _redis_available() -> bool:
@@ -61,19 +73,30 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(scope="module")
-def verifier_worker() -> Iterator[None]:
+def staging_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("verifier-staging-root")
+    return root
+
+
+@pytest.fixture(scope="module")
+def verifier_worker(staging_root: Path) -> Iterator[None]:
     """A real, separate `celery -A apps.verifier.celery_app worker`
     subprocess, consuming the real verification queue against real
-    Redis. Never the review worker's own celery_app -- this is the
-    verifier's own, deliberately credential-minimal process, launched
-    exactly as documented deployment would (`REDIS_URL` only)."""
+    Redis, configured with `VERIFIER_STAGING_ROOT` pointing at this
+    module's own shared staging root -- never the review worker's own
+    celery_app. Launched exactly as documented deployment would (Redis +
+    staging root only, no DB/GitHub/provider credential)."""
 
     proc = subprocess.Popen(
         [
             sys.executable, "-m", "celery", "-A", "apps.verifier.celery_app", "worker",
             "-Q", "patchfrog-verification", "--loglevel=INFO", "--concurrency=1",
         ],
-        env={"REDIS_URL": _REDIS_URL, "PATH": __import__("os").environ.get("PATH", "")},
+        env={
+            "REDIS_URL": _REDIS_URL,
+            "VERIFIER_STAGING_ROOT": str(staging_root),
+            "PATH": os.environ.get("PATH", ""),
+        },
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     try:
@@ -110,41 +133,66 @@ def _producer_app() -> Celery:
     return Celery("patchfrog-test-producer", broker=_REDIS_URL, backend=_REDIS_URL)
 
 
-def _init_repo(tmp_path: Path, *, test_file_content: str) -> tuple[Path, str]:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    run_git(["-C", str(repo), "init", "--quiet"])
-    run_git(["-C", str(repo), "config", "user.email", "test@example.com"])
-    run_git(["-C", str(repo), "config", "user.name", "Test"])
-    (repo / "tests").mkdir()
-    (repo / "tests" / "test_case.py").write_text(test_file_content)
-    run_git(["-C", str(repo), "add", "."])
-    run_git(["-C", str(repo), "commit", "--quiet", "-m", "initial"])
-    commit_sha = run_git(["-C", str(repo), "rev-parse", "HEAD"]).strip()
-    return repo, commit_sha
+def _init_bare_remote(tmp_path: Path) -> Path:
+    remote = tmp_path / "remote.git"
+    run_git(["init", "--quiet", "--bare", str(remote)])
+    return remote
 
 
-def _request(*, commit_sha: str, snapshot_path: Path, request_id: str, timeout_seconds: float = 20.0) -> VerificationExecutionRequest:
+def _push_commit(
+    remote: Path, tmp_path: Path, *, files: dict[str, str], symlinks: dict[str, str] | None = None
+) -> str:
+    work = tmp_path / f"work-{uuid.uuid4()}"
+    run_git(["clone", "--quiet", str(remote), str(work)])
+    run_git(["-C", str(work), "config", "user.email", "t@example.com"])
+    run_git(["-C", str(work), "config", "user.name", "T"])
+    for rel, content in files.items():
+        path = work / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    for rel, target in (symlinks or {}).items():
+        path = work / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to(target)
+    run_git(["-C", str(work), "add", "-A"])
+    run_git(["-C", str(work), "commit", "--quiet", "-m", "commit"])
+    run_git(["-C", str(work), "push", "--quiet", "origin", "HEAD:refs/heads/main"])
+    return run_git(["-C", str(work), "rev-parse", "HEAD"]).strip()
+
+
+def _stage(remote: Path, sha: str, *, staging_root: Path) -> tuple[str, str]:
+    """Real review-worker-side staging: acquire with the synthetic token,
+    export credential-free, compute the digest -- returns (artifact_id,
+    digest)."""
+
+    artifact_dir = export_artifact(
+        clone_url=f"file://{remote}", commit_sha=sha, repository_full_name="test/repo",
+        token=_SYNTHETIC_TOKEN, destination_root=staging_root,
+    )
+    return artifact_dir.name, compute_artifact_digest(artifact_dir)
+
+
+def _request(
+    *, commit_sha: str, artifact_id: str, artifact_digest: str, request_id: str,
+    test_target_path: str = "tests/test_case.py", timeout_seconds: float = 20.0, protocol_version: int | None = None,
+) -> VerificationExecutionRequest:
     # A fresh uuid suffix on every call -- Celery's Redis result backend
     # caches by task_id (= request_id here) beyond a single test run, so a
     # fixed literal id would silently reuse a stale prior result across
-    # repeated test invocations (a real, confirmed observation -- not
-    # merely theoretical -- while writing this file). Production always
-    # derives request_id from patchfrog.executable_verification.protocol.compute_request_id,
-    # which is deterministic *per logical request* (repository/run/commit/
-    # candidate/target) -- exactly the idempotency this uniqueness
-    # requirement doesn't undermine: a genuinely new review run always
-    # gets a genuinely new id there too.
+    # repeated test invocations (a real, confirmed observation from this
+    # milestone's own testing). Production always derives request_id from
+    # compute_request_id, which is deterministic *per logical request*.
     unique_request_id = f"{request_id}-{uuid.uuid4()}"
     return VerificationExecutionRequest(
         request_id=unique_request_id,
-        protocol_version=VERIFIER_PROTOCOL_VERSION,
+        protocol_version=protocol_version if protocol_version is not None else VERIFIER_PROTOCOL_VERSION,
         repository_id="repo-1",
         review_run_id="run-1",
         commit_sha=commit_sha,
         verification_kind=VerificationKind.EXISTING_TARGETED_TEST,
-        test_target_path="tests/test_case.py",
-        snapshot_path=str(snapshot_path),
+        test_target_path=test_target_path,
+        artifact_id=artifact_id,
+        artifact_digest=artifact_digest,
         timeout_seconds=timeout_seconds,
     )
 
@@ -152,10 +200,15 @@ def _request(*, commit_sha: str, snapshot_path: Path, request_id: str, timeout_s
 # ---- 1. Real end-to-end PASSED through the actual distributed pipeline ----
 
 
-async def test_real_distributed_round_trip_passed(verifier_worker: None, tmp_path: Path) -> None:
-    repo, sha = _init_repo(tmp_path, test_file_content="def test_pass():\n    assert 1 == 1\n")
+async def test_real_distributed_round_trip_passed(verifier_worker: None, tmp_path: Path, staging_root: Path) -> None:
+    remote = _init_bare_remote(tmp_path)
+    sha = _push_commit(remote, tmp_path, files={"tests/test_case.py": "def test_pass():\n    assert 1 == 1\n"})
+    artifact_id, digest = _stage(remote, sha, staging_root=staging_root)
+
     dispatcher = VerifierDispatcher(celery_app=_producer_app(), wait_timeout_seconds=20.0)
-    result = await dispatcher.dispatch(_request(commit_sha=sha, snapshot_path=repo, request_id="e2e-passed"))
+    result = await dispatcher.dispatch(
+        _request(commit_sha=sha, artifact_id=artifact_id, artifact_digest=digest, request_id="e2e-passed")
+    )
     assert result is not None
     assert result.outcome is VerificationOutcome.PASSED
     assert result.exit_code == 0
@@ -164,43 +217,208 @@ async def test_real_distributed_round_trip_passed(verifier_worker: None, tmp_pat
 # ---- 2. Real end-to-end CONFIRMED_FAILURE ----
 
 
-async def test_real_distributed_round_trip_confirmed_failure(verifier_worker: None, tmp_path: Path) -> None:
-    repo, sha = _init_repo(tmp_path, test_file_content="def test_fails():\n    assert 1 == 2\n")
+async def test_real_distributed_round_trip_confirmed_failure(
+    verifier_worker: None, tmp_path: Path, staging_root: Path,
+) -> None:
+    remote = _init_bare_remote(tmp_path)
+    sha = _push_commit(remote, tmp_path, files={"tests/test_case.py": "def test_fails():\n    assert 1 == 2\n"})
+    artifact_id, digest = _stage(remote, sha, staging_root=staging_root)
+
     dispatcher = VerifierDispatcher(celery_app=_producer_app(), wait_timeout_seconds=20.0)
-    result = await dispatcher.dispatch(_request(commit_sha=sha, snapshot_path=repo, request_id="e2e-failed"))
+    result = await dispatcher.dispatch(
+        _request(commit_sha=sha, artifact_id=artifact_id, artifact_digest=digest, request_id="e2e-failed")
+    )
     assert result is not None
     assert result.outcome is VerificationOutcome.CONFIRMED_FAILURE
     assert result.exit_code == 1
 
 
-# ---- 3. Tampered snapshot rejected through the real pipeline, test body never runs ----
+# ---- 3. Credential-leak regression: synthetic token used to stage, absent from execution ----
 
 
-async def test_real_distributed_round_trip_rejects_tampered_snapshot(verifier_worker: None, tmp_path: Path) -> None:
-    marker = tmp_path / "PWNED"
-    repo, sha = _init_repo(
-        tmp_path,
-        test_file_content=(
-            "import subprocess\n\n"
-            "def test_pass():\n"
-            f"    subprocess.run(['touch', {str(marker)!r}])\n"
-            "    assert 1 == 1\n"
-        ),
+async def test_real_distributed_round_trip_no_credential_in_execution_workspace(
+    verifier_worker: None, tmp_path: Path, staging_root: Path,
+) -> None:
+    """The exact original vulnerability, exercised through the real
+    distributed pipeline end to end: a synthetic token used only for
+    trusted acquisition must not be readable by the hostile test that
+    actually executes inside the verifier."""
+
+    remote = _init_bare_remote(tmp_path)
+    sha = _push_commit(
+        remote, tmp_path,
+        files={
+            "tests/test_case.py": (
+                "import pathlib\n\n"
+                "def test_no_git_dir_and_no_credential():\n"
+                "    assert not pathlib.Path('.git').exists()\n"
+            )
+        },
     )
-    # Tamper the staged snapshot after commit (simulating corruption or a
-    # race between staging and verification) -- the tampered version
-    # would otherwise "pass" too, so a naive check couldn't distinguish
-    # "ran and passed" from "correctly rejected."
-    (repo / "tests" / "test_case.py").write_text("def test_pass():\n    assert 1 == 1\n    # tampered\n")
+    artifact_id, digest = _stage(remote, sha, staging_root=staging_root)
 
     dispatcher = VerifierDispatcher(celery_app=_producer_app(), wait_timeout_seconds=20.0)
-    result = await dispatcher.dispatch(_request(commit_sha=sha, snapshot_path=repo, request_id="e2e-tampered"))
+    result = await dispatcher.dispatch(
+        _request(commit_sha=sha, artifact_id=artifact_id, artifact_digest=digest, request_id="e2e-no-credential")
+    )
+    assert result is not None
+    assert result.outcome is VerificationOutcome.PASSED, result.stdout_excerpt
+    assert _SYNTHETIC_TOKEN not in result.stdout_excerpt
+    assert _SYNTHETIC_TOKEN not in result.stderr_excerpt
+
+
+# ---- 4. Artifact digest mismatch (tamper after staging) rejected ----
+
+
+async def test_real_distributed_round_trip_rejects_tampered_artifact(
+    verifier_worker: None, tmp_path: Path, staging_root: Path,
+) -> None:
+    marker = tmp_path / "PWNED"
+    remote = _init_bare_remote(tmp_path)
+    sha = _push_commit(
+        remote, tmp_path,
+        files={
+            "tests/test_case.py": (
+                "import subprocess\n\n"
+                "def test_pass():\n"
+                f"    subprocess.run(['touch', {str(marker)!r}])\n"
+                "    assert 1 == 1\n"
+            )
+        },
+    )
+    artifact_id, digest = _stage(remote, sha, staging_root=staging_root)
+    # Tamper the staged artifact after digest computation (simulating
+    # corruption or a compromised shared volume) -- the tampered version
+    # would otherwise "pass" too, so a naive check couldn't distinguish
+    # "ran and passed" from "correctly rejected."
+    (staging_root / artifact_id / "tests" / "test_case.py").write_text(
+        "def test_pass():\n    assert 1 == 1\n    # tampered\n"
+    )
+
+    dispatcher = VerifierDispatcher(celery_app=_producer_app(), wait_timeout_seconds=20.0)
+    result = await dispatcher.dispatch(
+        _request(commit_sha=sha, artifact_id=artifact_id, artifact_digest=digest, request_id="e2e-tampered")
+    )
     assert result is not None
     assert result.outcome is VerificationOutcome.SANDBOX_ERROR
     assert not marker.exists(), "tampered test body was executed -- integrity check did not fail closed"
 
 
-# ---- 4. Stale/duplicate request handling -- deterministic request identity ----
+# ---- 5. Path-traversal / staging-root escape rejected ----
+
+
+async def test_real_distributed_round_trip_rejects_path_traversal_artifact_id(
+    verifier_worker: None, tmp_path: Path, staging_root: Path,
+) -> None:
+    dispatcher = VerifierDispatcher(celery_app=_producer_app(), wait_timeout_seconds=20.0)
+    result = await dispatcher.dispatch(
+        _request(
+            commit_sha="a" * 40, artifact_id="../../../../etc", artifact_digest="d" * 64,
+            request_id="e2e-traversal",
+        )
+    )
+    assert result is not None
+    assert result.outcome is VerificationOutcome.SANDBOX_ERROR
+
+
+async def test_real_distributed_round_trip_rejects_absolute_path_artifact_id(
+    verifier_worker: None, staging_root: Path,
+) -> None:
+    dispatcher = VerifierDispatcher(celery_app=_producer_app(), wait_timeout_seconds=20.0)
+    result = await dispatcher.dispatch(
+        _request(commit_sha="a" * 40, artifact_id="/etc", artifact_digest="d" * 64, request_id="e2e-abspath")
+    )
+    assert result is not None
+    assert result.outcome is VerificationOutcome.SANDBOX_ERROR
+
+
+async def test_real_distributed_round_trip_rejects_symlink_escape_artifact_id(
+    verifier_worker: None, staging_root: Path,
+) -> None:
+    escape_link = staging_root / "escape_link"
+    escape_link.symlink_to("/etc")
+    try:
+        dispatcher = VerifierDispatcher(celery_app=_producer_app(), wait_timeout_seconds=20.0)
+        result = await dispatcher.dispatch(
+            _request(
+                commit_sha="a" * 40, artifact_id="escape_link", artifact_digest="d" * 64, request_id="e2e-symlink",
+            )
+        )
+        assert result is not None
+        assert result.outcome is VerificationOutcome.SANDBOX_ERROR
+    finally:
+        escape_link.unlink(missing_ok=True)
+
+
+async def test_real_distributed_round_trip_rejects_nonexistent_artifact_id(
+    verifier_worker: None, staging_root: Path,
+) -> None:
+    dispatcher = VerifierDispatcher(celery_app=_producer_app(), wait_timeout_seconds=20.0)
+    result = await dispatcher.dispatch(
+        _request(
+            commit_sha="a" * 40, artifact_id="does-not-exist-at-all", artifact_digest="d" * 64,
+            request_id="e2e-nonexistent",
+        )
+    )
+    assert result is not None
+    assert result.outcome is VerificationOutcome.SANDBOX_ERROR
+
+
+# ---- 6. Protocol version rejection ----
+
+
+async def test_real_distributed_round_trip_rejects_protocol_version_zero(
+    verifier_worker: None, tmp_path: Path, staging_root: Path,
+) -> None:
+    remote = _init_bare_remote(tmp_path)
+    sha = _push_commit(remote, tmp_path, files={"tests/test_case.py": "def test_pass():\n    assert 1 == 1\n"})
+    artifact_id, digest = _stage(remote, sha, staging_root=staging_root)
+
+    dispatcher = VerifierDispatcher(celery_app=_producer_app(), wait_timeout_seconds=20.0)
+    result = await dispatcher.dispatch(
+        _request(
+            commit_sha=sha, artifact_id=artifact_id, artifact_digest=digest,
+            request_id="e2e-protocol-zero", protocol_version=0,
+        )
+    )
+    # The verifier's own enforce_request_protocol_version gate rejects
+    # this before execution, but its error reply always echoes back
+    # VERIFIER_PROTOCOL_VERSION (its own current version), never the
+    # mismatched request's -- so result_matches_request's own identity
+    # check (which also independently pins protocol_version) correctly
+    # never trusts it either. Either a same-shaped SANDBOX_ERROR result or
+    # a dispatcher-level None is an acceptable fail-closed outcome; what
+    # matters, and what every branch here guarantees, is that the hostile
+    # test target is never executed -- mirrors
+    # test_real_distributed_round_trip_rejects_future_protocol_version's
+    # own tolerant assertion below.
+    assert result is None or result.outcome is VerificationOutcome.SANDBOX_ERROR
+
+
+async def test_real_distributed_round_trip_rejects_future_protocol_version(
+    verifier_worker: None, tmp_path: Path, staging_root: Path,
+) -> None:
+    remote = _init_bare_remote(tmp_path)
+    sha = _push_commit(remote, tmp_path, files={"tests/test_case.py": "def test_pass():\n    assert 1 == 1\n"})
+    artifact_id, digest = _stage(remote, sha, staging_root=staging_root)
+
+    dispatcher = VerifierDispatcher(celery_app=_producer_app(), wait_timeout_seconds=20.0)
+    result = await dispatcher.dispatch(
+        _request(
+            commit_sha=sha, artifact_id=artifact_id, artifact_digest=digest,
+            request_id="e2e-protocol-future", protocol_version=VERIFIER_PROTOCOL_VERSION + 1,
+        )
+    )
+    # The verifier rejects internally (SANDBOX_ERROR), but result
+    # authenticity is ALSO enforced independently on the review-worker
+    # side (result_matches_request checks protocol_version) -- either a
+    # rejection result comes back, or the dispatcher itself rejects it
+    # for a protocol mismatch. Both are acceptable fail-closed outcomes;
+    # never an executed test.
+    assert result is None or result.outcome is VerificationOutcome.SANDBOX_ERROR
+
+
+# ---- 7. Stale/duplicate request handling -- deterministic request identity ----
 
 
 def test_request_id_deterministic_for_retry_of_same_logical_request() -> None:
@@ -229,7 +447,7 @@ def test_request_id_differs_for_a_stale_superseded_head() -> None:
     assert old_head != new_head
 
 
-# ---- 5. Verifier crash / malformed reply -> fail closed, never a hang or an exception surfacing ----
+# ---- 8. Verifier crash / malformed reply -> fail closed, never a hang or an exception surfacing ----
 
 
 async def test_dispatch_returns_none_on_unreachable_verifier() -> None:
@@ -246,17 +464,16 @@ async def test_dispatch_returns_none_on_unreachable_verifier() -> None:
         broker="redis://localhost:1/0", backend="redis://localhost:1/0",
     )
     dispatcher = VerifierDispatcher(celery_app=unreachable_app, wait_timeout_seconds=3.0)
-    repo = Path(tempfile.mkdtemp())
-    try:
-        result = await dispatcher.dispatch(
-            _request(commit_sha="a" * 40, snapshot_path=repo, request_id="unreachable-broker", timeout_seconds=3.0)
+    result = await dispatcher.dispatch(
+        _request(
+            commit_sha="a" * 40, artifact_id="whatever", artifact_digest="d" * 64,
+            request_id="unreachable-broker", timeout_seconds=3.0,
         )
-        assert result is None
-    finally:
-        shutil.rmtree(repo, ignore_errors=True)
+    )
+    assert result is None
 
 
-# ---- 6. Credential-import boundary -- structural, no container needed ----
+# ---- 9. Credential-import boundary -- structural, no container needed ----
 
 
 def test_verifier_process_never_imports_the_credential_settings_class() -> None:
@@ -294,3 +511,39 @@ def test_verifier_process_never_imports_github_or_provider_modules() -> None:
                 and any(node.module == p or node.module.startswith(p + ".") for p in forbidden_prefixes)
             ):
                 raise AssertionError(f"{path} imports {node.module} -- the verifier must never hold these credentials")
+
+
+# ---- 10. Verifier service credential (Redis URL) unavailable to hostile test ----
+
+
+async def test_hostile_test_cannot_read_verifier_redis_credential(
+    verifier_worker: None, tmp_path: Path, staging_root: Path,
+) -> None:
+    """The verifier SERVICE process holds a Redis URL (its own queue
+    -consumption credential) -- the hostile sandboxed test subprocess
+    must never see it (unchanged sandboxed_env() allowlist, re-verified
+    here through the real distributed pipeline, not merely asserted)."""
+
+    remote = _init_bare_remote(tmp_path)
+    sha = _push_commit(
+        remote, tmp_path,
+        files={
+            "tests/test_case.py": (
+                "import os\n\n"
+                "def test_no_redis_env():\n"
+                "    assert os.environ.get('REDIS_URL') is None\n"
+                "    with open('/proc/self/environ', 'rb') as f:\n"
+                "        content = f.read()\n"
+                "    assert b'REDIS_URL' not in content\n"
+                "    assert b'localhost:6379' not in content\n"
+            )
+        },
+    )
+    artifact_id, digest = _stage(remote, sha, staging_root=staging_root)
+
+    dispatcher = VerifierDispatcher(celery_app=_producer_app(), wait_timeout_seconds=20.0)
+    result = await dispatcher.dispatch(
+        _request(commit_sha=sha, artifact_id=artifact_id, artifact_digest=digest, request_id="e2e-no-redis-leak")
+    )
+    assert result is not None
+    assert result.outcome is VerificationOutcome.PASSED, result.stdout_excerpt
