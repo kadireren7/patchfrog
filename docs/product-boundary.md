@@ -165,14 +165,18 @@ The following newer engine components extend this same split:
   weights, rollout percentages, experiment assignment, provider-health
   state, Cloud fallback policy -- is Cloud-only and never enters this
   repository, even as sample configuration.
-- **Executable Verification engine** (Milestone S): the verification
-  domain, eligibility rules, adapters, sandbox interface, deterministic
-  execution policy, and result classification are all source-available.
-  A future Cloud may own the *production* sandbox fleet: worker
-  autoscaling, container orchestration, isolation infrastructure
-  configuration, Cloud quotas, hosted caching, abuse prevention, and Cloud
+- **Executable Verification engine** (Milestone S, extended by S6): the
+  verification domain, eligibility rules, adapters, sandbox interface,
+  deterministic execution policy, result classification, the separate
+  credential-minimal verifier process (`apps/verifier/`), and its
+  request/result protocol (`patchfrog.executable_verification.protocol`)
+  are all source-available. A future Cloud may own the *production*
+  sandbox fleet: verifier autoscaling, container/job orchestration,
+  isolation infrastructure configuration (e.g. a nested-sandboxing-capable
+  runtime), Cloud quotas, hosted caching, abuse prevention, and Cloud
   execution billing -- operational concerns around running the engine at
-  hosted scale, never a second verification engine.
+  hosted scale, never a second verification engine or a second verifier
+  protocol.
 - **Agent Handoff / MCP protocol layer** (planned, Milestone T): the
   protocol layer and the shape of evidence handed to a coding agent are
   source-available. Any Cloud-hosted agent marketplace, billing for agent

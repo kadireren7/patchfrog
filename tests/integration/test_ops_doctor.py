@@ -247,6 +247,40 @@ async def test_doctor_never_calls_an_llm_or_mutates_state(db_engine: AsyncEngine
     assert before == after
 
 
+async def test_verifier_not_configured_reports_pass(db_engine: AsyncEngine, test_private_key: str) -> None:
+    """Milestone S6: PATCHFROG_VERIFIER_ENABLED defaults to False -- this
+    is a real, non-warning PASS state (most self-hosted deployments will
+    not run the separate verifier service), not a degraded one."""
+
+    engine = await _migrated_engine(db_engine)
+    settings = _settings(test_private_key=test_private_key)
+    assert settings.verifier_enabled is False
+
+    report = await run_doctor(settings=settings, engine=engine, check_github_auth=False)
+
+    check = next(c for c in report.checks if c.name == "executable_verification")
+    assert check.status is DoctorStatus.PASS
+    assert "not configured" in check.detail
+
+
+async def test_verifier_enabled_but_unreachable_warns(db_engine: AsyncEngine, test_private_key: str) -> None:
+    """A configured verifier that doctor cannot reach (bad Redis URL here,
+    standing in for "no broker reachable") must WARN, not FAIL and not
+    silently pass -- and must never crash the whole report."""
+
+    engine = await _migrated_engine(db_engine)
+    settings = _settings(
+        test_private_key=test_private_key, PATCHFROG_VERIFIER_ENABLED="true", REDIS_URL="redis://127.0.0.1:1/0",
+    )
+    assert settings.verifier_enabled is True
+
+    report = await run_doctor(settings=settings, engine=engine, check_github_auth=False)
+
+    check = next(c for c in report.checks if c.name == "executable_verification")
+    assert check.status is DoctorStatus.WARN
+    assert report.overall in (DoctorStatus.WARN, DoctorStatus.FAIL)
+
+
 async def _row_counts(engine: AsyncEngine) -> dict[str, int]:
     async with engine.connect() as conn:
         tables = (
