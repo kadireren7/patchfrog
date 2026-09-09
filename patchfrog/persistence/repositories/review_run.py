@@ -388,3 +388,22 @@ class ReviewRunRepository:
 
     async def get_by_id(self, session: AsyncSession, *, run_id: uuid.UUID) -> ReviewRunModel | None:
         return await session.get(ReviewRunModel, run_id)
+
+    async def get_latest_succeeded_for_pull_request(
+        self, session: AsyncSession, *, pull_request_id: uuid.UUID
+    ) -> ReviewRunModel | None:
+        """Milestone T (Agent Handoff / MCP): ``list_findings`` needs "the
+        most recent completed review for this PR" when a caller supplies
+        a PR number rather than an exact ``review_run_id`` -- the one
+        additional lookup shape that didn't already exist."""
+
+        result = await session.execute(
+            select(ReviewRunModel)
+            .where(
+                ReviewRunModel.pull_request_id == pull_request_id,
+                ReviewRunModel.status == ReviewRunStatus.SUCCEEDED,
+            )
+            .order_by(ReviewRunModel.completed_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()

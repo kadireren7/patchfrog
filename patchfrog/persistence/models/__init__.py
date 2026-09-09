@@ -27,6 +27,7 @@ from patchfrog.persistence.models.cross_repo import (
     RepositoryRelationModel,
 )
 from patchfrog.persistence.models.feedback import FeedbackAssessmentModel, FeedbackEventModel
+from patchfrog.persistence.models.fix_attempt import FixAttemptModel
 from patchfrog.persistence.models.installation import (
     BetaState,
     InstallationModel,
@@ -77,6 +78,7 @@ __all__ = [
     "FindingModel",
     "FindingSourceModel",
     "FindingStatus",
+    "FixAttemptModel",
     "ImportReferenceModel",
     "IndexStatus",
     "IndexedFileModel",

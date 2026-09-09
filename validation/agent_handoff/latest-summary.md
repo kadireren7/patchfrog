@@ -1,0 +1,384 @@
+# Milestone T: Agent Handoff / MCP -- Pre-Implementation Audit
+
+Baseline: `main` @ `fc9cf73d219628d4343eb599cb62b12570af387d` (Milestone S6
+Production Execution Enablement, merged).
+
+## 0. Problem restated
+
+PatchFrog produces verified findings but has no structured way to hand one
+to a coding agent, and no way to independently check whether an agent's
+attempted fix actually resolved it. Milestone T makes
+"AI coding agents write. PatchFrog verifies." concrete without turning
+PatchFrog into a second review engine or a patch-writing agent itself.
+
+## 1. Repository audit -- what already exists
+
+### 1.1 Finding domain/persistence chain
+
+- `patchfrog/review/domain.py`: `ReviewCandidate` (pre-provider-call unit;
+  `file_path`/`symbol_id`/`symbol_name`/`qualified_name`/`start_line`/
+  `end_line`/`changed_lines`/`static_finding_ids`/`reason`, has
+  `.fingerprint()`), `AIReviewFinding` (five-part: `message` identification/
+  `reasoning_summary` mechanism/`impact` nullable consequence/
+  `suggested_fix` nullable/`severity`+`confidence`), `CriticVerdict`
+  (`decision`/`reasoning_summary`/`downgraded_severity`/
+  `downgraded_confidence`), `FinalAIFinding` (the terminal, only-exposed
+  shape: `proposal_id`/`candidate_id`/`candidate`/`finding`/
+  `critic_verdict`/`final_severity`/`final_confidence`/
+  `corroborated_by_static`/`static_finding_ids`/`agent_role`).
+- `patchfrog/persistence/models/review.py`: `ReviewRunModel`
+  (`review_runs`, canonical identity `(repository_id, commit_sha,
+  config_fingerprint, model_fingerprint, incremental_context_fingerprint)`),
+  `ReviewCandidateModel` (`review_candidates`, carries file/symbol/line/
+  changed-line/reason -- **all durably persisted**), `AIFindingProposalModel`
+  (`ai_finding_proposals`, full audit trail), `CriticVerdictModel`
+  (`critic_verdicts`, one per proposal), `AIFindingModel` (`ai_findings`,
+  **"the only table a query/presentation layer should ever read from"**).
+- `patchfrog/review/queries.py`: `ReviewQueryService.get_findings_for_run`
+  is documented as "the only user-facing query." No `get_finding_by_id`
+  exists yet on `AIFindingRepository` -- added in this milestone (a plain
+  read by primary key, same pattern as `ReviewRunRepository.get_by_id`).
+- `patchfrog/persistence/models/publishing.py`: `ReviewPublicationModel`/
+  `ReviewPublicationCommentModel` -- per-finding GitHub-comment disposition
+  (inline/summary-only/omitted), stores `body_hash` not the body.
+
+### 1.2 THE central finding of this audit: Intelligence-layer evidence is never persisted per finding
+
+`review_runs` (`ReviewRunModel`) carries a **run-level aggregate summary**
+column group for every Intelligence layer (J change_story/change_map_text,
+K contract_delta_count/kind_counts, L intent_claim_count/
+intent_coverage_summary_text, M test_expectation_count/
+test_coverage_summary_text, N historical_trusted_record_count/
+historical_summary_text, O repository_learning_*_count, P trajectory_*_count,
+Q cross_pr_*_count, R cross_repo_*_count, executable_verification_*_count).
+Every one of these is a **whole-review-run** count/rendered-text bundle for
+the critic/publication prompt -- **none of them carry a foreign key to a
+specific `ai_findings` row**. A single review run's Contract/Intent/Test/
+Historical evidence is not attributable to any one finding after the run
+completes; it only ever existed as prompt context at generation time.
+
+**Consequence for T1 (Part D of the spec)**: the handoff cannot include
+K/L/M/N/O/P/Q/R evidence for a specific finding in v1 -- there is nothing
+persisted to read. Per Part H ("if a finding does not have enough stable
+evidence... return honestly, do not invent") and Part I ("avoid a new table
+unless necessary"), this milestone does **not** add new per-finding
+Intelligence-evidence persistence (a materially larger, cross-cutting
+schema change touching nine existing packages, well outside "the narrowest
+safe scope"). The handoff instead exposes exactly what genuinely already
+is persisted per finding: title/message/category/severity/confidence/
+evidence quotes/reasoning_summary/impact/suggested_fix, the candidate's own
+location (file/lines/qualified_name), `corroborated_by_static` +
+`static_finding_ids` (a real, per-finding link to specific static findings
+-- unlike the Intelligence layers, static analysis findings ARE individually
+addressable via `FindingModel.id`), and the critic verdict's
+`reasoning_summary`. This is documented as an explicit, honest v1 scope
+limit, not silently glossed over.
+
+### 1.3 Executable Verification evidence is also never persisted per finding
+
+`patchfrog/executable_verification/domain.py`'s `ExecutableVerificationReport`/
+`ExecutableVerificationEvidence` are deliberately **per-candidate, ephemeral**
+-- they exist only for the duration of one `_critique()` call (fed into the
+critic prompt's `<executable_verification>` block) and never reach
+`FinalAIFinding` or any persisted table; only run-level counts survive
+(`review_runs.executable_verification_*_count`, explicitly documented in
+that model as "no test target path, no stdout/stderr excerpt, no commit
+SHA, no candidate identity anywhere").
+
+**Consequence**: `FindingHandoff.executable_verification_evidence` is
+`None` for every finding in v1 -- there is no historical "it originally
+failed here" record to surface. T3's Fix Verification loop compensates
+architecturally: it re-derives eligibility deterministically from the
+persisted `ReviewCandidateModel` (file/symbol/line data survives) via the
+exact same `determine_verification_target()` Milestone S/S6 already use,
+and re-executes **only against the candidate fix SHA** (never re-executes
+against the original SHA to manufacture an "originally failed" data point
+-- that would be an extra, currently-unbounded sandbox execution per fix
+attempt with no persisted original result to validate it against; deferred,
+documented as a limitation, not attempted).
+
+### 1.4 Everything else relevant
+
+- `patchfrog/feedback/domain.py`: `FeedbackAssessment`/
+  `FindingFeedbackSummary` -- deterministic, rule-based, the closest thing
+  to an existing "finding lifecycle," but scoped to human GitHub
+  reactions/replies/thread-resolution, not fix verification. Kept
+  completely separate; `FixAttempt` status is its own, new lifecycle
+  concept (Part AH), never conflated with feedback.
+- `patchfrog/executable_verification/`: unchanged, reused verbatim.
+  `eligibility.determine_verification_target(candidate, expected_companions)`
+  -- pure, deterministic, already the exact seam T3 needs.
+  `dispatch.VerifierDispatcher` -- already the exact seam T3 needs for
+  re-execution (dispatches to the S6 verifier by name, same queue,
+  identical trust boundary; never executes hostile code in-process).
+- `patchfrog/review/critic.py`: `CriticService.critique(validated, *,
+  candidate, context_text, ...)` builds a prompt asking "is this NEW
+  finding real" -- semantically wrong for fix verification ("does this
+  OLD finding still hold now"). T3 does **not** reuse this call shape
+  directly; it reuses the same underlying `LLMProvider`/`ProviderRequest`/
+  `generate_structured` typed-proposal-flow primitives (`patchfrog.review.
+  provider`) with its own narrow prompt/schema
+  (`patchfrog/fix_verification/critic.py`), never inventing a new provider
+  abstraction and never adding a new `AgentRole`.
+- `patchfrog/analysis/analyzers/registry.py::default_registry()` +
+  individual adapters (`RuffAnalyzer.analyze(AnalysisContext)`, etc.) can be
+  invoked directly, scoped to exactly one file
+  (`changed_files=frozenset({file_path})`), bypassing
+  `StaticAnalysisService`'s full-repository indexing/persistence
+  orchestration entirely -- the same "call the underlying primitive, skip
+  the heavier service" reuse pattern S6 already established for
+  `execute_against_snapshot`. This is what T3's static-evidence re-check
+  uses; it is not a second static-analysis engine.
+- `patchfrog/persistence/models/analysis.py`: `FindingModel` (`findings`)
+  carries `rule_id`/`file_path`/`start_line`/`end_line`/`source_analyzer`
+  -- exactly what's needed to re-target the original analyzer at the new
+  head.
+- `patchfrog/repository/snapshot.py::RepositorySnapshotProvider` /
+  `patchfrog/executable_verification/snapshot_staging.py::export_artifact`:
+  unchanged, reused verbatim by T3 for acquiring `candidate_fix_commit_sha`.
+- `patchfrog/github/auth.py::InstallationTokenProvider` +
+  `apps/worker/tasks/review_pull_request.py`'s own acquisition pattern
+  (`clone_url = f"https://github.com/{full_name}.git"`, mint an
+  installation token from `RepositoryModel.installation_id`) -- T3's
+  `FixVerificationService` needs the same trust level as the review
+  worker (full `Settings`, GitHub App key, DB) to re-clone at a new head;
+  it is a trusted-plane service, exactly like the review worker, never a
+  credential-minimal one. The credential-minimal boundary this milestone
+  preserves is the **verifier** (S6, unchanged) -- MCP/FixVerification
+  never execute hostile test code themselves.
+- `patchfrog/cli.py`: single argparse file,
+  `python -m patchfrog.cli <index|analyze|context|review|review-history|
+  publish|feedback|telemetry|ops|cross-repo|eval>`. This milestone adds one
+  more top-level subcommand, `mcp serve`, in the same file -- no new
+  process-launch convention invented.
+- No `apps/mcp/` needed: `apps/` (this repo's convention) holds FastAPI
+  (`api`) and Celery-worker (`worker`, `verifier`) processes; MCP is
+  neither -- it is a synchronous/async stdio protocol server launched
+  exactly like `patchfrog.cli eval run` already is. It lives at
+  `patchfrog/mcp/` (a domain package, mirroring `patchfrog/feedback/`),
+  launched via the CLI.
+- `mcp` (official Anthropic Model Context Protocol Python SDK, MIT
+  license, `https://modelcontextprotocol.io`) is **already present**
+  transitively via `semgrep`'s own dependency (installed: `1.29.0`,
+  `Required-by: semgrep`) -- but not declared in `pyproject.toml` as a
+  first-class PatchFrog dependency, so it cannot be relied on (a future
+  semgrep version could drop or change it). This milestone adds
+  `mcp>=1.29,<2.0` explicitly, pinned to the already-vetted-in-this-repo
+  version line rather than jumping to the unaudited `2.x` line.
+- Package-boundary precedent: `tests/unit/test_telemetry_module_boundaries.py`,
+  `tests/integration/test_review_pull_request_provider_trust_boundary.py`,
+  `tests/integration/test_security_boundaries.py` -- the structural-AST
+  import-boundary pattern this milestone's MCP/credential tests follow
+  (mirrors S6's `test_verifier_process_never_imports_the_credential_
+  settings_class`).
+- `docs/roadmap.md` already lists "T -- Agent Handoff / MCP" as "Next,"
+  with the identical T1/T2/T3 breakdown, and separately lists a much later,
+  more advanced "AC -- Autonomous Fix Verification" (generated tests,
+  differential base-vs-head execution, mutation-inspired verification).
+  **T3 here is deliberately narrower than AC** -- single-finding, one
+  fix-attempt-at-a-time, deterministic-first, no generated tests, no
+  differential-execution machinery. Documented explicitly so the two are
+  never confused.
+
+## 2. Design decisions (Parts B-AJ of the spec)
+
+### 2.1 T1 -- `FindingHandoff` (`patchfrog/agent_handoff/`)
+
+Deterministic projection of `AIFindingModel` + `ReviewCandidateModel` +
+`ReviewRunModel` + `CriticVerdictModel` + `RepositoryModel` (+ optional
+`ReviewPublicationModel`/`ReviewPublicationCommentModel` for
+`published`/`github_review_id`) -- **no new table**, no LLM call, deriving
+entirely from what already exists (Part H, Part I).
+
+`handoff_id = sha256(repository_id | finding_id | review_run_id |
+original_commit_sha)` -- deterministic, stable, cannot collide across two
+different findings, never derived from mutable prose (Part F).
+
+Fields: see `patchfrog/agent_handoff/domain.py::FindingHandoff`. Excludes
+(Part D/J): token budgets, critic counts, agent count, raw confidence
+internals (only the final `Confidence` enum, never a numeric score),
+private prompt content, provider implementation details, Trajectory/
+Cross-PR raw internals (moot in v1 per 1.2 above, but the exclusion is the
+same one Part D asks for even if it becomes attributable later),
+GitHub/provider/DB credentials (structurally impossible -- the handoff
+service never imports `patchfrog.config.settings`, `patchfrog.github.*`, or
+any provider module; verified by a structural-AST test mirroring S6's own).
+
+Redaction: `patchfrog.review.redaction.redact_secrets` applied to every
+free-text field (`message`/`reasoning_summary`/`impact`/`suggested_fix`/
+`critic_reasoning_summary`/evidence `quoted_text`) as defense-in-depth --
+the primary defense remains, as documented in that module, that only
+already-validated, already-bounded repository-derived text ever reaches a
+finding in the first place; this scan proves the tracked-serialization
+path, not terminal/UI/local exposure (same limitation the S6 correction
+documented).
+
+`FINDING_HANDOFF_SCHEMA_VERSION = 1` -- a real, new, externally-consumed
+wire contract (an MCP client persists/parses this shape outside PatchFrog's
+own process). Bump only for an incompatible field add/remove/reinterpret,
+exactly like `VERIFIER_PROTOCOL_VERSION`'s own rule.
+
+### 2.2 T2 -- MCP server (`patchfrog/mcp/`)
+
+Tool surface (Part AJ, smallest useful set): `list_findings`,
+`get_finding_handoff`, `start_fix_attempt`, `get_fix_attempt`.
+`get_verification_evidence` is **not** a separate tool -- v1 has no
+persisted per-finding EV evidence to expose ahead of a fix attempt (2.1/1.3
+above), and live EV outcome is already returned inside
+`get_fix_attempt`'s result once a verification has run. No MCP resources in
+v1 (Part AK) -- the four tools already cover the full v1 surface; adding a
+parallel `patchfrog://` resource scheme for the same data would be the
+"expose the same content twice" case Part AK explicitly warns against.
+
+Transport: stdio only (Part M) -- `mcp.server.fastmcp.FastMCP` +
+`mcp.server.stdio.stdio_server`, launched via `python -m patchfrog.cli mcp
+serve` (Part N/AW, reuses the existing CLI rather than inventing a new
+launcher). No HTTP/SSE in v1; no public listener.
+
+Authority (Part L/AL/AM): every tool is either a pure read (`list_findings`,
+`get_finding_handoff`, `get_fix_attempt`) or writes exactly one narrow,
+new `fix_attempts` row plus dispatches read-only-safe re-verification
+(`start_fix_attempt`) -- never a file write, `git commit`/`push`, GitHub
+write, `.patchfrog.yml` change, or arbitrary shell. Enforced structurally:
+`patchfrog/mcp/` never imports `patchfrog.github.client` write methods,
+never imports `patchfrog.publishing.*`, never shells out.
+
+Auth model (Part AD): stdio access inherits the local process owner
+running `patchfrog mcp serve` -- documented explicitly as full local trust,
+not multi-user authorization. Every tool call still requires an explicit
+repository/finding/handoff/fix-attempt identity and independently
+re-validates that identity belongs to the requested repository (Part AC) --
+this is defense against ID-guessing/cross-repo leakage within one
+operator's own multi-repository database, not a multi-tenant boundary.
+
+Data access (Part O): every tool handler calls `AgentHandoffService`/
+`FixVerificationService` -- never raw SQL in a handler.
+
+### 2.3 T3 -- `FixAttempt` / Fix Verification (`patchfrog/fix_verification/`)
+
+Persistence (Part AG): one new table, `fix_attempts` -- justified because
+verification is asynchronous (dispatches to the S6 verifier queue exactly
+like a review candidate does), an MCP client may reconnect and poll status,
+and idempotency (Part AF) needs a durable identity to detect a duplicate
+`(handoff_id, candidate_fix_commit_sha)` pair. Migration `0029_fix_attempts`.
+
+Identity/idempotency: unique index on `(handoff_id, candidate_fix_commit_sha)`
+-- a repeat `start_fix_attempt` call with the same pair returns the
+existing row (Part AF); a different `candidate_fix_commit_sha` for the same
+handoff always creates a distinct attempt.
+
+Validation before verification (Part U), fail closed: handoff exists and
+resolves; `repository_id` matches; `candidate_fix_commit_sha` is a real,
+resolvable commit in the same repository (acquired via
+`RepositorySnapshotProvider`, exactly like review acquisition); if equal to
+`original_commit_sha`, explicitly allowed only as a no-op comparison
+(status resolves to `STILL_PRESENT` or `INCONCLUSIVE`, never silently
+skipped as invalid); ancestry checked via `git merge-base --is-ancestor
+<original> <candidate>` inside the acquired clone -- not provable ->
+`STALE`.
+
+Fix-verification algorithm (Part V/W/X/Y/Z/AA), deterministic-first, no
+unconditional provider call:
+
+1. Byte-identical region check: is `file_path[start_line:end_line]` at
+   `original_commit_sha` identical to the same range at
+   `candidate_fix_commit_sha`? Deleted/renamed file handled explicitly
+   (never silently "unchanged"). Identical -> strong `STILL_PRESENT`
+   signal (the flagged code literally did not change; per Part V this
+   alone is not "fixed," but *unchanged* code cannot have newly become
+   fixed either -- this is a sound, honest deterministic inference in
+   only one direction).
+2. If `corroborated_by_static`: re-run the original `source_analyzer`
+   (via `default_registry()`, scoped to exactly that one file, never a
+   full repository run) against the new head. Still fires the same
+   `rule_id` near the same location -> `STILL_PRESENT` signal; no longer
+   fires -> `FIXED` signal.
+3. If EV-eligible (`determine_verification_target` on the
+   reconstructed `ReviewCandidate`, empty `expected_companions` --
+   Part Z: never assumes the original review's own target, always
+   re-derives): dispatch to the S6 verifier (only if
+   `PATCHFROG_VERIFIER_ENABLED`, otherwise skipped, never in-process)
+   against `candidate_fix_commit_sha` only (1.3 above explains why not
+   also the original SHA). `PASSED` -> `FIXED` signal; `CONFIRMED_FAILURE`
+   -> `STILL_PRESENT` signal; anything else -> no signal.
+4. Combine: any `STILL_PRESENT` signal from (1)/(2)/(3) wins outright
+   (conservative -- never claim fixed over contradicting deterministic
+   evidence). Else, any `FIXED` signal from (2)/(3) with none contradicting
+   -> `FIXED`. Else, if no deterministic signal fired at all (region
+   changed, not static-corroborated, not EV-eligible) -> one bounded LLM
+   call via `patchfrog/fix_verification/critic.py` (new narrow prompt,
+   reuses `LLMProvider`/`ProviderRequest`, **not** `CriticService`, **not**
+   a new `AgentRole` -- Part AA) asking specifically "does this described
+   condition still hold in this new code," itself fails closed to
+   `INCONCLUSIVE` if no provider is configured. Any infra failure
+   (clone/network/git error) during steps 0-3 -> `ERROR`.
+
+`FIX_VERIFICATION_VERSION = 1` -- a new, independent semantic contract for
+what "FIXED"/"STILL_PRESENT"/"INCONCLUSIVE"/"STALE" mean, distinct from
+`REVIEW_ENGINE_VERSION` (normal-review candidate/critic/dedup semantics,
+untouched) and `VERIFIER_PROTOCOL_VERSION` (the wire contract T3's step 3
+reuses unmodified).
+
+Finding lifecycle (Part AH): a `FixAttempt.status == FIXED` result is
+**not** written back onto `ai_findings` or `review_memory_findings` --
+those remain exactly what they always meant (a persisted historical
+finding record, a Phase-7 incremental-review memory record).
+`FixAttempt` is its own, additive, query-joinable lifecycle, never a
+mutation of finding truth.
+
+### 2.4 What Milestone T does NOT do
+
+No OpenAI, no Model Router, no Merge Readiness, no Cloud, no autonomous
+patch generation, no new `AgentRole`, no write path into GitHub, no file
+write/`git commit`/`git push` tool, no arbitrary shell/filesystem-path tool,
+no full PR re-review triggered automatically by a fix attempt, no
+per-finding K/L/M/N/O/P/Q/R evidence (1.2 above -- the honest v1 limit),
+no re-execution against the original SHA in the EV step (1.3 above), no
+new Prometheus metrics wiring (Part AP: MCP is a standalone local process
+outside the worker's `PROMETHEUS_MULTIPROC_DIR` aggregation topology --
+adding a third metrics-serving process for a handful of count-only
+self-hosted-operator metrics is not justified in v1; `fix_attempts` itself
+is directly queryable for the same counts).
+
+## 3. Versioning re-audit
+
+- `FINDING_HANDOFF_SCHEMA_VERSION = 1` -- new, real, externally-consumed
+  wire contract (2.1).
+- `FIX_VERIFICATION_VERSION = 1` -- new, real, independent semantic
+  contract for fix-verification outcomes (2.3).
+- `EXECUTABLE_VERIFICATION_VERSION` (1): unchanged -- `execute_against_
+  snapshot`/`ExecutableVerificationEvidence` are reused byte-for-byte.
+- `VERIFIER_PROTOCOL_VERSION` (1): unchanged -- the wire request/result
+  shape T3 dispatches is exactly the S6 contract, untouched.
+- `REVIEW_ENGINE_VERSION` (3): unchanged -- candidate/critic/dedup
+  semantics for a normal review are completely untouched by this milestone.
+- `REVIEW_PROMPT_VERSION` (13): unchanged -- no reviewer/critic prompt
+  section added or changed; the new fix-verification prompt is a
+  completely separate, new prompt this version number does not describe.
+- `TELEMETRY_SCHEMA_VERSION` (11): unchanged -- no `review_runs` telemetry
+  field added or changed by this milestone.
+- `QUALITY_COST_POLICY_VERSION` (4): unchanged -- tiering policy semantics
+  for normal review are untouched; fix verification has its own separate,
+  much simpler cost bound (one bounded LLM call at most, gated by
+  deterministic-first evidence), not a QCG tier decision.
+
+## 4. Migration plan
+
+One new migration, `0029_fix_attempts`, adding the `fix_attempts` table
+only (see 2.3). No existing table altered.
+
+## 5. Scope decision (v1)
+
+**Implemented**: `patchfrog/agent_handoff/` (T1), `patchfrog/mcp/` (T2, four
+tools, stdio only), `patchfrog/fix_verification/` (T3, deterministic-first
+algorithm above, S6 verifier reuse, one bounded fallback LLM call), CLI
+`mcp serve` subcommand, migration `0029_fix_attempts`, docs
+(`docs/agent-handoff.md` new; `docs/agent-orchestration.md`/
+`docs/roadmap.md`/`docs/deployment.md` updated), a security/behavior test
+corpus.
+
+**Deferred, documented, not silently dropped**: per-finding K/L/M/N/O/P/Q/R
+evidence in the handoff (1.2), EV re-execution against the original SHA
+for a true A/B comparison (1.3), MCP resources (2.2), new Prometheus
+metrics for MCP/fix-attempt counts (2.4), generated tests/differential
+base-vs-head execution (that is Milestone AC, not T3).

@@ -326,6 +326,24 @@ verifier as genuinely separate Unix users (or separate hosts with a
 read-only NFS/bind-mount for the verifier's side) gets real OS-level
 write separation for free, with no PatchFrog code change.
 
+## Agent Handoff / MCP server (Milestone T)
+
+```
+python -m patchfrog.cli mcp serve
+```
+
+stdio only -- no port to expose, no separate container or `docker-compose`
+service required. Run it on the same host/credentials as the CLI/worker
+(it needs the same `Settings`: `DATABASE_URL` plus the GitHub App
+credentials, since fix verification re-clones a repository at a new
+commit exactly like the review worker does). It reuses the existing S6
+verifier boundary for its own Executable Verification re-runs -- if
+`PATCHFROG_VERIFIER_ENABLED=true`, fix verification dispatches to the same
+separate, credential-minimal verifier process; if not, that one signal is
+simply unavailable, exactly like normal review already behaves. See
+`docs/agent-handoff.md` for the full trust model, tool surface, and
+limitations.
+
 ## Migration process
 
 **Never let every API/worker instance race to run `alembic upgrade`

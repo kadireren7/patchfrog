@@ -18,6 +18,7 @@ from patchfrog.persistence.repositories.feedback import (
 )
 from patchfrog.persistence.repositories.finding import FindingRepository
 from patchfrog.persistence.repositories.finding_source import FindingSourceRepository
+from patchfrog.persistence.repositories.fix_attempt import FixAttemptRepository
 from patchfrog.persistence.repositories.import_reference import ImportReferenceRepository
 from patchfrog.persistence.repositories.indexed_file import IndexedFileRepository
 from patchfrog.persistence.repositories.installation import InstallationRepository
@@ -55,6 +56,7 @@ __all__ = [
     "FeedbackEventRepository",
     "FindingRepository",
     "FindingSourceRepository",
+    "FixAttemptRepository",
     "ImportReferenceRepository",
     "IndexedFileRepository",
     "InstallationRepository",
