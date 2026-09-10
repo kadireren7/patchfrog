@@ -69,6 +69,29 @@ class ReviewRoutePlan:
     """The router's complete, bounded decision for one review run.
     Provider selection is decided once per run (never per candidate) --
     see the audit's own architectural-constraint note for why.
+
+    **Two distinct fallback concepts, deliberately not conflated**
+    (Milestone U runtime-failover correction):
+
+    1. **Configuration-time provider-selection fallback**
+       (``config_fallback_used``): the *preferred* provider
+       (``PATCHFROG_REVIEW_PROVIDER``) had no credential configured at
+       all, so a different provider was *selected* as primary before any
+       call was ever made. Decided once, here, by
+       :meth:`~patchfrog.routing.router.ModelRouter.route`.
+    2. **Runtime execution failover**
+       (``reviewer_fallback_providers``/``critic_fallback_provider``,
+       gated by ``runtime_fallback_permitted``): the *selected* primary
+       provider is credentialed and was used, but an actual bounded
+       review call to it failed (after its own existing retry
+       allowance) or returned a schema-invalid response -- see
+       :meth:`patchfrog.review.orchestration.AgentOrchestrator._call_role`/
+       ``_critique_one`` for exactly when this fires. Reuses the same
+       operator-configured ``PATCHFROG_ROUTER_FALLBACK_PROVIDER`` as
+       (1) -- one operator-configured backup provider, two distinct
+       trigger points, never a second config surface. Bounded to
+       exactly one runtime hop; never a chain, never back to the
+       primary.
     """
 
     reviewer_providers: Mapping[AgentRole, LLMProvider]
@@ -82,5 +105,17 @@ class ReviewRoutePlan:
     #: family as the reviewer even when an alternative exists).
     diversity_available: bool
     diversity_used: bool
-    fallback_used: bool
+    #: Configuration-time fallback only -- see class docstring point 1.
+    config_fallback_used: bool
+    #: Runtime execution failover -- see class docstring point 2. Both
+    #: ``None`` when no distinct, credentialed backup provider exists
+    #: (single-provider deployments always have both ``None``).
+    reviewer_fallback_providers: Mapping[AgentRole, LLMProvider] | None = None
+    reviewer_runtime_fallback_family: str | None = None
+    critic_fallback_provider: LLMProvider | None = None
+    critic_runtime_fallback_family: str | None = None
+    #: True iff at least one of the two runtime-fallback fields above is
+    #: populated -- the single flag a caller checks before assuming
+    #: runtime failover is possible at all this run.
+    runtime_fallback_permitted: bool = False
     version: int = MODEL_ROUTER_VERSION

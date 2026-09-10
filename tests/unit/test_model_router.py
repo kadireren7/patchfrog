@@ -63,7 +63,7 @@ def test_only_one_provider_configured_routes_reviewer_and_critic_to_it(provider:
     assert plan.critic_provider_family == provider
     assert plan.diversity_available is False
     assert plan.diversity_used is False
-    assert plan.fallback_used is False
+    assert plan.config_fallback_used is False
     assert RouteReason.SINGLE_PROVIDER_CONFIGURED in plan.reasons
     assert isinstance(plan.reviewer_providers[AgentRole.CORRECTNESS], _ADAPTER_CLASS[provider])
     assert isinstance(plan.reviewer_providers[AgentRole.SECURITY], _ADAPTER_CLASS[provider])
@@ -144,7 +144,7 @@ def test_preferred_unavailable_but_fallback_configured_and_credentialed_is_used(
     plan = router.route(runtime_config=_runtime_config(provider="anthropic"), critic_enabled=True)
 
     assert plan.reviewer_provider_family == "gemini"
-    assert plan.fallback_used is True
+    assert plan.config_fallback_used is True
     assert RouteReason.PREFERRED_PROVIDER_UNAVAILABLE_FALLBACK_USED in plan.reasons
 
 

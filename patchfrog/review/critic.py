@@ -22,7 +22,7 @@ from patchfrog.review.domain import (
     ValidatedFinding,
 )
 from patchfrog.review.prompt import build_critic_prompt
-from patchfrog.review.provider import LLMProvider, ProviderRequest
+from patchfrog.review.provider import LLMProvider, ProviderIdentity, ProviderRequest
 from patchfrog.review.schemas import CRITIC_RESPONSE_SCHEMA
 from patchfrog.review.validation import ResponseSchemaError
 
@@ -31,6 +31,14 @@ class CriticService:
     def __init__(self, *, provider: LLMProvider, max_output_tokens: int = 1024) -> None:
         self._provider = provider
         self._max_output_tokens = max_output_tokens
+
+    @property
+    def identity(self) -> ProviderIdentity:
+        """Milestone U runtime-failover correction: lets a caller report
+        which provider actually served a critic call -- provenance only,
+        never used to change what the critic checks."""
+
+        return self._provider.identity
 
     async def critique(
         self,

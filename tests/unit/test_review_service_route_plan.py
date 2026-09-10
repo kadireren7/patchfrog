@@ -29,7 +29,7 @@ def _route_plan(
         reasons=(RouteReason.SINGLE_PROVIDER_CONFIGURED,),
         diversity_available=False,
         diversity_used=False,
-        fallback_used=False,
+        config_fallback_used=False,
     )
 
 

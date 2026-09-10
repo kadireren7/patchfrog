@@ -73,6 +73,26 @@ def _success_body(
     return body
 
 
+def _multi_message_body(
+    *, messages: list[list[dict[str, object]]], status: str = "completed",
+    input_tokens: int = 123, output_tokens: int = 45,
+) -> dict[str, object]:
+    """Builds a response body with one output ``message`` item per
+    element of ``messages`` -- each element is that message's own
+    content-block list, so ordering/placement of a refusal relative to
+    ``output_text`` across separate messages (not just within one) can
+    be exercised explicitly."""
+
+    return {
+        "id": "resp_abc123", "model": _MODEL, "status": status,
+        "output": [
+            {"type": "message", "role": "assistant", "status": "completed", "content": content}
+            for content in messages
+        ],
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+    }
+
+
 def _handler_returning(status_code: int, json_body: dict[str, object]) -> _Handler:
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(status_code, json=json_body)
@@ -170,6 +190,89 @@ async def test_refusal_content_item_is_fatal() -> None:
     )
     with pytest.raises(ProviderFatalError, match="refused"):
         await provider.generate_structured(_REQUEST)
+
+
+async def test_output_text_then_refusal_in_same_message_is_still_refused() -> None:
+    # Security correction: refusal must win regardless of block ordering
+    # within one message -- previously the first output_text block was
+    # returned immediately, never reaching the refusal block after it.
+    provider = _provider(
+        handler=_handler_returning(
+            200,
+            _success_body(
+                content=[
+                    {"type": "output_text", "text": '{"looks": "valid"}'},
+                    {"type": "refusal", "refusal": "actually refusing"},
+                ]
+            ),
+        )
+    )
+    with pytest.raises(ProviderFatalError, match="refused"):
+        await provider.generate_structured(_REQUEST)
+
+
+async def test_refusal_then_output_text_in_same_message_is_refused() -> None:
+    provider = _provider(
+        handler=_handler_returning(
+            200,
+            _success_body(
+                content=[
+                    {"type": "refusal", "refusal": "refusing"},
+                    {"type": "output_text", "text": '{"looks": "valid"}'},
+                ]
+            ),
+        )
+    )
+    with pytest.raises(ProviderFatalError, match="refused"):
+        await provider.generate_structured(_REQUEST)
+
+
+async def test_output_text_in_earlier_message_and_refusal_in_later_message_is_refused() -> None:
+    # The exact bug scenario: text in message 1, refusal only in message
+    # 2 -- a per-message-first-match walk would have returned message
+    # 1's text without ever inspecting message 2.
+    provider = _provider(
+        handler=_handler_returning(
+            200,
+            _multi_message_body(
+                messages=[
+                    [{"type": "output_text", "text": '{"looks": "valid"}'}],
+                    [{"type": "refusal", "refusal": "refusing after all"}],
+                ]
+            ),
+        )
+    )
+    with pytest.raises(ProviderFatalError, match="refused"):
+        await provider.generate_structured(_REQUEST)
+
+
+async def test_multiple_output_text_blocks_are_concatenated_via_official_helper() -> None:
+    # response.output_text (the official SDK helper) aggregates every
+    # output_text block into one string -- never silently returning only
+    # the first one found, since the API does not guarantee a single
+    # block.
+    provider = _provider(
+        handler=_handler_returning(
+            200,
+            _success_body(
+                content=[
+                    {"type": "output_text", "text": '{"a": 1, '},
+                    {"type": "output_text", "text": '"b": 2}'},
+                ]
+            ),
+        )
+    )
+    result = await provider.generate_structured(_REQUEST)
+    assert result.raw_json == '{"a": 1, "b": 2}'
+
+
+async def test_malformed_json_text_is_passed_through_unmodified() -> None:
+    # The adapter never validates/parses JSON itself -- exactly like the
+    # Anthropic/Gemini adapters, malformed text is returned as-is and
+    # fails downstream in patchfrog.review's own schema validation.
+    provider = _provider(handler=_handler_returning(200, _success_body(text="{not valid json")))
+    result = await provider.generate_structured(_REQUEST)
+    assert result.raw_json == "{not valid json"
 
 
 async def test_incomplete_content_filter_is_fatal() -> None:

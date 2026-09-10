@@ -34,16 +34,39 @@ never calls :meth:`ModelRouter.route` at all -- there is nothing to
 route. This module has no "should I call an LLM" branch of its own to
 avoid duplicating that upstream, already-existing decision.
 
-**Fallback is bounded to exactly one hop**: preferred provider ->
-(if unavailable) one explicitly configured fallback provider -> (if
-that's also unavailable) a clear, actionable error, reusing
-:class:`~patchfrog.review.provider_factory.MissingProviderCredentialsError`
-rather than inventing a second "no provider" exception type callers
-would need to handle separately. There is no chain beyond one fallback
-and no retry-driven re-routing to a third provider -- see Part M.
+**Two distinct fallback concepts** (Milestone U runtime-failover
+correction -- see :class:`~patchfrog.routing.domain.ReviewRoutePlan`'s
+own docstring for the full distinction):
+
+1. **Configuration-time provider-selection fallback**: the preferred
+   provider has no credential configured *at all* -> a different,
+   credentialed provider is *selected* as primary before any call is
+   ever made. Bounded to exactly one hop: preferred provider -> (if
+   unavailable) one explicitly configured fallback provider -> (if
+   that's also unavailable) a clear, actionable error, reusing
+   :class:`~patchfrog.review.provider_factory.MissingProviderCredentialsError`
+   rather than inventing a second "no provider" exception type callers
+   would need to handle separately.
+2. **Runtime execution failover**: the *selected* primary provider is
+   credentialed and was used, but an actual bounded review call to it
+   failed. This router only ever *computes* which provider is eligible
+   to serve as that one-hop runtime fallback
+   (``ReviewRoutePlan.reviewer_fallback_providers``/
+   ``critic_fallback_provider``) -- it never itself makes or retries a
+   provider call; that happens in
+   :class:`patchfrog.review.orchestration.AgentOrchestrator`, which is
+   what actually decides *when* to use the fallback this router names.
+
+Both reuse the same single ``PATCHFROG_ROUTER_FALLBACK_PROVIDER``
+setting -- one operator-configured backup provider, two distinct
+trigger points, never a second config surface. There is no chain beyond
+one hop and no retry-driven re-routing to a third provider in either
+case -- see Part M.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
 
 from patchfrog.config.settings import Settings
 from patchfrog.review.agents.roles import AgentRole
@@ -103,7 +126,7 @@ class ModelRouter:
                 "without calling a provider."
             )
 
-        reviewer_family, fallback_used = self._select_reviewer_family(
+        reviewer_family, config_fallback_used = self._select_reviewer_family(
             configured, preferred=runtime_config.provider, reasons=reasons
         )
         diversity_available = len(configured) > 1
@@ -112,25 +135,47 @@ class ModelRouter:
         )
 
         timeout_seconds = runtime_config.request_timeout_seconds
-        reviewer_model = runtime_config.model if reviewer_family == runtime_config.provider else (
-            DEFAULT_MODEL_BY_PROVIDER[reviewer_family]
-        )
+
+        def _model_for(family: str) -> str:
+            if family == runtime_config.provider:
+                return runtime_config.model
+            return DEFAULT_MODEL_BY_PROVIDER[family]
+
         reviewer_provider = _build_provider(
-            reviewer_family, reviewer_model, settings=self._settings, timeout_seconds=timeout_seconds
+            reviewer_family, _model_for(reviewer_family), settings=self._settings, timeout_seconds=timeout_seconds
         )
         reviewer_providers = {AgentRole.CORRECTNESS: reviewer_provider, AgentRole.SECURITY: reviewer_provider}
 
         critic_provider: LLMProvider | None = None
         if critic_family is not None:
-            if critic_family == reviewer_family:
-                critic_model = runtime_config.critic_model
-            elif critic_family == runtime_config.provider:
-                critic_model = runtime_config.model
-            else:
-                critic_model = DEFAULT_MODEL_BY_PROVIDER[critic_family]
+            critic_model = runtime_config.critic_model if critic_family == reviewer_family else _model_for(critic_family)
             critic_provider = _build_provider(
                 critic_family, critic_model, settings=self._settings, timeout_seconds=timeout_seconds
             )
+
+        # Runtime execution failover (distinct from config_fallback_used
+        # above -- see this module's own docstring). Eligible only when
+        # a *different*, credentialed provider actually exists: prefer
+        # the operator's explicit PATCHFROG_ROUTER_FALLBACK_PROVIDER if
+        # it names one; otherwise any other configured provider.
+        runtime_fallback_family = self._select_runtime_fallback_family(configured, exclude=reviewer_family)
+        reviewer_fallback_providers: Mapping[AgentRole, LLMProvider] | None = None
+        if runtime_fallback_family is not None:
+            fb_provider = _build_provider(
+                runtime_fallback_family, _model_for(runtime_fallback_family),
+                settings=self._settings, timeout_seconds=timeout_seconds,
+            )
+            reviewer_fallback_providers = {AgentRole.CORRECTNESS: fb_provider, AgentRole.SECURITY: fb_provider}
+
+        critic_fallback_provider: LLMProvider | None = None
+        critic_runtime_fallback_family: str | None = None
+        if critic_family is not None:
+            critic_runtime_fallback_family = self._select_runtime_fallback_family(configured, exclude=critic_family)
+            if critic_runtime_fallback_family is not None:
+                critic_fallback_provider = _build_provider(
+                    critic_runtime_fallback_family, _model_for(critic_runtime_fallback_family),
+                    settings=self._settings, timeout_seconds=timeout_seconds,
+                )
 
         return ReviewRoutePlan(
             reviewer_providers=reviewer_providers,
@@ -140,8 +185,19 @@ class ModelRouter:
             reasons=tuple(reasons),
             diversity_available=diversity_available,
             diversity_used=diversity_used,
-            fallback_used=fallback_used,
+            config_fallback_used=config_fallback_used,
+            reviewer_fallback_providers=reviewer_fallback_providers,
+            reviewer_runtime_fallback_family=runtime_fallback_family,
+            critic_fallback_provider=critic_fallback_provider,
+            critic_runtime_fallback_family=critic_runtime_fallback_family,
+            runtime_fallback_permitted=reviewer_fallback_providers is not None or critic_fallback_provider is not None,
         )
+
+    def _select_runtime_fallback_family(self, configured: list[str], *, exclude: str) -> str | None:
+        explicit = self._settings.router_fallback_provider
+        if explicit is not None and explicit in configured and explicit != exclude:
+            return explicit
+        return next((provider for provider in configured if provider != exclude), None)
 
     def _select_reviewer_family(
         self, configured: list[str], *, preferred: str, reasons: list[RouteReason]

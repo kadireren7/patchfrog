@@ -162,10 +162,10 @@ class OpenAILLMProvider:
             # Anthropic/Gemini response -- it fails JSON/schema parsing
             # naturally downstream rather than being special-cased here.
 
-        text, refused = _extract_text(response.output)
-        if refused:
+        if _any_refusal(response.output):
             raise ProviderFatalError("provider refused the request (refusal content item)")
-        if text is None:
+        text = response.output_text
+        if not text:
             raise ProviderFatalError("provider response contained no text content block")
 
         usage = response.usage
@@ -184,19 +184,30 @@ class OpenAILLMProvider:
         )
 
 
-def _extract_text(output: Sequence[object]) -> tuple[str | None, bool]:
-    """Returns ``(text, refused)`` -- ``refused`` is True the moment any
-    output item carries a refusal content block, taking priority over any
-    text also present, mirroring the Gemini/Anthropic adapters' own
-    refusal-first checks."""
+def _any_refusal(output: Sequence[object]) -> bool:
+    """Security correction: refusal must win regardless of block/message
+    ordering -- a prior version returned the first ``output_text`` block
+    it encountered without ever checking whether a *later* block or
+    message also carried a refusal, so a response shaped
+    ``[output_text, refusal]`` (same message or a later one) would have
+    silently returned the text as though the request had not been
+    refused. This scans every content block of every message item before
+    deciding anything, so ordering can never matter.
+
+    Also why ``response.output_text`` (the official SDK helper, not a
+    hand-rolled "return the first block" walk) is used for the text
+    itself below: OpenAI's own documentation states it is "not safe to
+    assume that the model's text output is present at
+    output[0].content[0].text" and that the helper "aggregates all text
+    outputs from the model into a single string" -- exactly the multiple-
+    output_text-block case this correction also had to account for,
+    already solved correctly by the SDK rather than reimplemented here.
+    """
 
     for item in output:
         if getattr(item, "type", None) != "message":
             continue
         for block in getattr(item, "content", []) or []:
-            block_type = getattr(block, "type", None)
-            if block_type == "refusal":
-                return None, True
-            if block_type == "output_text":
-                return str(block.text), False
-    return None, False
+            if getattr(block, "type", None) == "refusal":
+                return True
+    return False

@@ -299,3 +299,158 @@ follow-up should specifically design how readiness's live-DB-query need
 composes with the planner's pure-function contract and its own
 independent staleness detection, rather than being folded in here under
 this milestone's already-large scope.
+
+## 7. Pre-merge correction: runtime provider execution failover + OpenAI refusal-priority fix
+
+Post-implementation review of PR #54 found the Model Router satisfied
+only *configuration-time* provider-selection fallback (preferred
+provider uncredentialed -> a different provider selected before any
+call). There was no actual bounded runtime failover when the *selected*
+primary provider failed during a real review call (timeout, rate limit,
+transient server error, or a schema-invalid response) -- exactly the
+capability the original milestone's own test matrix (primary timeout,
+malformed primary response, fallback allowed/denied by budget, no
+infinite fallback) required and the initial implementation had not yet
+built. A second, independent bug was found in the OpenAI adapter's
+refusal handling.
+
+### 7.1 Runtime failover architecture
+
+`patchfrog.review.orchestration.AgentOrchestrator` gained optional
+`reviewer_fallback_providers`/`critic_fallback` constructor parameters
+(`None` by default -- pre-correction behavior exactly unchanged when
+omitted). `_call_role` (reviewer roles) and `_critique_one` (critic) each
+now internally: attempt the primary via the existing `call_with_retry`
+bounded-retry policy, unchanged; on `ProviderTransientError` (retries
+exhausted) or `ResponseSchemaError` (validation moved *inside* these
+methods specifically so a malformed response is eligible for the same
+treatment -- previously validation happened in a separate step the
+caller performed afterward, where no fallback concept could reach it);
+attempt exactly one fallback call (`max_retries=0`, no retry of its own,
+no chain, never back to the primary); `ProviderFatalError` is never
+caught, so it propagates immediately without ever attempting a fallback
+(explicit policy: an auth/config/refusal failure is not assumed safe to
+retry against a different vendor by default in v1).
+
+`patchfrog.routing.domain.ReviewRoutePlan` gained
+`reviewer_fallback_providers`/`reviewer_runtime_fallback_family`/
+`critic_fallback_provider`/`critic_runtime_fallback_family`/
+`runtime_fallback_permitted`, and its pre-existing `fallback_used` field
+was renamed `config_fallback_used` to make the two concepts
+unambiguous at every call site (a breaking rename, safe since PR #54 is
+still unreleased). `ModelRouter.route` computes the runtime-fallback
+family the same way for both reviewer and critic: prefer the explicit
+`PATCHFROG_ROUTER_FALLBACK_PROVIDER` if it names a *different*,
+credentialed provider; otherwise any other configured provider; `None`
+if no distinct alternative exists (matches single-provider deployments,
+which continue to have no runtime fallback available, exactly as they
+have no diversity available). Both reviewer and critic fallback reuse
+the *same* setting as configuration-time fallback -- one operator-facing
+backup-provider concept, two independent trigger points, never a second
+config surface.
+
+### 7.2 Cost-budget integration
+
+The fallback hop's actual token usage (never an estimate) flows through
+the exact same reservation-then-reconcile formula every role's call
+already used, unmodified -- proven directly in
+`test_fallback_actual_usage_is_accounted_in_the_run_wide_budget`. A
+dedicated, read-only gate (denies the fallback attempt outright when
+`budget_state["used_input_tokens"] + role_estimate > max_total_input_tokens`)
+was added specifically so "budget exhausted -> fallback denied" is real
+and testable, without a separate top-up reservation that could desync
+the existing, carefully-tuned reconciliation math elsewhere in this
+module -- proven in `test_fallback_denied_when_budget_has_no_room_for_it`.
+`QUALITY_COST_POLICY_VERSION` is not bumped for this (see
+`docs/model-routing.md`'s own version-constants section for the full
+reasoning): the accounting *formula* itself is unchanged, only a new
+call site legitimately participates in it.
+
+### 7.3 Review completeness / Merge Readiness integration
+
+`PullRequestReviewService`'s own aggregation of per-candidate
+`CandidateOrchestrationResult.failed` into the run's `ReviewRunStatus`
+was not touched by this correction -- a candidate whose every selected
+role fails (even after an attempted, also-failing fallback) is marked
+`failed=True` exactly as before, so the run is never reported
+`SUCCEEDED` when review work didn't actually complete. Since
+`MergeReadinessService` only ever reads `ReviewRunStatus` and never
+anything about *how* a run reached that status, this integration was
+correct by construction -- verified end-to-end (not merely asserted) via
+`tests/integration/test_runtime_failover_merge_readiness_integration.py`,
+which runs a real `PullRequestReviewService.review_local` call through a
+real git fixture repository with every specialist call failing and no
+fallback configured, and confirms `MergeReadinessService.evaluate`
+resolves to `HUMAN_REVIEW_REQUIRED`/`REVIEW_INCOMPLETE` -- never
+`READY` -- for that exact head. A second case in the same file proves
+the positive path: primary failure + a *successful* fallback completes
+the review normally, and readiness then evaluates exactly as if the
+primary had never failed.
+
+### 7.4 OpenAI refusal-priority bug (Blocker 2)
+
+`patchfrog/review/providers/openai_provider.py`'s `_extract_text`
+returned the *first* content block it found across every message in
+`response.output`, and its own docstring claimed refusal-first priority
+that the implementation didn't actually provide: a response shaped
+`[output_text, refusal]` (same message or a later one) would have
+returned the text before ever inspecting the refusal block after it. No
+live testing had exercised this exact ordering, so the gap went
+unnoticed until directed re-audit.
+
+Fixed by splitting extraction into two full passes over
+`response.output`, never returning early on the first content block
+seen: `_any_refusal` scans every content block of every message item
+before returning anything, so a refusal anywhere in the response wins
+regardless of its position; text extraction then uses
+`response.output_text`, the *official* SDK helper (not a hand-rolled
+walk) -- OpenAI's own documentation states it is "not safe to assume
+that the model's text output is present at `output[0].content[0].text`"
+and that the helper "aggregates all text outputs from the model into a
+single string," which is exactly the multiple-`output_text`-block case
+this correction also had to account for, already correctly solved by
+the SDK rather than reimplemented here.
+
+### 7.5 New/updated tests
+
+`tests/unit/test_review_openai_provider_contract.py` gained 5 cases
+(29 total, up from 24): `output_text` then `refusal` in the same
+message, `refusal` then `output_text` in the same message, `output_text`
+in an earlier message with `refusal` only in a later one (the exact
+bug reproduction), multiple `output_text` blocks concatenated via the
+official helper, and malformed JSON text passed through unmodified
+(never parsed/validated by the adapter itself, exactly like
+Anthropic/Gemini).
+
+`tests/integration/test_runtime_provider_failover.py` (new, 19 cases):
+primary transient-error classes (generic/timeout-shaped/rate-limit-
+shaped/5xx-shaped) all trigger fallback identically; fallback succeeds
+vs. fallback also fails (role honestly marked failed, exactly one
+fallback attempt made); no fallback configured / fallback mapping
+missing this role behave identically to each other; fallback never
+attempts a second cross-provider hop and never loops back to the
+primary; retry-plus-fallback total calls remain bounded and observable
+via `.calls`; fallback's actual usage is accounted in the run-wide
+budget; fallback denied when the budget has no room; malformed
+structured output is eligible for fallback (never retried against the
+same non-compliant primary first); `ProviderFatalError` (including a
+refusal-shaped one) is never eligible for fallback; reviewer fallback
+and critic family diversity are proven independent; executed-provider
+provenance reports the fallback family when used and the primary family
+otherwise.
+
+`tests/integration/test_runtime_failover_merge_readiness_integration.py`
+(new, 2 cases) -- see 7.3 above.
+
+`tests/unit/test_model_router.py`/`tests/unit/test_review_service_route_plan.py`
+updated for the `fallback_used` -> `config_fallback_used` rename (28
+router tests unaffected in count, all still pass).
+
+### 7.6 Full-suite result
+
+New test files added by this correction: 19 cases
+(`test_runtime_provider_failover.py`) + 2 cases
+(`test_runtime_failover_merge_readiness_integration.py`) + 5 new OpenAI
+refusal-ordering cases within the existing contract-test file (24 -> 29).
+Zero regressions across the pre-correction 2321-test baseline -- see the
+final report for the exact fresh full-suite count.

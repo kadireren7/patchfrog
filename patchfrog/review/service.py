@@ -426,6 +426,8 @@ class PullRequestReviewService:
         separate trust domain to enforce there."""
 
         self._session_factory = session_factory
+        self._reviewer_fallback_providers: Mapping[AgentRole, LLMProvider] | None = None
+        critic_fallback_provider: LLMProvider | None = None
         if route_plan is not None:
             self._reviewer_providers: Mapping[AgentRole, LLMProvider] = route_plan.reviewer_providers
             # Every role maps to the same instance in v1 (Model Router
@@ -434,6 +436,11 @@ class PullRequestReviewService:
             # arbitrary one is representative for identity reporting.
             self._reviewer_provider = next(iter(route_plan.reviewer_providers.values()))
             self._critic_provider = route_plan.critic_provider
+            # Milestone U runtime-failover correction -- distinct from
+            # config-time provider selection above; see
+            # patchfrog.routing.domain.ReviewRoutePlan's own docstring.
+            self._reviewer_fallback_providers = route_plan.reviewer_fallback_providers
+            critic_fallback_provider = route_plan.critic_fallback_provider
         elif reviewer_provider is not None:
             self._reviewer_providers = {AgentRole.CORRECTNESS: reviewer_provider, AgentRole.SECURITY: reviewer_provider}
             self._reviewer_provider = reviewer_provider
@@ -447,6 +454,9 @@ class PullRequestReviewService:
         self._candidates = candidate_generator or ReviewCandidateGenerator(query_service=self._queries)
         self._context_service = context_service or ContextService(session_factory=session_factory)
         self._critic = CriticService(provider=self._critic_provider) if self._critic_provider is not None else None
+        self._critic_fallback = (
+            CriticService(provider=critic_fallback_provider) if critic_fallback_provider is not None else None
+        )
         self._effort_policy = ReviewEffortPolicy()
         self._run_repo = ReviewRunRepository()
         self._candidate_repo = ReviewCandidateRepository()
@@ -1036,6 +1046,8 @@ class PullRequestReviewService:
             critic_enabled=config.critic_enabled,
             max_output_tokens_per_candidate=config.max_output_tokens_per_candidate,
             max_retries=config.max_retries,
+            reviewer_fallback_providers=self._reviewer_fallback_providers,
+            critic_fallback=self._critic_fallback,
         )
 
         async def _process(outcome: _CandidateOutcome) -> None:

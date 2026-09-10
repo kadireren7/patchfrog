@@ -132,6 +132,98 @@ first place -- there is nothing to route, so this module has no "should I
 call an LLM" branch of its own to avoid duplicating that
 already-existing, upstream decision.
 
+## Runtime execution failover (pre-merge correction)
+
+**Two distinct fallback concepts, deliberately not conflated** -- see
+`patchfrog.routing.domain.ReviewRoutePlan`'s own docstring for the full
+distinction:
+
+1. **Configuration-time provider-selection fallback**
+   (`ReviewRoutePlan.config_fallback_used`, described in "Selection
+   logic" item 2 above): the preferred provider had no credential
+   configured *at all* -- a different provider is *selected* as primary
+   before any call is ever made. Decided once, by `ModelRouter.route`.
+2. **Runtime execution failover**
+   (`ReviewRoutePlan.reviewer_fallback_providers`/
+   `critic_fallback_provider`, gated by `runtime_fallback_permitted`):
+   the *selected* primary provider is credentialed and used, but an
+   actual bounded review call to it fails. The router only ever
+   *computes* which provider is eligible to serve as the one-hop runtime
+   fallback; it never itself makes or retries a call. That happens in
+   `patchfrog.review.orchestration.AgentOrchestrator._call_role`/
+   `_critique_one`, which decide *when* to use the fallback the router
+   named. Both concepts reuse the same single
+   `PATCHFROG_ROUTER_FALLBACK_PROVIDER` setting -- one operator-configured
+   backup provider, two distinct trigger points, never a second config
+   surface.
+
+**What triggers runtime failover** (after the primary's own existing
+bounded retry allowance, `max_retries`, is exhausted):
+
+- `ProviderTransientError` (rate limit, timeout, connection failure,
+  transient server failure) -> eligible.
+- `ResponseSchemaError` (the primary responded, but its output did not
+  parse/validate against the schema) -> **also** eligible. This is a
+  provider-compliance issue, not an authorization or request-shape
+  issue -- a structurally different provider may simply honor strict
+  JSON-schema mode differently, and retrying the *same* non-compliant
+  provider with the identical request would not help (the same reason
+  it is never retried on the same provider either).
+- `ProviderFatalError` (auth failure, malformed request, refusal) ->
+  **never** eligible, propagates immediately. An auth/config/refusal
+  failure is not assumed safe to retry against a different vendor by
+  default in v1 -- retrying elsewhere after, say, a policy refusal could
+  violate the refusal's own intended semantics, and a malformed-request
+  failure would very likely reproduce identically against any vendor.
+
+**Bounded to exactly one runtime hop, never a chain, never back to the
+primary**: the fallback attempt itself uses `max_retries=0` (a single
+try, never its own retry loop). `AgentOrchestrator`'s
+`reviewer_fallback_providers`/`critic_fallback` constructor parameters
+each name exactly one provider -- there is structurally no third
+provider to escalate to.
+
+**Quality + Cost Guard integration**: the fallback's actual usage (not
+an estimate) flows through the exact same reservation-then-reconcile
+accounting every role's call already goes through -- never a "free" call
+outside budget tracking. Before attempting the fallback hop specifically,
+a read-only check (`budget_state["used_input_tokens"] + role_estimate >
+max_total_input_tokens`) denies it outright when the run's remaining
+budget has no room, without a separate top-up reservation that could
+desync the existing, carefully-tuned reconcile-after-actual-usage
+math elsewhere in `patchfrog.review.orchestration`. A denied fallback
+behaves exactly like "no fallback configured" -- the original error
+propagates, the role is honestly marked failed.
+
+**Review completeness**: if a candidate's every selected role fails
+(even after a permitted, attempted fallback), that candidate is marked
+`failed=True` exactly as it always was pre-correction -- unaffected by
+runtime failover existing. `PullRequestReviewService`'s own,
+unmodified aggregation of per-candidate failures into the run's
+`ReviewRunStatus` (`PARTIAL`/`FAILED` vs. `SUCCEEDED`) is therefore also
+unaffected. This is the mechanism that keeps Merge Readiness honest:
+`patchfrog.merge_readiness.service.MergeReadinessService` only ever
+reads `ReviewRunStatus` and never anything about *how* a run reached
+that status, so "primary failed, fallback also failed, review
+incomplete" and "review failed for any other reason" both correctly
+resolve to `HUMAN_REVIEW_REQUIRED` -- see
+`tests/integration/test_runtime_failover_merge_readiness_integration.py`
+for an end-to-end proof through a real `PullRequestReviewService.review_local`
+call.
+
+**Provenance**: `CandidateOrchestrationResult` (per-candidate, in-memory
+only) gained `fallback_used_roles`/`executed_provider_by_role`/
+`critic_fallback_used`/`critic_executed_provider` -- which provider
+family *actually* executed each call, for observability, never
+persisted to a new table and never affecting which findings survive.
+
+**Reviewer fallback and critic family diversity remain independent
+mechanisms** -- a reviewer role falling back to a backup provider says
+nothing about whether the critic used a diverse family, and vice versa;
+`tests/integration/test_runtime_provider_failover.py`'s own
+`test_reviewer_fallback_and_critic_diversity_are_independent` proves
+this explicitly.
+
 ## Operator configuration
 
 | Env var | Meaning |
@@ -173,11 +265,24 @@ algorithm in the public engine.
 
 ## Version constants
 
-`MODEL_ROUTER_VERSION = 1` (`patchfrog.routing.domain`) -- the router's
-own durable semantic contract (route-plan shape, reason-code meaning).
-`QUALITY_COST_POLICY_VERSION` is **not** bumped: routing selects *which*
-provider serves a role, never the tiering policy itself (roles selected,
-context budget, critic strictness) -- that contract is materially
-unchanged. `REVIEW_ENGINE_VERSION` is **not** bumped: normal review
-semantics (what a specialist/critic does with its input) are unchanged;
-only *which* provider instance receives the call differs.
+`MODEL_ROUTER_VERSION = 1` (`patchfrog.routing.domain`) -- unchanged
+across the pre-merge runtime-failover correction: PR #54 is still
+unreleased/unmerged, so this correction defines the final, accepted v1
+router contract (config-time selection semantics *and* runtime
+failover) rather than amending an already-shipped one.
+
+`QUALITY_COST_POLICY_VERSION` is **not** bumped, including for the
+runtime-failover correction's own budget-gating addition -- audited
+explicitly: the fallback hop reuses the exact same accounting
+*mechanism* (the `max_total_input_tokens` reservation-then-reconcile
+formula in `patchfrog.review.orchestration`) completely unmodified; a
+new call site legitimately participating in an unchanged accounting
+formula is not a change to the cost-policy *contract* itself (what a
+budget field means, how it is computed, what counts as reserved vs.
+actual). Nothing about `ReviewConfig`'s own fields or their effective
+semantics changed.
+
+`REVIEW_ENGINE_VERSION` is **not** bumped: normal review semantics (what
+a specialist/critic does with its input, validation, dedup, confidence
+aggregation) are unchanged; only *which* provider instance ends up
+serving a given call differs, and only when the primary already failed.
