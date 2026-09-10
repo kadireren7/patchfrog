@@ -382,12 +382,15 @@ def commit_and_push_branch(work: Path, branch: str) -> str:
 
 
 @respx.mock
-async def test_identical_sha_comparison_is_still_present(
+async def test_identical_sha_comparison_unchanged_alone_is_inconclusive(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
     """Part U: an explicit no-op comparison (same SHA) is allowed, not
-    rejected -- and correctly resolves to STILL_PRESENT since nothing at
-    all changed."""
+    rejected. Security correction round 2, Blocker 2: "nothing changed" is
+    only ever weak SUPPORTS_PRESENT evidence -- with no provider
+    configured to weigh it, the honest result is INCONCLUSIVE, never an
+    automatic STILL_PRESENT (the original defect could, in principle,
+    have been resolved by context entirely outside this exact surface)."""
 
     _mock_token_route()
     remote = _init_bare_remote(tmp_path)
@@ -398,19 +401,82 @@ async def test_identical_sha_comparison_is_still_present(
     handoff = await _build_handoff(session_factory, finding_id=finding_id)
 
     async with session_factory() as session:
-        attempt = await _service(remote=remote).start_fix_attempt(
+        attempt = await _service(remote=remote, fix_critic_provider=None).start_fix_attempt(
+            session, handoff=handoff, candidate_fix_commit_sha=original_sha
+        )
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+    assert attempt.result is not None
+    assert any("supporting evidence only" in e for e in attempt.result.deterministic_evidence)
+
+
+@respx.mock
+async def test_unchanged_flagged_code_plus_llm_confirms_still_present(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """When a provider *is* configured, unchanged weak evidence still only
+    ever unlocks the LLM fallback -- the model's own (here, scripted)
+    judgment is what actually produces STILL_PRESENT, not the unchanged
+    bytes by themselves."""
+
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE})
+
+    repository = await _make_repository(session_factory, "acme/widgets")
+    finding_id = await _stage_finding(session_factory, repository_id=repository.id, commit_sha=original_sha)
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    provider = FakeLLMProvider(
+        [ScriptedResponse(raw_json=json.dumps({"decision": "still_present", "reasoning_summary": "still buggy"}))]
+    )
+    async with session_factory() as session:
+        attempt = await _service(remote=remote, fix_critic_provider=provider).start_fix_attempt(
             session, handoff=handoff, candidate_fix_commit_sha=original_sha
         )
 
     assert attempt.status == FixAttemptStatus.STILL_PRESENT
-    assert attempt.result is not None
-    assert any("byte-identical" in e for e in attempt.result.deterministic_evidence)
+    assert len(provider.calls) == 1
 
 
 @respx.mock
-async def test_unrelated_file_change_leaves_flagged_file_unchanged_still_present(
+async def test_unchanged_bytes_but_llm_finds_it_resolved_externally_is_fixed(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
+    """Part V of the security correction: "the flagged code is unchanged"
+    must never force STILL_PRESENT -- the underlying defect can, in
+    principle, be resolved entirely by context outside the exact flagged
+    surface. This test proves the algorithm does not hardcode "unchanged
+    -> present": with a provider configured, the (scripted) model's own
+    judgment can still land on FIXED even though the bytes never changed."""
+
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE})
+
+    repository = await _make_repository(session_factory, "acme/widgets")
+    finding_id = await _stage_finding(session_factory, repository_id=repository.id, commit_sha=original_sha)
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    provider = FakeLLMProvider(
+        [ScriptedResponse(raw_json=json.dumps({"decision": "fixed", "reasoning_summary": "caller now validates"}))]
+    )
+    async with session_factory() as session:
+        attempt = await _service(remote=remote, fix_critic_provider=provider).start_fix_attempt(
+            session, handoff=handoff, candidate_fix_commit_sha=original_sha
+        )
+
+    assert attempt.status == FixAttemptStatus.FIXED
+
+
+@respx.mock
+async def test_unrelated_file_change_leaves_flagged_file_unchanged_inconclusive(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """"Caller validation added elsewhere" analogue: the flagged file's
+    own bytes never changed, but *something else in the repository* did
+    -- weak evidence only, never an automatic verdict."""
+
     _mock_token_route()
     remote = _init_bare_remote(tmp_path)
     original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE, "other.py": "a = 1\n"})
@@ -421,11 +487,11 @@ async def test_unrelated_file_change_leaves_flagged_file_unchanged_still_present
     handoff = await _build_handoff(session_factory, finding_id=finding_id)
 
     async with session_factory() as session:
-        attempt = await _service(remote=remote).start_fix_attempt(
+        attempt = await _service(remote=remote, fix_critic_provider=None).start_fix_attempt(
             session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
         )
 
-    assert attempt.status == FixAttemptStatus.STILL_PRESENT
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
 
 
 @respx.mock
@@ -1004,13 +1070,19 @@ async def test_executable_verification_pass_alone_is_inconclusive_not_fixed(
 
 @pytest.mark.skipif(not _ev_infra_available, reason="bwrap sandbox and/or Redis not available on this host")
 @respx.mock
-async def test_executable_verification_confirmed_failure_is_still_present(
+async def test_executable_verification_confirmed_failure_alone_is_inconclusive(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, staging_root: Path,
     verifier_worker: None, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Blocker 1: a confirmed failure against the candidate head is a
-    strong, unconditional contradiction -- STILL_PRESENT, never FIXED,
-    and never even reaching the (here, would-raise) LLM fallback."""
+    """Security correction round 2, Blocker 1: a candidate-head test
+    failure is *not* durable, finding-specific proof the *original*
+    finding is still present -- original-SHA EV evidence is never
+    persisted, the candidate-head test target is reconstructed (not a
+    persisted original binding), and a test file can fail for reasons
+    unrelated to this specific finding (an unrelated regression, a setup/
+    environment difference, a different assertion). With no provider
+    configured to weigh this weak evidence, the honest result is
+    INCONCLUSIVE, never an automatic STILL_PRESENT."""
 
     monkeypatch.setenv("VERIFICATION_SNAPSHOT_ROOT", str(staging_root))
     _mock_token_route()
@@ -1021,7 +1093,8 @@ async def test_executable_verification_confirmed_failure_is_still_present(
     # A cosmetic edit *inside* the buggy function itself -- the exact bug
     # remains, but the function's own body is no longer byte-identical
     # (a trailing comment *outside* the function would leave the mapped
-    # symbol itself UNCHANGED and short-circuit before EV ever ran).
+    # symbol itself UNCHANGED, which is now also only weak evidence, but
+    # this test wants to isolate the EV signal specifically).
     candidate_sha = _push_commit(
         remote, tmp_path,
         files={"src.py": "def add(a, b):\n    # unrelated cosmetic comment\n    return a - b  # still buggy\n"},
@@ -1029,7 +1102,81 @@ async def test_executable_verification_confirmed_failure_is_still_present(
     handoff = await _build_handoff(session_factory, finding_id=finding_id)
 
     dispatcher = VerifierDispatcher(celery_app=_ev_producer_app(), wait_timeout_seconds=20.0)
-    provider = FakeLLMProvider([])  # exhausted -- must never be called
+    async with session_factory() as session:
+        attempt = await _service(
+            remote=remote, verifier_dispatcher=dispatcher, fix_critic_provider=None,
+        ).start_fix_attempt(session, handoff=handoff, candidate_fix_commit_sha=candidate_sha)
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+    assert attempt.result is not None
+    assert attempt.result.executable_verification_outcome == "confirmed_failure"
+    assert any("supporting evidence only" in e for e in attempt.result.deterministic_evidence)
+    assert any("not proof this is the original finding" in e for e in attempt.result.deterministic_evidence)
+
+
+@respx.mock
+async def test_executable_verification_confirmed_failure_plus_llm_confirms_still_present(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, staging_root: Path,
+    verifier_worker: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a provider configured, the weak EV-failure signal unlocks the
+    LLM fallback -- the model's own judgment (here, scripted) is what
+    actually produces STILL_PRESENT, never the test failure by itself."""
+
+    monkeypatch.setenv("VERIFICATION_SNAPSHOT_ROOT", str(staging_root))
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    _repository_id, finding_id, _original_sha = await _stage_ev_finding(
+        session_factory, tmp_path=tmp_path, remote=remote, source=_EV_SOURCE_BUGGY,
+    )
+    candidate_sha = _push_commit(
+        remote, tmp_path,
+        files={"src.py": "def add(a, b):\n    # unrelated cosmetic comment\n    return a - b  # still buggy\n"},
+    )
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    dispatcher = VerifierDispatcher(celery_app=_ev_producer_app(), wait_timeout_seconds=20.0)
+    provider = FakeLLMProvider(
+        [ScriptedResponse(raw_json=json.dumps({"decision": "still_present", "reasoning_summary": "confirmed"}))]
+    )
+    async with session_factory() as session:
+        attempt = await _service(
+            remote=remote, verifier_dispatcher=dispatcher, fix_critic_provider=provider,
+        ).start_fix_attempt(session, handoff=handoff, candidate_fix_commit_sha=candidate_sha)
+
+    assert attempt.status == FixAttemptStatus.STILL_PRESENT
+    assert len(provider.calls) == 1
+
+
+@respx.mock
+async def test_original_finding_remains_but_candidate_test_happens_to_pass_is_not_fixed(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, staging_root: Path,
+    verifier_worker: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The mirror image of the round-1 correction: a passing candidate-
+    head test is weak SUPPORTS_RESOLVED evidence, and with a provider
+    that (correctly) still finds the original condition present, the
+    result must be STILL_PRESENT -- never forced to FIXED merely because
+    one test happened to pass."""
+
+    monkeypatch.setenv("VERIFICATION_SNAPSHOT_ROOT", str(staging_root))
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    _repository_id, finding_id, _original_sha = await _stage_ev_finding(
+        session_factory, tmp_path=tmp_path, remote=remote, source=_EV_SOURCE_BUGGY,
+    )
+    # The targeted test happens to pass (e.g. it doesn't exercise the
+    # exact regressed input), but the underlying bug is still there.
+    candidate_sha = _push_commit(
+        remote, tmp_path, files={"src.py": "def add(a, b):\n    if a == 2 and b == 3:\n        return 5\n"
+                                            "    return a - b  # still buggy for other inputs\n"},
+    )
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    dispatcher = VerifierDispatcher(celery_app=_ev_producer_app(), wait_timeout_seconds=20.0)
+    provider = FakeLLMProvider(
+        [ScriptedResponse(raw_json=json.dumps({"decision": "still_present", "reasoning_summary": "only patched for one case"}))]
+    )
     async with session_factory() as session:
         attempt = await _service(
             remote=remote, verifier_dispatcher=dispatcher, fix_critic_provider=provider,
@@ -1037,5 +1184,121 @@ async def test_executable_verification_confirmed_failure_is_still_present(
 
     assert attempt.status == FixAttemptStatus.STILL_PRESENT
     assert attempt.result is not None
-    assert attempt.result.executable_verification_outcome == "confirmed_failure"
-    assert provider.calls == []
+    assert attempt.result.executable_verification_outcome == "passed"
+
+
+@respx.mock
+async def test_weak_present_and_weak_resolved_conflict_forces_no_terminal_verdict(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, staging_root: Path,
+    verifier_worker: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two weak signals pointing in opposite directions at once (the
+    flagged bytes are unchanged -- SUPPORTS_PRESENT -- while an
+    insufficiently targeted test happens to pass anyway -- SUPPORTS_RESOLVED)
+    must never be resolved into a forced terminal verdict by the
+    combination logic itself. With no provider configured, the only
+    honest result is INCONCLUSIVE."""
+
+    monkeypatch.setenv("VERIFICATION_SNAPSHOT_ROOT", str(staging_root))
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    # A weak test: both 0-0 and 0+0 equal 0, so it passes whether or not
+    # the subtraction-instead-of-addition bug is present.
+    weak_test = "from src import add\n\n\ndef test_add():\n    assert add(0, 0) == 0\n"
+    work = tmp_path / f"ev-work-{uuid.uuid4()}"
+    run_git(["clone", "--quiet", str(remote), str(work)])
+    init_git_repo_config(work)
+    (work / "src.py").write_text(_EV_SOURCE_BUGGY)
+    (work / "test_src.py").write_text(weak_test)
+    original_sha = commit_and_push(work, remote, "add src + weak test")
+
+    repository = await _make_repository(session_factory, "acme/widgets")
+    await RepositoryIndexingService(session_factory=session_factory).index_local_repository(
+        repository_id=repository.id, root_path=work, repository_full_name=repository.full_name,
+    )
+    async with session_factory() as session:
+        index = await RepositoryIndexRepository().get_active(session, repository_id=repository.id)
+        assert index is not None
+    finding_id = await _stage_finding(
+        session_factory, repository_id=repository.id, commit_sha=original_sha,
+        file_path="src.py", start_line=1, end_line=2,
+    )
+    async with session_factory() as session:
+        finding = await session.get(AIFindingModel, finding_id)
+        assert finding is not None
+        run = await session.get(ReviewRunModel, finding.review_run_id)
+        assert run is not None
+        run.repository_index_id = index.id
+        candidate = await session.get(ReviewCandidateModel, finding.candidate_id)
+        assert candidate is not None
+        candidate.qualified_name = "add"
+        candidate.symbol_name = "add"
+        await session.commit()
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    # candidate SHA == original SHA: the flagged bytes are unchanged
+    # (SUPPORTS_PRESENT), while the weak test still passes (SUPPORTS_RESOLVED).
+    dispatcher = VerifierDispatcher(celery_app=_ev_producer_app(), wait_timeout_seconds=20.0)
+    async with session_factory() as session:
+        attempt = await _service(
+            remote=remote, verifier_dispatcher=dispatcher, fix_critic_provider=None,
+        ).start_fix_attempt(session, handoff=handoff, candidate_fix_commit_sha=original_sha)
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+    assert attempt.result is not None
+    assert attempt.result.executable_verification_outcome == "passed"
+    assert any("supporting evidence only" in e for e in attempt.result.deterministic_evidence)
+
+
+@respx.mock
+async def test_llm_decides_inconclusive_when_context_is_insufficient(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """A safely mapped surface does not guarantee the LLM fallback can
+    actually decide -- when it says inconclusive (e.g. because the shown
+    excerpt alone cannot establish resolution), the fix attempt honestly
+    reports INCONCLUSIVE, never forced to a terminal verdict."""
+
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    original = "def f():\n    a = 1\n    b = 2\n    return a + b\n"
+    candidate = "def f():\n    a = 1\n    b = 3\n    return a + b\n"
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": original})
+    candidate_sha = _push_commit(remote, tmp_path, files={"m.py": candidate})
+
+    repository = await _make_repository(session_factory, "acme/widgets")
+    finding_id = await _stage_finding(
+        session_factory, repository_id=repository.id, commit_sha=original_sha, start_line=1, end_line=4,
+    )
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    provider = FakeLLMProvider(
+        [ScriptedResponse(raw_json=json.dumps({
+            "decision": "inconclusive", "reasoning_summary": "cannot verify caller context",
+        }))]
+    )
+    async with session_factory() as session:
+        attempt = await _service(remote=remote, fix_critic_provider=provider).start_fix_attempt(
+            session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
+        )
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+    assert len(provider.calls) == 1
+
+
+def test_no_code_path_produces_proves_resolved_in_v1() -> None:
+    """Security correction (both rounds): no static or Executable-
+    Verification signal is strong enough to reach PROVES_RESOLVED in v1
+    -- a deterministic FIXED can never occur by accident. Structural proof
+    over the actual source rather than an exhaustive behavioral
+    enumeration: neither _static_signal nor _ev_signal's source ever
+    references FixEvidenceDirection.PROVES_RESOLVED."""
+
+    import inspect
+
+    from patchfrog.fix_verification.service import FixVerificationService
+
+    static_source = inspect.getsource(FixVerificationService._static_signal)
+    ev_source = inspect.getsource(FixVerificationService._ev_signal)
+    assert "PROVES_RESOLVED" not in static_source
+    assert "PROVES_RESOLVED" not in ev_source

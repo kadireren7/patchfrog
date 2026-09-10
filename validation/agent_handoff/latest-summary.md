@@ -500,3 +500,133 @@ rewritten to their corrected expectations (static-absence-alone ->
 INCONCLUSIVE; static-absence-plus-LLM-confirmation -> FIXED). 25/25 pass
 in `test_fix_verification_corpus.py`; 101 total across every T1/T2/T3
 test file touched by this correction.
+
+## 7. Security correction round 2: false-STILL_PRESENT paths in T3
+
+A second post-review pass found round 1's own fix left the mirror-image
+bug: two paths could incorrectly classify a finding as `STILL_PRESENT`.
+The governing rule is symmetric: **prefer INCONCLUSIVE over either a
+false FIXED or a false STILL_PRESENT.**
+
+### 7.1 Blocker 1 -- Executable Verification `CONFIRMED_FAILURE` treated as finding-specific proof
+
+`_ev_signal` mapped `CONFIRMED_FAILURE` to `CONFIRMS_PRESENT` (strong,
+wins outright) on the theory that a failing targeted test is a real
+contradiction. But nothing in T's architecture durably binds *this*
+candidate-head test failure to the *original* finding: original-SHA EV
+evidence is never persisted per finding (section 1.3 above), the
+candidate-head test target is reconstructed from the original
+`FILE_TESTS_FILE`/companion relationship rather than a persisted original
+test binding, and a test file can contain multiple tests -- a failure can
+be an unrelated regression, a setup/environment difference, or a
+different assertion than the one that originally exercised this finding.
+Fixed: `CONFIRMED_FAILURE` now maps to `FixEvidenceDirection.
+SUPPORTS_PRESENT` (weak) -- it can only unlock the bounded LLM fallback,
+never produce `STILL_PRESENT` by itself.
+
+**Deliberately kept different from the static-rule signal**, which stays
+`CONFIRMS_PRESENT`: a static re-check is tied to the *specific* original
+static finding id and rule, re-detected at a content-hash-proven exact
+surface -- a tight identity binding EV's file-level test granularity does
+not have. Documented explicitly in `_ev_signal`'s own comment and in
+`docs/agent-handoff.md` so the asymmetry is never mistaken for an
+oversight.
+
+A future milestone could upgrade EV failure to strong evidence if
+PatchFrog persists a finding-specific original reproduction and can prove
+"same test, same failure predicate, both before and after" -- that
+capability does not exist in T v1.
+
+### 7.2 Blocker 2 -- unchanged flagged file/symbol treated as universal proof of presence
+
+Two early-exit paths in `_run_verification` returned `STILL_PRESENT`
+unconditionally whenever (a) the flagged file was byte-identical between
+the two commits, or (b) the mapped symbol's own body was unchanged (file
+changed elsewhere). Both only prove "the flagged bytes are unchanged,"
+never "the defect still exists" -- an AI finding's truth can depend on
+context entirely outside the flagged surface (a caller that now
+validates input, an upstream authorization check, a changed contract, a
+configuration change, a sanitizer added elsewhere). Fixed: both cases now
+contribute a single `FixEvidenceDirection.SUPPORTS_PRESENT` (weak)
+signal into the same combination step as every other signal, instead of
+returning immediately. Removing the early exits also means the candidate
+checkout, surface mapping, static re-check, and EV re-run all now run
+even when the file is untouched -- a deliberate cost increase in exchange
+for never silently skipping evidence that could show the defect was
+resolved elsewhere.
+
+### 7.3 Revised evidence lattice
+
+`FixEvidenceDirection` gains a fifth member, `SUPPORTS_PRESENT`, alongside
+the existing `CONFIRMS_PRESENT`/`SUPPORTS_RESOLVED`/`PROVES_RESOLVED`/
+`NO_SIGNAL`. Combination rule in `_classify` (unchanged in *shape* from
+round 1, only in which signals can reach which strength): any
+`CONFIRMS_PRESENT` -> `STILL_PRESENT`, unconditionally. A `PROVES_RESOLVED`
+(with nothing contradicting) -> `FIXED` -- still unreachable from any
+current signal (`test_no_code_path_produces_proves_resolved_in_v1`
+proves this structurally, over `_static_signal`'s and `_ev_signal`'s own
+source). Any combination of only weak signals -- `SUPPORTS_PRESENT`
+and/or `SUPPORTS_RESOLVED`, including both at once when they conflict --
+never produces a terminal verdict directly; it only makes the bounded LLM
+fallback available.
+
+### 7.4 LLM fallback: conservative in both directions, and context-adequacy warning
+
+The system prompt (`patchfrog.fix_verification.critic`) previously only
+warned against a false `fixed`. Extended to warn symmetrically against a
+false `still_present`: "do not decide still_present merely because the
+shown code is unchanged... the underlying condition may have been
+resolved by context you cannot see." A new explicit section tells the
+model the original finding may depend on context not shown to it (a
+caller, an upstream check, a contract, a configuration value) and to
+decide `inconclusive` rather than assume that context does or doesn't
+exist -- T v1 has no structural way to prove a finding's truth is fully
+local to the shown excerpt, so the model's own conservative instructions
+are the actual safeguard here, not a new persisted "context-adequacy"
+flag (which the audit found no basis to construct honestly for arbitrary
+AI findings).
+
+### 7.5 Prompt delimiter hardening
+
+`build_fix_verification_prompt` previously concatenated untrusted content
+between raw `<original_finding>`/`<current_code>` delimiters -- injected
+text identical to the real closing delimiter (e.g. a code comment
+containing the literal string `</current_code>`) is, by construction,
+indistinguishable from a genuine boundary in that format. Replaced with a
+JSON-encoded payload (`json.dumps`, standard library, no custom parser):
+a string value containing `"</current_code>"` or a fake `{"decision":
+"fixed", ...}` verdict stays exactly that -- quoted, escaped string
+content, with no bare structural token to misinterpret. Verified with
+delimiter-breakout tests asserting the injected text round-trips through
+`json.loads` on the actual sent prompt exactly, proving it never escaped
+its own string value.
+
+### 7.6 New tests
+
+`tests/unit/test_fix_verification_critic.py` gains 3 delimiter-breakout
+cases (code containing `</current_code>`, finding text containing
+`<original_finding>`, a fake `<system>` block inside a code comment) plus
+2 system-prompt-content assertions (JSON framing, context-incompleteness
+warning) -- rewrote the existing injection tests to assert against the
+parsed JSON payload rather than raw substring/index checks against
+delimiters that no longer exist. `tests/integration/test_fix_verification_corpus.py`
+gains 7 new/rewritten cases: unchanged-file-alone -> INCONCLUSIVE (no
+provider), unchanged-file-plus-LLM-confirms -> STILL_PRESENT,
+unchanged-bytes-but-LLM-finds-it-resolved-externally -> FIXED (proves
+"unchanged" never forces a verdict in either direction), EV-
+CONFIRMED_FAILURE-alone -> INCONCLUSIVE, EV-CONFIRMED_FAILURE-plus-LLM
+-> STILL_PRESENT, EV-PASSED-but-LLM-still-finds-it-present ->
+STILL_PRESENT (the round-1 mirror case, proving a passing test never
+forces FIXED either), weak-present-plus-weak-resolved-conflict ->
+INCONCLUSIVE (no signal forced), LLM-context-insufficient ->
+INCONCLUSIVE, and a structural test proving `PROVES_RESOLVED` is
+unreachable from any current code path. 32/32 pass in
+`test_fix_verification_corpus.py`; 112 total across every T1/T2/T3 test
+file touched by this correction.
+
+### 7.7 Controlled false-terminal-verdict corpus result
+
+Across the full `test_fix_verification_corpus.py` adversarial suite (32
+cases spanning both correction rounds): **false FIXED = 0, false
+STILL_PRESENT = 0.** This is a controlled-corpus result, not a claim
+about real-world AI findings in general.

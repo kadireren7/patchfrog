@@ -11,13 +11,19 @@ model an async dispatch-then-poll split for a future milestone to adopt
 without a domain change; v1 keeps it simple -- an MCP tool call is not
 too different in shape from `patchfrog.cli`'s own synchronous commands.
 
-**Governing rule (security correction, post-review)**: *prefer
-INCONCLUSIVE over a false FIXED.* The first version of this algorithm
-treated a single passing Executable Verification run, or a static rule
-simply not firing near the original line numbers, as sufficient proof of
-a fix -- neither is. See
-:class:`~patchfrog.fix_verification.domain.FixEvidenceDirection` for the
-strength distinction this correction introduces, and
+**Governing rule (security correction, two rounds)**: *prefer
+INCONCLUSIVE over either a false FIXED or a false STILL_PRESENT.* Round
+one found a single passing Executable Verification run, or a static rule
+simply not firing near the original line numbers, was being treated as
+sufficient proof of a *fix*. Round two found the mirror-image bug: a
+single failing candidate-head test, or the flagged bytes being
+byte-identical, was being treated as sufficient proof the finding is
+still *present* -- neither is, for the same underlying reason (no
+persisted original-SHA evidence to bind the candidate-head signal
+specifically to *this* finding, and unchanged bytes do not rule out the
+defect being resolved by context entirely outside the flagged surface).
+See :class:`~patchfrog.fix_verification.domain.FixEvidenceDirection` for
+the strength distinction both rounds introduced, and
 ``validation/agent_handoff/latest-summary.md`` for the full audit.
 
 Algorithm (deterministic-first, Part V/W/X/Y/Z/AA):
@@ -26,32 +32,49 @@ Algorithm (deterministic-first, Part V/W/X/Y/Z/AA):
    ``original_commit_sha`` (reuses
    :func:`patchfrog.repository.ancestry.verify_ancestor_with_diff`
    unmodified) -- not provable -> ``STALE``.
-2. If the flagged file did not change at all between the two commits ->
-   ``STILL_PRESENT`` (the flagged code is byte-identical; it cannot have
-   newly become fixed). Otherwise, continue.
-3. Deterministically map the finding's exact symbol from the original
+2. Deterministically map the finding's exact symbol from the original
    commit to the candidate head
    (:mod:`patchfrog.fix_verification.surface_mapping`, content-hash based,
-   never line numbers alone). If the *mapped* symbol's body is itself
-   unchanged (something else in the file changed) -> ``STILL_PRESENT``.
-4. If statically corroborated *and* the surface is safely mapped:
+   never line numbers alone). "The flagged file is byte-identical" and
+   "the mapped symbol's body is unchanged" are both only weak
+   ``SUPPORTS_PRESENT`` evidence now -- contributed into the same
+   combination step as every other signal below, never an automatic
+   terminal verdict by themselves (the defect may have been resolved by
+   context entirely outside this exact surface: an upstream validator, a
+   changed caller, a contract change).
+3. If statically corroborated *and* the surface is safely mapped:
    re-run the original analyzer at the mapped surface
    (:mod:`patchfrog.fix_verification.static_recheck`). The rule still
-   firing there is strong contradicting evidence; it *not* firing is only
-   weak/supporting evidence -- never proof by itself.
-5. If Executable-Verification-eligible: dispatch to the S6 verifier
+   firing there is strong ``CONFIRMS_PRESENT`` evidence -- tied to the
+   *specific* original static finding id and rule at a content-hash-
+   proven exact location, tight enough to treat as strong; it *not*
+   firing is only weak ``SUPPORTS_RESOLVED`` evidence.
+4. If Executable-Verification-eligible: dispatch to the S6 verifier
    against the candidate SHA only (never the original SHA -- see
-   ``validation/agent_handoff/latest-summary.md`` section 1.3). A
-   confirmed failure is strong contradicting evidence; a pass is only
-   weak/supporting evidence -- never proof by itself.
-6. Combine: any strong contradicting signal -> ``STILL_PRESENT``,
-   unconditionally. Otherwise, only when the surface was safely mapped
-   and a fallback provider is configured, one bounded LLM call
-   (:mod:`patchfrog.fix_verification.critic`) judges the *actual, mapped*
-   current code -- itself instructed to prefer ``inconclusive`` whenever
-   the shown code does not establish resolution with real confidence.
-   No safe mapping, no provider, or no decisive evidence at all ->
+   ``validation/agent_handoff/latest-summary.md`` section 1.3). Unlike
+   static re-check, there is no comparably tight identity binding
+   between a candidate-head test failure and *this* specific finding
+   (the test target is reconstructed, not a persisted original binding,
+   and a test file can fail for reasons unrelated to this finding) -- so
+   both outcomes are only ever weak: a confirmed failure is
+   ``SUPPORTS_PRESENT``, a pass is ``SUPPORTS_RESOLVED``.
+5. Combine: any ``CONFIRMS_PRESENT`` signal wins outright ->
+   ``STILL_PRESENT``, unconditionally. Otherwise, only when the surface
+   was safely mapped and a fallback provider is configured, one bounded
+   LLM call (:mod:`patchfrog.fix_verification.critic`) judges the
+   *actual, mapped* current code -- itself instructed to prefer
+   ``inconclusive`` whenever the shown code does not establish
+   resolution *or* continued presence with real confidence, and warned
+   that the original finding may depend on context not shown to it. No
+   safe mapping, no provider, or no decisive evidence at all ->
    ``INCONCLUSIVE``.
+
+No code path in this module ever produces
+``FixEvidenceDirection.PROVES_RESOLVED`` -- it exists on the type only so
+a future, genuinely finding-specific deterministic proof has somewhere
+safe to land without a domain change (see
+``tests/integration/test_fix_verification_corpus.py::
+test_no_code_path_produces_proves_resolved_in_v1``).
 
 Any infrastructure failure (clone/network/git error) at any point ->
 ``ERROR``, never silently reported as one of the semantic outcomes.
@@ -327,16 +350,8 @@ class FixVerificationService:
             evidence: list[str] = []
             if not file_changed:
                 evidence.append(f"{handoff.file_path} is byte-identical between the original and candidate commits")
-                return await self._repo.mark_result(
-                    session,
-                    fix_attempt_id=fix_attempt_id,
-                    status=FixAttemptStatus.STILL_PRESENT,
-                    deterministic_evidence=tuple(evidence),
-                    executable_verification_outcome=None,
-                    remaining_issue_summary="the flagged code has not changed since the original finding",
-                    limitations=(),
-                )
-            evidence.append(f"{handoff.file_path} changed between the original and candidate commits")
+            else:
+                evidence.append(f"{handoff.file_path} changed between the original and candidate commits")
 
             provider = RepositorySnapshotProvider()
             with provider.acquire(
@@ -355,19 +370,24 @@ class FixVerificationService:
                     language=language,
                 )
 
-                if mapped_surface.status is SurfaceMappingStatus.UNCHANGED:
+                # Security correction (round 2, Blocker 2): "the flagged
+                # bytes are unchanged" is evidence, never an automatic
+                # verdict -- the original defect may have been resolved by
+                # context entirely outside this exact surface (an upstream
+                # validator, a changed caller, a contract change). This
+                # covers both a fully byte-identical file (file_changed is
+                # False, no symbol needed) and the finer-grained case where
+                # the file changed elsewhere but this exact symbol's body
+                # did not (mapped_surface is UNCHANGED) -- either way it is
+                # only ever SUPPORTS_PRESENT, combined with every other
+                # signal below rather than returned immediately.
+                unchanged_direction = FixEvidenceDirection.NO_SIGNAL
+                if not file_changed or mapped_surface.status is SurfaceMappingStatus.UNCHANGED:
                     evidence.append(
-                        f"the flagged symbol in {handoff.file_path} is unchanged (the file changed elsewhere)"
+                        f"the flagged code in {handoff.file_path} is unchanged -- supporting evidence only, "
+                        "since the defect may have been resolved by context outside this exact surface"
                     )
-                    return await self._repo.mark_result(
-                        session,
-                        fix_attempt_id=fix_attempt_id,
-                        status=FixAttemptStatus.STILL_PRESENT,
-                        deterministic_evidence=tuple(evidence),
-                        executable_verification_outcome=None,
-                        remaining_issue_summary="the flagged code has not changed since the original finding",
-                        limitations=(),
-                    )
+                    unchanged_direction = FixEvidenceDirection.SUPPORTS_PRESENT
 
                 static_direction = await self._static_signal(
                     session, handoff=handoff, checkout_path=snapshot.root_path,
@@ -385,6 +405,7 @@ class FixVerificationService:
                 status, remaining_issue, limitations = await self._classify(
                     static_direction=static_direction,
                     ev_direction=ev_direction,
+                    unchanged_direction=unchanged_direction,
                     handoff=handoff,
                     mapped_surface=mapped_surface,
                     checkout_path=snapshot.root_path,
@@ -561,14 +582,30 @@ class FixVerificationService:
         if result is None:
             return FixEvidenceDirection.NO_SIGNAL, None
         if result.outcome is VerificationOutcome.CONFIRMED_FAILURE:
-            evidence.append(f"executable verification of {target}: CONFIRMED_FAILURE")
-            return FixEvidenceDirection.CONFIRMS_PRESENT, result.outcome.value
+            # Security correction round 2, Blocker 1: a candidate-head test
+            # failure is supporting evidence only, never proof the
+            # *original* finding is still present. Original-SHA Executable
+            # Verification evidence is never durably persisted per finding
+            # (validation/agent_handoff/latest-summary.md section 1.3), the
+            # candidate-head test target is reconstructed from the
+            # original FILE_TESTS_FILE/companion relationship rather than
+            # a persisted original test-target binding, and a test file can
+            # contain multiple tests -- a failure here may be an unrelated
+            # regression, a setup/environment difference, or a different
+            # assertion than the one that originally exercised this
+            # finding. Unlike the static-rule signal below (tied to one
+            # specific rule id at one content-hash-mapped surface), there
+            # is no comparably tight identity binding here.
+            evidence.append(
+                f"executable verification of {target}: CONFIRMED_FAILURE -- supporting evidence only, not "
+                "proof this is the original finding's own failure"
+            )
+            return FixEvidenceDirection.SUPPORTS_PRESENT, result.outcome.value
         if result.outcome is VerificationOutcome.PASSED:
             # A single passing targeted test is supporting evidence only --
             # it does not, by itself, prove the original finding is
-            # resolved (Blocker 1 of the security correction: the test may
-            # not genuinely exercise the original condition, or may be
-            # insufficiently targeted).
+            # resolved (the test may not genuinely exercise the original
+            # condition, or may be insufficiently targeted).
             evidence.append(
                 f"executable verification of {target}: PASSED -- supporting evidence only, not proof of a fix"
             )
@@ -581,13 +618,14 @@ class FixVerificationService:
         *,
         static_direction: FixEvidenceDirection,
         ev_direction: FixEvidenceDirection,
+        unchanged_direction: FixEvidenceDirection,
         handoff: FindingHandoff,
         mapped_surface: MappedSurface,
         checkout_path: Path,
         evidence: list[str],
     ) -> tuple[FixAttemptStatus, str | None, list[str]]:
         limitations = [_NO_ORIGINAL_REEXECUTION_LIMITATION]
-        directions = {static_direction, ev_direction}
+        directions = {static_direction, ev_direction, unchanged_direction}
 
         if FixEvidenceDirection.CONFIRMS_PRESENT in directions:
             return (

@@ -53,26 +53,46 @@ class FixAttemptStatus(StrEnum):
 
 
 class FixEvidenceDirection(StrEnum):
-    """Security correction (post-review): the strength/direction of one
-    deterministic (or LLM) signal toward or against ``FIXED`` -- never a
-    bare ``bool``, so a weak signal can never be silently promoted into a
-    terminal ``FIXED`` state by accident. See
-    ``validation/agent_handoff/latest-summary.md`` for why "a passing
-    targeted test" and "a static rule no longer firing nearby" were
-    originally (incorrectly) both treated as sufficient proof of a fix.
+    """Security correction (post-review, two rounds): the strength/
+    direction of one deterministic (or LLM) signal toward or against
+    ``FIXED`` -- never a bare ``bool``, so a weak signal can never be
+    silently promoted into a terminal verdict by accident. See
+    ``validation/agent_handoff/latest-summary.md`` for the full history:
+    round one found "a passing targeted test" and "a static rule no
+    longer firing nearby" were both incorrectly treated as sufficient
+    proof of a *fix*; round two found the mirror-image bug -- "a failing
+    targeted test" and "the flagged bytes are unchanged" were both
+    incorrectly treated as sufficient proof the finding is still
+    *present*. The governing rule is symmetric: prefer ``INCONCLUSIVE``
+    over either a false ``FIXED`` or a false ``STILL_PRESENT``.
 
     Combination rule (``FixVerificationService._classify``): any
     ``CONFIRMS_PRESENT`` signal wins outright -> ``STILL_PRESENT``,
     conservative by design. Only a ``PROVES_RESOLVED`` signal (with
-    nothing contradicting) may produce ``FIXED`` directly. A
-    ``SUPPORTS_RESOLVED`` signal *alone* is never sufficient for
-    ``FIXED`` -- it only makes the bounded LLM fallback available (never
-    skips straight to ``FIXED``, and the fallback's own conservative
-    instructions are the actual decision, never this signal by itself).
+    nothing contradicting) may produce ``FIXED`` directly. Any
+    combination of only ``SUPPORTS_PRESENT``/``SUPPORTS_RESOLVED``
+    signals (in either direction, or both at once) is never sufficient
+    for a terminal verdict by itself -- it only makes the bounded LLM
+    fallback available (never skips straight to a verdict; the
+    fallback's own conservative instructions are the actual decision).
     """
 
-    #: Strong: proves the original condition still holds. Always wins.
+    #: Strong: proves the original condition still holds -- reserved for
+    #: evidence tied to the *exact* original finding, not merely
+    #: correlated with it (e.g. the specific static rule/finding id that
+    #: originally corroborated this finding, re-detected at the
+    #: content-hash-mapped exact surface -- never "some test in the
+    #: general area failed", which has no such tight identity binding).
+    #: Always wins outright.
     CONFIRMS_PRESENT = "confirms_present"
+    #: Weak: consistent with the finding still being present, but not
+    #: proof by itself -- e.g. the flagged bytes are unchanged (the
+    #: defect may have been resolved by context entirely outside this
+    #: exact surface: an upstream validator, a changed caller, a contract
+    #: change) or a candidate-head test failed without a durable,
+    #: finding-specific before/after binding proving it is *this*
+    #: finding's own failure and not an unrelated regression.
+    SUPPORTS_PRESENT = "supports_present"
     #: Weak: consistent with a fix, but not proof by itself (e.g. a
     #: passing targeted test, or a static rule absent at a safely mapped
     #: surface -- neither rules out a rule-taxonomy mismatch, an

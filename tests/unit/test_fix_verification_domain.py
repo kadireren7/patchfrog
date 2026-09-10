@@ -33,11 +33,12 @@ def test_terminal_statuses_cover_every_semantic_outcome() -> None:
     } == TERMINAL_STATUSES
 
 
-def test_fix_evidence_direction_has_exactly_four_members() -> None:
-    """Security correction: a weak (SUPPORTS_RESOLVED) signal must be a
-    distinct type from a strong one (PROVES_RESOLVED/CONFIRMS_PRESENT) --
-    never a bare bool a caller could accidentally treat as decisive."""
+def test_fix_evidence_direction_has_exactly_five_members() -> None:
+    """Security correction (two rounds): weak signals in either direction
+    (SUPPORTS_PRESENT/SUPPORTS_RESOLVED) must be distinct types from
+    strong ones (CONFIRMS_PRESENT/PROVES_RESOLVED) -- never a bare bool a
+    caller could accidentally treat as decisive."""
 
     assert {d.value for d in FixEvidenceDirection} == {
-        "confirms_present", "supports_resolved", "proves_resolved", "no_signal",
+        "confirms_present", "supports_present", "supports_resolved", "proves_resolved", "no_signal",
     }
