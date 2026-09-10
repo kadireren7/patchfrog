@@ -3,42 +3,54 @@ from __future__ import annotations
 from pathlib import Path
 
 from patchfrog.domain.code import Language
-from patchfrog.fix_verification.static_recheck import recheck_static_finding
+from patchfrog.fix_verification.static_recheck import StaticRecheckStatus, recheck_static_finding
+from patchfrog.fix_verification.surface_mapping import MappedSurface, SurfaceMappingStatus
 
-_BAD = "def f():\n    return undefined_name\n"
-_GOOD = "def f():\n    return 1\n"
+_MAPPED = MappedSurface(SurfaceMappingStatus.UNCHANGED, file_path="m.py", start_line=2, end_line=2)
 
 
-async def test_recheck_static_finding_still_fires_when_code_unchanged(tmp_path: Path) -> None:
-    (tmp_path / "m.py").write_text(_BAD)
+async def test_recheck_static_finding_still_fires_at_mapped_surface(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text("def f():\n    return undefined_name\n")
     result = await recheck_static_finding(
-        checkout_path=tmp_path, file_path="m.py", source_analyzer="ruff", rule_id="F821",
-        original_start_line=2, original_end_line=2, language=Language.PYTHON,
+        checkout_path=tmp_path, mapped_surface=_MAPPED, source_analyzer="ruff", rule_id="F821",
+        language=Language.PYTHON,
     )
-    assert result is True
+    assert result is StaticRecheckStatus.STILL_PRESENT
 
 
-async def test_recheck_static_finding_no_longer_fires_when_code_fixed(tmp_path: Path) -> None:
-    (tmp_path / "m.py").write_text(_GOOD)
+async def test_recheck_static_finding_absent_at_mapped_surface_when_fixed(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text("def f():\n    return 1\n")
     result = await recheck_static_finding(
-        checkout_path=tmp_path, file_path="m.py", source_analyzer="ruff", rule_id="F821",
-        original_start_line=2, original_end_line=2, language=Language.PYTHON,
+        checkout_path=tmp_path, mapped_surface=_MAPPED, source_analyzer="ruff", rule_id="F821",
+        language=Language.PYTHON,
     )
-    assert result is False
+    assert result is StaticRecheckStatus.ABSENT_AT_MAPPED_SURFACE
 
 
-async def test_recheck_static_finding_returns_none_for_unknown_analyzer(tmp_path: Path) -> None:
-    (tmp_path / "m.py").write_text(_BAD)
+async def test_recheck_static_finding_unavailable_for_unknown_analyzer(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text("def f():\n    return undefined_name\n")
     result = await recheck_static_finding(
-        checkout_path=tmp_path, file_path="m.py", source_analyzer="not_a_real_analyzer", rule_id="F821",
-        original_start_line=2, original_end_line=2, language=Language.PYTHON,
+        checkout_path=tmp_path, mapped_surface=_MAPPED, source_analyzer="not_a_real_analyzer", rule_id="F821",
+        language=Language.PYTHON,
     )
-    assert result is None
+    assert result is StaticRecheckStatus.UNAVAILABLE
 
 
-async def test_recheck_static_finding_returns_false_when_file_deleted(tmp_path: Path) -> None:
+async def test_recheck_static_finding_inconclusive_when_surface_unmapped(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text("def f():\n    return undefined_name\n")
+    unmapped = MappedSurface(SurfaceMappingStatus.UNMAPPABLE)
     result = await recheck_static_finding(
-        checkout_path=tmp_path, file_path="does-not-exist.py", source_analyzer="ruff", rule_id="F821",
-        original_start_line=2, original_end_line=2, language=Language.PYTHON,
+        checkout_path=tmp_path, mapped_surface=unmapped, source_analyzer="ruff", rule_id="F821",
+        language=Language.PYTHON,
     )
-    assert result is False
+    assert result is StaticRecheckStatus.INCONCLUSIVE
+
+
+async def test_recheck_static_finding_inconclusive_when_surface_ambiguous(tmp_path: Path) -> None:
+    (tmp_path / "m.py").write_text("def f():\n    return undefined_name\n")
+    ambiguous = MappedSurface(SurfaceMappingStatus.AMBIGUOUS)
+    result = await recheck_static_finding(
+        checkout_path=tmp_path, mapped_surface=ambiguous, source_analyzer="ruff", rule_id="F821",
+        language=Language.PYTHON,
+    )
+    assert result is StaticRecheckStatus.INCONCLUSIVE

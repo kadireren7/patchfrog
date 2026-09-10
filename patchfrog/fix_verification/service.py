@@ -1,4 +1,5 @@
-"""Fix Verification service and algorithm -- Milestone T (T3).
+"""Fix Verification service and algorithm -- Milestone T (T3), security
+corrected.
 
 ``start_fix_attempt`` validates (Part U, fail closed) and creates/returns
 an idempotent :class:`~patchfrog.fix_verification.domain.FixAttempt`
@@ -10,9 +11,16 @@ model an async dispatch-then-poll split for a future milestone to adopt
 without a domain change; v1 keeps it simple -- an MCP tool call is not
 too different in shape from `patchfrog.cli`'s own synchronous commands.
 
-Algorithm (deterministic-first, Part V/W/X/Y/Z/AA) -- see
-``validation/agent_handoff/latest-summary.md`` section 2.3 for the full
-design rationale:
+**Governing rule (security correction, post-review)**: *prefer
+INCONCLUSIVE over a false FIXED.* The first version of this algorithm
+treated a single passing Executable Verification run, or a static rule
+simply not firing near the original line numbers, as sufficient proof of
+a fix -- neither is. See
+:class:`~patchfrog.fix_verification.domain.FixEvidenceDirection` for the
+strength distinction this correction introduces, and
+``validation/agent_handoff/latest-summary.md`` for the full audit.
+
+Algorithm (deterministic-first, Part V/W/X/Y/Z/AA):
 
 1. Prove ``candidate_fix_commit_sha`` is a real descendant of
    ``original_commit_sha`` (reuses
@@ -21,16 +29,28 @@ design rationale:
 2. If the flagged file did not change at all between the two commits ->
    ``STILL_PRESENT`` (the flagged code is byte-identical; it cannot have
    newly become fixed). Otherwise, continue.
-3. If statically corroborated: re-run the original analyzer, scoped to
-   one file, against the new head (:mod:`patchfrog.fix_verification.
-   static_recheck`).
-4. If Executable-Verification-eligible: dispatch to the S6 verifier
+3. Deterministically map the finding's exact symbol from the original
+   commit to the candidate head
+   (:mod:`patchfrog.fix_verification.surface_mapping`, content-hash based,
+   never line numbers alone). If the *mapped* symbol's body is itself
+   unchanged (something else in the file changed) -> ``STILL_PRESENT``.
+4. If statically corroborated *and* the surface is safely mapped:
+   re-run the original analyzer at the mapped surface
+   (:mod:`patchfrog.fix_verification.static_recheck`). The rule still
+   firing there is strong contradicting evidence; it *not* firing is only
+   weak/supporting evidence -- never proof by itself.
+5. If Executable-Verification-eligible: dispatch to the S6 verifier
    against the candidate SHA only (never the original SHA -- see
-   ``validation/agent_handoff/latest-summary.md`` section 1.3).
-5. Combine: any contradicting deterministic signal -> ``STILL_PRESENT``.
-   Any confirming signal with none contradicting -> ``FIXED``. No
-   deterministic signal at all -> one bounded LLM call
-   (:mod:`patchfrog.fix_verification.critic`), itself failing closed to
+   ``validation/agent_handoff/latest-summary.md`` section 1.3). A
+   confirmed failure is strong contradicting evidence; a pass is only
+   weak/supporting evidence -- never proof by itself.
+6. Combine: any strong contradicting signal -> ``STILL_PRESENT``,
+   unconditionally. Otherwise, only when the surface was safely mapped
+   and a fallback provider is configured, one bounded LLM call
+   (:mod:`patchfrog.fix_verification.critic`) judges the *actual, mapped*
+   current code -- itself instructed to prefer ``inconclusive`` whenever
+   the shown code does not establish resolution with real confidence.
+   No safe mapping, no provider, or no decisive evidence at all ->
    ``INCONCLUSIVE``.
 
 Any infrastructure failure (clone/network/git error) at any point ->
@@ -51,7 +71,13 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from patchfrog.agent_handoff.domain import FindingHandoff
+from patchfrog.change_intelligence.domain import (
+    CompanionReasonCode,
+    CompanionStatus,
+    ExpectedCompanionChange,
+)
 from patchfrog.config.settings import Settings
+from patchfrog.domain.code import Language
 from patchfrog.executable_verification.dispatch import VerifierDispatcher
 from patchfrog.executable_verification.domain import VerificationKind, VerificationOutcome
 from patchfrog.executable_verification.eligibility import determine_verification_target
@@ -72,15 +98,22 @@ from patchfrog.fix_verification.domain import (
     TERMINAL_STATUSES,
     FixAttempt,
     FixAttemptStatus,
+    FixEvidenceDirection,
     FixVerificationResult,
 )
-from patchfrog.fix_verification.static_recheck import recheck_static_finding
+from patchfrog.fix_verification.static_recheck import StaticRecheckStatus, recheck_static_finding
+from patchfrog.fix_verification.surface_mapping import (
+    MappedSurface,
+    SurfaceMappingStatus,
+    map_finding_surface,
+)
 from patchfrog.github.auth import InstallationTokenProvider
+from patchfrog.intelligence.queries import RepositoryQueryService
 from patchfrog.parsing.detect import detect_language
 from patchfrog.persistence.models.analysis import FindingModel
 from patchfrog.persistence.models.fix_attempt import FixAttemptModel
 from patchfrog.persistence.models.repository import RepositoryModel
-from patchfrog.persistence.models.review import AIFindingModel, ReviewCandidateModel
+from patchfrog.persistence.models.review import AIFindingModel, ReviewCandidateModel, ReviewRunModel
 from patchfrog.persistence.repositories.fix_attempt import FixAttemptRepository
 from patchfrog.repository.ancestry import verify_ancestor_with_diff
 from patchfrog.repository.git import GitError
@@ -92,6 +125,11 @@ _SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _EV_TIMEOUT_SECONDS = 30.0
 _CODE_EXCERPT_CONTEXT_LINES = 5
 _MAX_CODE_EXCERPT_BYTES = 4000
+
+_NO_ORIGINAL_REEXECUTION_LIMITATION = (
+    "did not re-execute against the original commit for a true before/after comparison "
+    "(see validation/agent_handoff/latest-summary.md section 1.3)"
+)
 
 
 class FixAttemptValidationError(Exception):
@@ -179,6 +217,7 @@ class FixVerificationService:
             lambda repository: f"https://github.com/{repository.full_name}.git"
         )
         self._repo = FixAttemptRepository()
+        self._queries = RepositoryQueryService()
 
     async def start_fix_attempt(
         self, session: AsyncSession, *, handoff: FindingHandoff, candidate_fix_commit_sha: str
@@ -305,11 +344,36 @@ class FixVerificationService:
                 commit_sha=candidate_fix_commit_sha,
                 repository_full_name=repository.full_name,
                 token=token,
+                also_fetch=[handoff.original_commit_sha],
             ) as snapshot:
-                static_signal = await self._static_signal(
-                    session, handoff=handoff, checkout_path=snapshot.root_path, evidence=evidence
+                language = detect_language(relative_path=handoff.file_path)
+                mapped_surface = map_finding_surface(
+                    candidate_checkout=snapshot.root_path,
+                    original_commit_sha=handoff.original_commit_sha,
+                    file_path=handoff.file_path,
+                    qualified_name=handoff.qualified_name,
+                    language=language,
                 )
-                ev_signal, ev_outcome = await self._ev_signal(
+
+                if mapped_surface.status is SurfaceMappingStatus.UNCHANGED:
+                    evidence.append(
+                        f"the flagged symbol in {handoff.file_path} is unchanged (the file changed elsewhere)"
+                    )
+                    return await self._repo.mark_result(
+                        session,
+                        fix_attempt_id=fix_attempt_id,
+                        status=FixAttemptStatus.STILL_PRESENT,
+                        deterministic_evidence=tuple(evidence),
+                        executable_verification_outcome=None,
+                        remaining_issue_summary="the flagged code has not changed since the original finding",
+                        limitations=(),
+                    )
+
+                static_direction = await self._static_signal(
+                    session, handoff=handoff, checkout_path=snapshot.root_path,
+                    mapped_surface=mapped_surface, language=language, evidence=evidence,
+                )
+                ev_direction, ev_outcome = await self._ev_signal(
                     session,
                     handoff=handoff,
                     repository=repository,
@@ -319,9 +383,10 @@ class FixVerificationService:
                     evidence=evidence,
                 )
                 status, remaining_issue, limitations = await self._classify(
-                    static_signal=static_signal,
-                    ev_signal=ev_signal,
+                    static_direction=static_direction,
+                    ev_direction=ev_direction,
                     handoff=handoff,
+                    mapped_surface=mapped_surface,
                     checkout_path=snapshot.root_path,
                     evidence=evidence,
                 )
@@ -339,35 +404,93 @@ class FixVerificationService:
         )
 
     async def _static_signal(
-        self, session: AsyncSession, *, handoff: FindingHandoff, checkout_path: Path, evidence: list[str]
-    ) -> bool | None:
-        """``True`` confirms FIXED, ``False`` confirms STILL_PRESENT,
-        ``None`` means no signal either way."""
-
-        if not handoff.corroborated_by_static or not handoff.static_finding_ids:
-            return None
+        self,
+        session: AsyncSession,
+        *,
+        handoff: FindingHandoff,
+        checkout_path: Path,
+        mapped_surface: MappedSurface,
+        language: Language | None,
+        evidence: list[str],
+    ) -> FixEvidenceDirection:
+        if not handoff.corroborated_by_static or not handoff.static_finding_ids or language is None:
+            return FixEvidenceDirection.NO_SIGNAL
         finding_model = await session.get(FindingModel, handoff.static_finding_ids[0])
-        if finding_model is None:
-            return None
-        language = detect_language(relative_path=finding_model.file_path)
-        if language is None:
-            return None
-        still_fires = await recheck_static_finding(
+        if finding_model is None or finding_model.file_path != handoff.file_path:
+            return FixEvidenceDirection.NO_SIGNAL
+
+        result = await recheck_static_finding(
             checkout_path=checkout_path,
-            file_path=finding_model.file_path,
+            mapped_surface=mapped_surface,
             source_analyzer=finding_model.source_analyzer,
             rule_id=finding_model.rule_id,
-            original_start_line=finding_model.start_line,
-            original_end_line=finding_model.end_line,
             language=language,
         )
-        if still_fires is None:
-            return None
-        if still_fires:
-            evidence.append(f"static rule {finding_model.rule_id} ({finding_model.source_analyzer}) still fires")
-            return False
-        evidence.append(f"static rule {finding_model.rule_id} ({finding_model.source_analyzer}) no longer fires")
-        return True
+        if result is StaticRecheckStatus.STILL_PRESENT:
+            evidence.append(
+                f"static rule {finding_model.rule_id} ({finding_model.source_analyzer}) still fires at the "
+                "mapped surface"
+            )
+            return FixEvidenceDirection.CONFIRMS_PRESENT
+        if result is StaticRecheckStatus.ABSENT_AT_MAPPED_SURFACE:
+            evidence.append(
+                f"static rule {finding_model.rule_id} ({finding_model.source_analyzer}) does not fire at the "
+                "mapped surface -- supporting evidence only, not proof of a fix"
+            )
+            return FixEvidenceDirection.SUPPORTS_RESOLVED
+        return FixEvidenceDirection.NO_SIGNAL
+
+    async def _known_test_companions(
+        self, session: AsyncSession, *, review_run_id: uuid.UUID, file_path: str
+    ) -> tuple[ExpectedCompanionChange, ...]:
+        """Executable-Verification eligibility (Part Z: never assumed
+        from the original review) reuses
+        :func:`patchfrog.executable_verification.eligibility.
+        determine_verification_target` exactly as Milestone S/S6 do --
+        that function only ever consults ``expected_companions``
+        (Change Intelligence's ``TEST_NOT_UPDATED`` companion evidence),
+        never a naming guess. The candidate commit is never re-indexed
+        (out of scope for a bounded fix-verification pass -- see
+        ``validation/agent_handoff/latest-summary.md``), so this reuses
+        the *original* review's own already-indexed ``FILE_TESTS_FILE``
+        graph edge for ``file_path`` as the companion evidence instead of
+        recomputing it. If that edge no longer reflects reality at the
+        candidate head, the S6 verifier's own mandatory
+        ``--collect-only`` dry run still fails closed to ``UNSUPPORTED``
+        (never a guessed result) -- see
+        :mod:`patchfrog.executable_verification.pytest_adapter`."""
+
+        run = await session.get(ReviewRunModel, review_run_id)
+        if run is None:
+            return ()
+        indexed_file = await self._queries.get_file(
+            session, repository_index_id=run.repository_index_id, relative_path=file_path
+        )
+        if indexed_file is None:
+            return ()
+        edges = await self._queries.likely_tests_for_file(session, indexed_file_id=indexed_file.id)
+
+        companions: list[ExpectedCompanionChange] = []
+        seen: set[str] = set()
+        for edge in edges:
+            test_file = await self._queries.get_file_by_id(session, indexed_file_id=edge.source_file_id)
+            if test_file is None or test_file.relative_path in seen:
+                continue
+            seen.add(test_file.relative_path)
+            companions.append(
+                ExpectedCompanionChange(
+                    change_unit_id="fix-verification",
+                    source_qualified_name=file_path,
+                    source_file_path=file_path,
+                    expected_qualified_name=test_file.relative_path,
+                    expected_file_path=test_file.relative_path,
+                    reason_code=CompanionReasonCode.TEST_NOT_UPDATED,
+                    reason=f"{test_file.relative_path!r} is a likely test for {file_path!r} (original index)",
+                    evidence=edge.reason or "file_tests_file edge",
+                    status=CompanionStatus.MISSING,
+                )
+            )
+        return tuple(companions)
 
     async def _ev_signal(
         self,
@@ -379,23 +502,23 @@ class FixVerificationService:
         candidate_fix_commit_sha: str,
         token: str,
         evidence: list[str],
-    ) -> tuple[bool | None, str | None]:
-        """``True`` confirms FIXED, ``False`` confirms STILL_PRESENT,
-        ``None`` means no signal either way."""
-
+    ) -> tuple[FixEvidenceDirection, str | None]:
         if self._verifier_dispatcher is None:
-            return None, None
+            return FixEvidenceDirection.NO_SIGNAL, None
 
         finding_model = await session.get(AIFindingModel, handoff.finding_id)
         if finding_model is None:
-            return None, None
+            return FixEvidenceDirection.NO_SIGNAL, None
         candidate_model = await session.get(ReviewCandidateModel, finding_model.candidate_id)
         if candidate_model is None:
-            return None, None
+            return FixEvidenceDirection.NO_SIGNAL, None
         candidate = _reconstruct_candidate(candidate_model)
-        target = determine_verification_target(candidate=candidate, expected_companions=())
+        expected_companions = await self._known_test_companions(
+            session, review_run_id=finding_model.review_run_id, file_path=candidate.file_path
+        )
+        target = determine_verification_target(candidate=candidate, expected_companions=expected_companions)
         if target is None:
-            return None, None
+            return FixEvidenceDirection.NO_SIGNAL, None
 
         destination_root = Path(self._settings.verification_snapshot_root or tempfile.gettempdir())
         try:
@@ -407,7 +530,7 @@ class FixVerificationService:
                 destination_root=destination_root,
             )
         except ArtifactExportError:
-            return None, None
+            return FixEvidenceDirection.NO_SIGNAL, None
 
         try:
             digest = compute_artifact_digest(artifact_dir)
@@ -436,48 +559,69 @@ class FixVerificationService:
             shutil.rmtree(artifact_dir, ignore_errors=True)
 
         if result is None:
-            return None, None
-        if result.outcome is VerificationOutcome.PASSED:
-            evidence.append(f"executable verification of {target}: PASSED")
-            return True, result.outcome.value
+            return FixEvidenceDirection.NO_SIGNAL, None
         if result.outcome is VerificationOutcome.CONFIRMED_FAILURE:
             evidence.append(f"executable verification of {target}: CONFIRMED_FAILURE")
-            return False, result.outcome.value
+            return FixEvidenceDirection.CONFIRMS_PRESENT, result.outcome.value
+        if result.outcome is VerificationOutcome.PASSED:
+            # A single passing targeted test is supporting evidence only --
+            # it does not, by itself, prove the original finding is
+            # resolved (Blocker 1 of the security correction: the test may
+            # not genuinely exercise the original condition, or may be
+            # insufficiently targeted).
+            evidence.append(
+                f"executable verification of {target}: PASSED -- supporting evidence only, not proof of a fix"
+            )
+            return FixEvidenceDirection.SUPPORTS_RESOLVED, result.outcome.value
         evidence.append(f"executable verification of {target}: {result.outcome.value} (no signal)")
-        return None, result.outcome.value
+        return FixEvidenceDirection.NO_SIGNAL, result.outcome.value
 
     async def _classify(
         self,
         *,
-        static_signal: bool | None,
-        ev_signal: bool | None,
+        static_direction: FixEvidenceDirection,
+        ev_direction: FixEvidenceDirection,
         handoff: FindingHandoff,
+        mapped_surface: MappedSurface,
         checkout_path: Path,
         evidence: list[str],
     ) -> tuple[FixAttemptStatus, str | None, list[str]]:
-        limitations = [
-            "did not re-execute against the original commit for a true before/after comparison "
-            "(see validation/agent_handoff/latest-summary.md section 1.3)"
-        ]
-        signals = [s for s in (static_signal, ev_signal) if s is not None]
-        if False in signals:
+        limitations = [_NO_ORIGINAL_REEXECUTION_LIMITATION]
+        directions = {static_direction, ev_direction}
+
+        if FixEvidenceDirection.CONFIRMS_PRESENT in directions:
             return (
                 FixAttemptStatus.STILL_PRESENT,
                 "at least one deterministic check still detects the original condition",
                 limitations,
             )
-        if True in signals:
+        if FixEvidenceDirection.PROVES_RESOLVED in directions:
+            # Unreachable from static/EV signals in v1 -- see
+            # FixEvidenceDirection's own docstring for why. Kept so a
+            # future, genuinely finding-specific deterministic proof has
+            # somewhere safe to land without a domain change.
             return FixAttemptStatus.FIXED, None, limitations
 
         if self._fix_critic_provider is None:
             limitations.append("no fix-verification provider configured -- no deterministic signal was available")
             return FixAttemptStatus.INCONCLUSIVE, None, limitations
 
+        if not mapped_surface.is_safely_mapped:
+            limitations.append(
+                "the original finding's location could not be safely mapped to the candidate head -- "
+                "refusing to guess a location for the fallback model"
+            )
+            return FixAttemptStatus.INCONCLUSIVE, None, limitations
+
+        assert mapped_surface.file_path is not None
+        assert mapped_surface.start_line is not None
+        assert mapped_surface.end_line is not None
         excerpt = _read_excerpt(
-            checkout_path / handoff.file_path, start_line=handoff.start_line, end_line=handoff.end_line
+            checkout_path / mapped_surface.file_path,
+            start_line=mapped_surface.start_line, end_line=mapped_surface.end_line,
         )
         if excerpt is None:
-            limitations.append("the flagged file no longer exists at this location")
+            limitations.append("the mapped surface's file could not be read")
             return FixAttemptStatus.INCONCLUSIVE, None, limitations
 
         judged = await judge_fix(
@@ -485,7 +629,7 @@ class FixVerificationService:
             title=handoff.title,
             message=handoff.message,
             reasoning_summary=handoff.reasoning_summary,
-            file_path=handoff.file_path,
+            file_path=mapped_surface.file_path,
             new_code_excerpt=excerpt,
         )
         if judged is None:

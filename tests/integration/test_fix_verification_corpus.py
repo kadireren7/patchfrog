@@ -9,19 +9,30 @@ with ``respx`` (real JWT signing, real HTTP call shape, no real network).
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import time
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import pytest
+import redis
 import respx
+from celery import Celery
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patchfrog.agent_handoff.service import AgentHandoffService
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.config.settings import Settings
+from patchfrog.executable_verification.dispatch import VerifierDispatcher
+from patchfrog.executable_verification.sandbox import is_sandbox_available
 from patchfrog.fix_verification.domain import FixAttemptStatus
 from patchfrog.fix_verification.service import FixAttemptValidationError, FixVerificationService
+from patchfrog.indexing.service import RepositoryIndexingService
 from patchfrog.persistence.models.analysis import AnalysisRunModel, AnalysisRunStatus, FindingModel
 from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.persistence.models.review import (
@@ -31,6 +42,7 @@ from patchfrog.persistence.models.review import (
     ReviewRunModel,
 )
 from patchfrog.persistence.repositories import RepositoryRepository
+from patchfrog.persistence.repositories.repository_index import RepositoryIndexRepository
 from patchfrog.repository.git import run_git
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import ProposalStatus, ReviewCandidateReason, ReviewRunStatus
@@ -40,6 +52,26 @@ from tests.support.git_repo import commit_all
 _API_BASE = "https://api.github.com"
 _UNDEFINED_NAME_MODULE = "def f():\n    return undefined_name\n"
 _FIXED_MODULE = "def f():\n    return 1\n"
+_REDIS_URL = "redis://localhost:6379/0"
+_WORKER_READY_TIMEOUT_SECONDS = 20.0
+
+# A real, existing-targeted-test fixture: a source file with one function
+# and a real pytest test file exercising it -- reused across the EV-signal
+# tests below (Blocker 1's "PASS is supporting-only" / "CONFIRMED_FAILURE
+# is strong contradiction" corpus).
+_EV_SOURCE_BUGGY = "def add(a, b):\n    return a - b  # bug: should be a + b\n"
+_EV_SOURCE_FIXED = "def add(a, b):\n    return a + b\n"
+_EV_TEST = "from src import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"
+
+
+def _redis_available() -> bool:
+    try:
+        return bool(redis.Redis.from_url(_REDIS_URL, socket_connect_timeout=2).ping())
+    except (redis.RedisError, OSError):
+        return False
+
+
+_ev_infra_available = is_sandbox_available() and _redis_available()
 
 
 def _mock_token_route() -> None:
@@ -119,7 +151,7 @@ async def _stage_finding(
 
         candidate = ReviewCandidateModel(
             id=uuid.uuid4(), review_run_id=run.id, file_path=file_path, symbol_id=None,
-            symbol_name="f", qualified_name="m.f", start_line=start_line, end_line=end_line,
+            symbol_name="f", qualified_name="f", start_line=start_line, end_line=end_line,
             changed_lines=json.dumps([start_line]), reason=ReviewCandidateReason.CHANGED_SYMBOL,
         )
         session.add(candidate)
@@ -397,7 +429,13 @@ async def test_unrelated_file_change_leaves_flagged_file_unchanged_still_present
 
 
 @respx.mock
-async def test_static_recheck_confirms_fixed(session_factory: async_sessionmaker[AsyncSession], tmp_path: Path) -> None:
+async def test_static_recheck_absence_alone_is_never_sufficient_for_fixed(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Security correction, Blocker 2: a static rule no longer firing at
+    the safely mapped surface is supporting evidence only -- it must
+    never, by itself (no fallback provider configured), produce FIXED."""
+
     _mock_token_route()
     remote = _init_bare_remote(tmp_path)
     original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE})
@@ -412,13 +450,51 @@ async def test_static_recheck_confirms_fixed(session_factory: async_sessionmaker
     handoff = await _build_handoff(session_factory, finding_id=finding_id)
 
     async with session_factory() as session:
-        attempt = await _service(remote=remote).start_fix_attempt(
+        attempt = await _service(remote=remote, fix_critic_provider=None).start_fix_attempt(
+            session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
+        )
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+    assert attempt.result is not None
+    assert any("supporting evidence only" in e for e in attempt.result.deterministic_evidence)
+    assert any("no fix-verification provider configured" in lim for lim in attempt.result.limitations)
+
+
+@respx.mock
+async def test_static_recheck_absence_plus_llm_confirmation_is_fixed(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """The only way a statically-corroborated finding reaches FIXED in v1:
+    the (weak) static-absence signal makes the bounded LLM fallback
+    available, and the model -- shown the actual, safely mapped current
+    code -- confirms resolution."""
+
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE})
+    candidate_sha = _push_commit(remote, tmp_path, files={"m.py": _FIXED_MODULE})
+
+    static_finding = await _make_static_finding(session_factory, file_path="m.py", start_line=2, end_line=2)
+    repository = await _make_repository(session_factory, "acme/widgets")
+    finding_id = await _stage_finding(
+        session_factory, repository_id=repository.id, commit_sha=original_sha,
+        corroborated_by_static=True, static_finding=static_finding,
+    )
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    provider = FakeLLMProvider(
+        [ScriptedResponse(raw_json=json.dumps({"decision": "fixed", "reasoning_summary": "no longer undefined"}))]
+    )
+    async with session_factory() as session:
+        attempt = await _service(remote=remote, fix_critic_provider=provider).start_fix_attempt(
             session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
         )
 
     assert attempt.status == FixAttemptStatus.FIXED
-    assert attempt.result is not None
-    assert any("no longer fires" in e for e in attempt.result.deterministic_evidence)
+    assert len(provider.calls) == 1
+    # The model was shown the real, mapped current code -- not the
+    # original (now-stale) location.
+    assert "return 1" in provider.calls[0].user_prompt
 
 
 @respx.mock
@@ -480,12 +556,14 @@ async def test_critic_fallback_used_only_when_no_deterministic_signal(
 ) -> None:
     _mock_token_route()
     remote = _init_bare_remote(tmp_path)
-    original_sha = _push_commit(remote, tmp_path, files={"m.py": "a = 1\nb = 2\n"})
-    candidate_sha = _push_commit(remote, tmp_path, files={"m.py": "a = 1\nb = 3\n"})
+    original = "def f():\n    a = 1\n    b = 2\n    return a + b\n"
+    candidate = "def f():\n    a = 1\n    b = 3\n    return a + b\n"
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": original})
+    candidate_sha = _push_commit(remote, tmp_path, files={"m.py": candidate})
 
     repository = await _make_repository(session_factory, "acme/widgets")
     finding_id = await _stage_finding(
-        session_factory, repository_id=repository.id, commit_sha=original_sha, start_line=2, end_line=2,
+        session_factory, repository_id=repository.id, commit_sha=original_sha, start_line=1, end_line=4,
     )
     handoff = await _build_handoff(session_factory, finding_id=finding_id)
 
@@ -502,16 +580,21 @@ async def test_critic_fallback_used_only_when_no_deterministic_signal(
 
 
 @respx.mock
-async def test_no_provider_call_when_deterministic_static_signal_is_sufficient(
+async def test_no_provider_call_when_static_signal_strongly_contradicts_fixed(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
     """Part X: deterministic-first -- a configured critic provider must
-    never be called when static re-check already decided the outcome."""
+    never be called when a strong, contradicting deterministic signal
+    (the rule still firing at the mapped surface) already decided the
+    outcome."""
 
     _mock_token_route()
     remote = _init_bare_remote(tmp_path)
     original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE})
-    candidate_sha = _push_commit(remote, tmp_path, files={"m.py": _FIXED_MODULE})
+    # Changed, but the exact same bug is still there -- a cosmetic edit.
+    candidate_sha = _push_commit(
+        remote, tmp_path, files={"m.py": "def f():\n    return undefined_name  # still broken\n"}
+    )
 
     static_finding = await _make_static_finding(session_factory, file_path="m.py", start_line=2, end_line=2)
     repository = await _make_repository(session_factory, "acme/widgets")
@@ -527,7 +610,7 @@ async def test_no_provider_call_when_deterministic_static_signal_is_sufficient(
             session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
         )
 
-    assert attempt.status == FixAttemptStatus.FIXED
+    assert attempt.status == FixAttemptStatus.STILL_PRESENT
     assert provider.calls == []
 
 
@@ -555,3 +638,404 @@ async def test_result_always_documents_the_no_original_sha_reexecution_limitatio
 
     assert attempt.result is not None
     assert any("original commit" in lim for lim in attempt.result.limitations)
+
+
+# ---- Move/rename/delete surface-mapping regressions (no false FIXED) ----
+
+
+@respx.mock
+async def test_static_rule_moved_within_file_still_fires_not_fixed(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Blocker 2: the buggy symbol moved ~10 lines away (well outside any
+    fixed line-number window) but the exact same rule still fires there --
+    content-hash-based surface mapping must still find it and report
+    STILL_PRESENT, never FIXED merely because the original line numbers
+    no longer contain it."""
+
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE})
+    padding = "\n".join(f"x{i} = {i}" for i in range(10))
+    candidate_sha = _push_commit(remote, tmp_path, files={"m.py": f"{padding}\n\n\n{_UNDEFINED_NAME_MODULE}"})
+
+    static_finding = await _make_static_finding(session_factory, file_path="m.py", start_line=2, end_line=2)
+    repository = await _make_repository(session_factory, "acme/widgets")
+    finding_id = await _stage_finding(
+        session_factory, repository_id=repository.id, commit_sha=original_sha,
+        corroborated_by_static=True, static_finding=static_finding,
+    )
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    provider = FakeLLMProvider([])  # exhausted -- must never be called
+    async with session_factory() as session:
+        attempt = await _service(remote=remote, fix_critic_provider=provider).start_fix_attempt(
+            session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
+        )
+
+    assert attempt.status == FixAttemptStatus.STILL_PRESENT
+    assert provider.calls == []
+
+
+@respx.mock
+async def test_original_file_deleted_moved_elsewhere_is_inconclusive_not_fixed(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """The buggy function moved to a *different file* -- out of scope for
+    this milestone's same-file-only mapping (see
+    ``validation/agent_handoff/latest-summary.md``). Must never guess
+    FIXED just because the original file is gone."""
+
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE})
+    work = tmp_path / f"work-{uuid.uuid4()}"
+    run_git(["clone", "--quiet", str(remote), str(work)])
+    init_git_repo_config(work)
+    (work / "m.py").unlink()
+    (work / "other.py").write_text(_UNDEFINED_NAME_MODULE)
+    candidate_sha = commit_and_push(work, remote, "move to other.py")
+
+    repository = await _make_repository(session_factory, "acme/widgets")
+    finding_id = await _stage_finding(session_factory, repository_id=repository.id, commit_sha=original_sha)
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    provider = FakeLLMProvider([])  # exhausted -- must never be called
+    async with session_factory() as session:
+        attempt = await _service(remote=remote, fix_critic_provider=provider).start_fix_attempt(
+            session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
+        )
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+    assert provider.calls == []
+
+
+@respx.mock
+async def test_original_file_deleted_with_no_replacement_is_inconclusive(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE, "keep.py": "x = 1\n"})
+    work = tmp_path / f"work-{uuid.uuid4()}"
+    run_git(["clone", "--quiet", str(remote), str(work)])
+    init_git_repo_config(work)
+    (work / "m.py").unlink()
+    candidate_sha = commit_and_push(work, remote, "delete m.py")
+
+    repository = await _make_repository(session_factory, "acme/widgets")
+    finding_id = await _stage_finding(session_factory, repository_id=repository.id, commit_sha=original_sha)
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    async with session_factory() as session:
+        attempt = await _service(remote=remote).start_fix_attempt(
+            session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
+        )
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+
+
+@respx.mock
+async def test_file_renamed_is_inconclusive_not_falsely_fixed(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """A pure git rename (same content, new path) -- surface mapping is
+    scoped to the original file path only (never a false FIXED)."""
+
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE})
+    work = tmp_path / f"work-{uuid.uuid4()}"
+    run_git(["clone", "--quiet", str(remote), str(work)])
+    init_git_repo_config(work)
+    run_git(["-C", str(work), "mv", "m.py", "renamed.py"])
+    candidate_sha = commit_and_push(work, remote, "rename m.py to renamed.py")
+
+    repository = await _make_repository(session_factory, "acme/widgets")
+    finding_id = await _stage_finding(session_factory, repository_id=repository.id, commit_sha=original_sha)
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    provider = FakeLLMProvider([])  # exhausted -- must never be called
+    async with session_factory() as session:
+        attempt = await _service(remote=remote, fix_critic_provider=provider).start_fix_attempt(
+            session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
+        )
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+    assert provider.calls == []
+
+
+@respx.mock
+async def test_symbol_moved_within_same_file_still_present_not_falsely_fixed(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """A method moved from one class to another (a real qualified-name
+    change, mapped via identical body content-hash) but the bug is still
+    there -- must resolve STILL_PRESENT, never FIXED."""
+
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    original = "class A:\n    def method(self):\n        return undefined_name\n"
+    candidate = (
+        "class B:\n    def method(self):\n        return undefined_name\n\n\n"
+        "class A:\n    def other(self):\n        return 1\n"
+    )
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": original})
+    candidate_sha = _push_commit(remote, tmp_path, files={"m.py": candidate})
+
+    # A real static rule at the ORIGINAL location -- the deterministic
+    # signal this test actually needs (without it, nothing but the LLM
+    # fallback could ever know the bug moved rather than vanished, which
+    # is a separate, weaker case already covered elsewhere).
+    static_finding = await _make_static_finding(session_factory, file_path="m.py", start_line=2, end_line=3)
+    repository = await _make_repository(session_factory, "acme/widgets")
+    finding_id = await _stage_finding(
+        session_factory, repository_id=repository.id, commit_sha=original_sha, start_line=2, end_line=3,
+        corroborated_by_static=True, static_finding=static_finding,
+    )
+    # Override the candidate's qualified_name to match the class-based fixture.
+    async with session_factory() as session:
+        finding = await session.get(AIFindingModel, finding_id)
+        assert finding is not None
+        candidate_model = await session.get(ReviewCandidateModel, finding.candidate_id)
+        assert candidate_model is not None
+        candidate_model.qualified_name = "A.method"
+        candidate_model.symbol_name = "method"
+        await session.commit()
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    provider = FakeLLMProvider([])  # exhausted -- must never be called
+    async with session_factory() as session:
+        attempt = await _service(remote=remote, fix_critic_provider=provider).start_fix_attempt(
+            session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
+        )
+
+    assert attempt.status == FixAttemptStatus.STILL_PRESENT
+    assert provider.calls == []
+
+
+@respx.mock
+async def test_unmapped_surface_never_asks_the_llm(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Blocker 2 / LLM fallback gate: when the original symbol cannot be
+    safely mapped to the candidate head, the fallback model must never be
+    invoked at all -- not invoked-and-ignored, never invoked."""
+
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE})
+    candidate_sha = _push_commit(remote, tmp_path, files={"m.py": "def totally_different():\n    return 42\n"})
+
+    repository = await _make_repository(session_factory, "acme/widgets")
+    finding_id = await _stage_finding(session_factory, repository_id=repository.id, commit_sha=original_sha)
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    provider = FakeLLMProvider([])  # exhausted -- raises if ever called
+    async with session_factory() as session:
+        attempt = await _service(remote=remote, fix_critic_provider=provider).start_fix_attempt(
+            session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
+        )
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+    assert provider.calls == []
+    assert attempt.result is not None
+    assert any("could not be safely mapped" in lim for lim in attempt.result.limitations)
+
+
+async def test_analyzer_unavailable_is_inconclusive_not_fixed(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    with respx.mock:
+        _mock_token_route()
+        remote = _init_bare_remote(tmp_path)
+        original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE})
+        candidate_sha = _push_commit(remote, tmp_path, files={"m.py": _FIXED_MODULE})
+
+        static_finding = await _make_static_finding(
+            session_factory, file_path="m.py", start_line=2, end_line=2,
+        )
+        async with session_factory() as session:
+            model = await session.get(FindingModel, static_finding.id)
+            assert model is not None
+            model.source_analyzer = "not_a_real_analyzer"
+            await session.commit()
+
+        repository = await _make_repository(session_factory, "acme/widgets")
+        finding_id = await _stage_finding(
+            session_factory, repository_id=repository.id, commit_sha=original_sha,
+            corroborated_by_static=True, static_finding=static_finding,
+        )
+        handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+        async with session_factory() as session:
+            attempt = await _service(remote=remote, fix_critic_provider=None).start_fix_attempt(
+                session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
+            )
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+
+
+# ---- Executable Verification signal strength (Blocker 1) -- real S6 verifier ----
+
+
+@pytest.fixture(scope="module")
+def staging_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return tmp_path_factory.mktemp("fix-verification-staging-root")
+
+
+@pytest.fixture(scope="module")
+def verifier_worker(staging_root: Path) -> Iterator[None]:
+    """A real, separate `celery -A apps.verifier.celery_app worker`
+    subprocess -- see tests/integration/test_production_execution_corpus.py's
+    own identical fixture. Skipped entirely (module-level) when the
+    sandbox/Redis this needs isn't available on this host."""
+
+    proc = subprocess.Popen(
+        [
+            sys.executable, "-m", "celery", "-A", "apps.verifier.celery_app", "worker",
+            "-Q", "patchfrog-verification", "--loglevel=INFO", "--concurrency=1",
+        ],
+        env={"REDIS_URL": _REDIS_URL, "VERIFIER_STAGING_ROOT": str(staging_root), "PATH": os.environ.get("PATH", "")},
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    try:
+        deadline = time.monotonic() + _WORKER_READY_TIMEOUT_SECONDS
+        ready = False
+        assert proc.stdout is not None
+        while time.monotonic() < deadline:
+            line = proc.stdout.readline()
+            if not line:
+                if proc.poll() is not None:
+                    break
+                continue
+            if "ready." in line:
+                ready = True
+                break
+        if not ready:
+            proc.terminate()
+            raise RuntimeError("verifier worker subprocess did not become ready in time")
+        yield
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def _ev_producer_app() -> Celery:
+    return Celery("patchfrog-test-producer", broker=_REDIS_URL, backend=_REDIS_URL)
+
+
+async def _stage_ev_finding(
+    session_factory: async_sessionmaker[AsyncSession], *, tmp_path: Path, remote: Path, source: str,
+) -> tuple[uuid.UUID, uuid.UUID, str]:
+    """Real repository indexing (so a real FILE_TESTS_FILE edge exists,
+    reused by FixVerificationService._known_test_companions -- never a
+    hand-built companion). Returns (repository_id, finding_id, original_sha)."""
+
+    work = tmp_path / f"ev-work-{uuid.uuid4()}"
+    run_git(["clone", "--quiet", str(remote), str(work)])
+    init_git_repo_config(work)
+    (work / "src.py").write_text(source)
+    (work / "test_src.py").write_text(_EV_TEST)
+    original_sha = commit_and_push(work, remote, "add src + test")
+
+    repository = await _make_repository(session_factory, "acme/widgets")
+    await RepositoryIndexingService(session_factory=session_factory).index_local_repository(
+        repository_id=repository.id, root_path=work, repository_full_name=repository.full_name,
+    )
+
+    async with session_factory() as session:
+        index = await RepositoryIndexRepository().get_active(session, repository_id=repository.id)
+        assert index is not None
+
+    finding_id = await _stage_finding(
+        session_factory, repository_id=repository.id, commit_sha=original_sha,
+        file_path="src.py", start_line=1, end_line=2,
+    )
+
+    async with session_factory() as session:
+        finding = await session.get(AIFindingModel, finding_id)
+        assert finding is not None
+        run = await session.get(ReviewRunModel, finding.review_run_id)
+        assert run is not None
+        run.repository_index_id = index.id
+        candidate = await session.get(ReviewCandidateModel, finding.candidate_id)
+        assert candidate is not None
+        candidate.qualified_name = "add"
+        candidate.symbol_name = "add"
+        await session.commit()
+
+    return repository.id, finding_id, original_sha
+
+
+@pytest.mark.skipif(not _ev_infra_available, reason="bwrap sandbox and/or Redis not available on this host")
+@respx.mock
+async def test_executable_verification_pass_alone_is_inconclusive_not_fixed(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, staging_root: Path,
+    verifier_worker: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Blocker 1: a single passing targeted test is supporting evidence
+    only -- with no other strong signal, and no fallback provider, this
+    must be INCONCLUSIVE, never FIXED."""
+
+    monkeypatch.setenv("VERIFICATION_SNAPSHOT_ROOT", str(staging_root))
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    _repository_id, finding_id, _original_sha = await _stage_ev_finding(
+        session_factory, tmp_path=tmp_path, remote=remote, source=_EV_SOURCE_BUGGY,
+    )
+    candidate_sha = _push_commit(remote, tmp_path, files={"src.py": _EV_SOURCE_FIXED})
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    dispatcher = VerifierDispatcher(celery_app=_ev_producer_app(), wait_timeout_seconds=20.0)
+    async with session_factory() as session:
+        attempt = await _service(
+            remote=remote, verifier_dispatcher=dispatcher, fix_critic_provider=None,
+        ).start_fix_attempt(session, handoff=handoff, candidate_fix_commit_sha=candidate_sha)
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+    assert attempt.result is not None
+    assert attempt.result.executable_verification_outcome == "passed"
+    assert any("supporting evidence only" in e for e in attempt.result.deterministic_evidence)
+
+
+@pytest.mark.skipif(not _ev_infra_available, reason="bwrap sandbox and/or Redis not available on this host")
+@respx.mock
+async def test_executable_verification_confirmed_failure_is_still_present(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, staging_root: Path,
+    verifier_worker: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Blocker 1: a confirmed failure against the candidate head is a
+    strong, unconditional contradiction -- STILL_PRESENT, never FIXED,
+    and never even reaching the (here, would-raise) LLM fallback."""
+
+    monkeypatch.setenv("VERIFICATION_SNAPSHOT_ROOT", str(staging_root))
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    _repository_id, finding_id, _original_sha = await _stage_ev_finding(
+        session_factory, tmp_path=tmp_path, remote=remote, source=_EV_SOURCE_BUGGY,
+    )
+    # A cosmetic edit *inside* the buggy function itself -- the exact bug
+    # remains, but the function's own body is no longer byte-identical
+    # (a trailing comment *outside* the function would leave the mapped
+    # symbol itself UNCHANGED and short-circuit before EV ever ran).
+    candidate_sha = _push_commit(
+        remote, tmp_path,
+        files={"src.py": "def add(a, b):\n    # unrelated cosmetic comment\n    return a - b  # still buggy\n"},
+    )
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    dispatcher = VerifierDispatcher(celery_app=_ev_producer_app(), wait_timeout_seconds=20.0)
+    provider = FakeLLMProvider([])  # exhausted -- must never be called
+    async with session_factory() as session:
+        attempt = await _service(
+            remote=remote, verifier_dispatcher=dispatcher, fix_critic_provider=provider,
+        ).start_fix_attempt(session, handoff=handoff, candidate_fix_commit_sha=candidate_sha)
+
+    assert attempt.status == FixAttemptStatus.STILL_PRESENT
+    assert attempt.result is not None
+    assert attempt.result.executable_verification_outcome == "confirmed_failure"
+    assert provider.calls == []

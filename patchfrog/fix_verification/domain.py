@@ -52,6 +52,43 @@ class FixAttemptStatus(StrEnum):
     ERROR = "error"
 
 
+class FixEvidenceDirection(StrEnum):
+    """Security correction (post-review): the strength/direction of one
+    deterministic (or LLM) signal toward or against ``FIXED`` -- never a
+    bare ``bool``, so a weak signal can never be silently promoted into a
+    terminal ``FIXED`` state by accident. See
+    ``validation/agent_handoff/latest-summary.md`` for why "a passing
+    targeted test" and "a static rule no longer firing nearby" were
+    originally (incorrectly) both treated as sufficient proof of a fix.
+
+    Combination rule (``FixVerificationService._classify``): any
+    ``CONFIRMS_PRESENT`` signal wins outright -> ``STILL_PRESENT``,
+    conservative by design. Only a ``PROVES_RESOLVED`` signal (with
+    nothing contradicting) may produce ``FIXED`` directly. A
+    ``SUPPORTS_RESOLVED`` signal *alone* is never sufficient for
+    ``FIXED`` -- it only makes the bounded LLM fallback available (never
+    skips straight to ``FIXED``, and the fallback's own conservative
+    instructions are the actual decision, never this signal by itself).
+    """
+
+    #: Strong: proves the original condition still holds. Always wins.
+    CONFIRMS_PRESENT = "confirms_present"
+    #: Weak: consistent with a fix, but not proof by itself (e.g. a
+    #: passing targeted test, or a static rule absent at a safely mapped
+    #: surface -- neither rules out a rule-taxonomy mismatch, an
+    #: insufficiently targeted test, or the bug simply moving).
+    SUPPORTS_RESOLVED = "supports_resolved"
+    #: Strong: deterministic proof the original condition no longer
+    #: holds. Reserved for a genuinely finding-specific invariant -- in
+    #: v1, no static/Executable-Verification signal is strong enough to
+    #: reach this (kept, rather than omitted, so the type itself makes
+    #: "weak evidence promoted to certain" impossible to do by accident;
+    #: see Part V's "what stronger evidence may include" list).
+    PROVES_RESOLVED = "proves_resolved"
+    #: No signal either way.
+    NO_SIGNAL = "no_signal"
+
+
 #: Non-terminal -- a fix attempt in either of these states is still being
 #: worked on and should not be counted as "done" for idempotency/read
 #: purposes.

@@ -5,6 +5,7 @@ from patchfrog.fix_verification.domain import (
     FIX_VERIFICATION_VERSION,
     TERMINAL_STATUSES,
     FixAttemptStatus,
+    FixEvidenceDirection,
 )
 
 
@@ -30,3 +31,13 @@ def test_terminal_statuses_cover_every_semantic_outcome() -> None:
         FixAttemptStatus.STALE,
         FixAttemptStatus.ERROR,
     } == TERMINAL_STATUSES
+
+
+def test_fix_evidence_direction_has_exactly_four_members() -> None:
+    """Security correction: a weak (SUPPORTS_RESOLVED) signal must be a
+    distinct type from a strong one (PROVES_RESOLVED/CONFIRMS_PRESENT) --
+    never a bare bool a caller could accidentally treat as decisive."""
+
+    assert {d.value for d in FixEvidenceDirection} == {
+        "confirms_present", "supports_resolved", "proves_resolved", "no_signal",
+    }
