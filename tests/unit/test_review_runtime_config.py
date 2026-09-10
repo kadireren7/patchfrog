@@ -119,7 +119,12 @@ def test_explicit_critic_model_equal_to_default_reviewer_model_is_still_respecte
 
 def test_unsupported_provider_raises_clear_value_error() -> None:
     with pytest.raises(ValueError, match="unsupported PATCHFROG_REVIEW_PROVIDER"):
-        resolve_review_runtime_config(_settings(PATCHFROG_REVIEW_PROVIDER="openai"))
+        resolve_review_runtime_config(_settings(PATCHFROG_REVIEW_PROVIDER="not-a-real-provider"))
+
+
+def test_openai_is_a_supported_provider() -> None:
+    config = resolve_review_runtime_config(_settings(PATCHFROG_REVIEW_PROVIDER="openai"))
+    assert config.provider == "openai"
 
 
 def test_non_positive_timeout_rejected_by_settings() -> None:

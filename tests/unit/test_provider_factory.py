@@ -16,9 +16,11 @@ from patchfrog.review.provider_factory import (
     MissingProviderCredentialsError,
     build_critic_provider,
     build_reviewer_provider,
+    has_credentials,
 )
 from patchfrog.review.providers.anthropic_provider import AnthropicLLMProvider
 from patchfrog.review.providers.gemini_provider import GeminiLLMProvider
+from patchfrog.review.providers.openai_provider import OpenAILLMProvider
 from patchfrog.review.runtime_config import ReviewRuntimeConfig
 
 
@@ -112,9 +114,55 @@ def test_missing_gemini_credential_never_falls_back_to_anthropic() -> None:
 def test_unknown_provider_raises_clear_value_error() -> None:
     with pytest.raises(ValueError, match="unsupported review provider"):
         build_reviewer_provider(
-            _runtime_config(provider="openai", model="gpt-x"),
+            _runtime_config(provider="not-a-real-provider", model="gpt-x"),
             settings=_settings(),
         )
+
+
+def test_openai_provider_routes_to_openai_client() -> None:
+    provider = build_reviewer_provider(
+        _runtime_config(provider="openai", model="gpt-6-astra"),
+        settings=_settings(OPENAI_API_KEY="fake-not-real"),
+    )
+    assert isinstance(provider, OpenAILLMProvider)
+    assert provider.identity.provider == "openai"
+
+
+def test_missing_openai_credential_raises_clear_error() -> None:
+    with pytest.raises(MissingProviderCredentialsError, match="OPENAI_API_KEY"):
+        build_reviewer_provider(
+            _runtime_config(provider="openai", model="gpt-6-astra"),
+            settings=_settings(),
+        )
+
+
+def test_missing_openai_credential_never_falls_back_to_anthropic() -> None:
+    with pytest.raises(MissingProviderCredentialsError, match="OPENAI_API_KEY"):
+        build_reviewer_provider(
+            _runtime_config(provider="openai", model="gpt-6-astra"),
+            settings=_settings(ANTHROPIC_API_KEY="fake-not-real"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("provider", "key_field", "expected"),
+    [
+        ("anthropic", "ANTHROPIC_API_KEY", True),
+        ("gemini", "GEMINI_API_KEY", True),
+        ("openai", "OPENAI_API_KEY", True),
+    ],
+)
+def test_has_credentials_true_when_key_present(provider: str, key_field: str, expected: bool) -> None:
+    assert has_credentials(provider, settings=_settings(**{key_field: "fake-not-real"})) is expected
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "gemini", "openai"])
+def test_has_credentials_false_when_key_absent(provider: str) -> None:
+    assert has_credentials(provider, settings=_settings()) is False
+
+
+def test_has_credentials_false_for_unknown_provider() -> None:
+    assert has_credentials("not-a-real-provider", settings=_settings(ANTHROPIC_API_KEY="x")) is False
 
 
 def test_minimal_gemini_config_builds_reviewer_and_critic_without_claude_opus_5() -> None:

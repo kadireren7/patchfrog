@@ -19,6 +19,7 @@ from patchfrog.config.settings import Settings
 from patchfrog.review.provider import LLMProvider
 from patchfrog.review.providers.anthropic_provider import AnthropicLLMProvider
 from patchfrog.review.providers.gemini_provider import GeminiLLMProvider
+from patchfrog.review.providers.openai_provider import OpenAILLMProvider
 from patchfrog.review.runtime_config import SUPPORTED_PROVIDERS, ReviewRuntimeConfig
 
 
@@ -71,6 +72,32 @@ def _build(provider: str, model: str, *, settings: Settings, timeout_seconds: fl
         return GeminiLLMProvider(
             api_key=settings.gemini_api_key, model=model, timeout_seconds=timeout_seconds
         )
+    if provider == "openai":
+        if not settings.openai_api_key:
+            raise MissingProviderCredentialsError(
+                "OPENAI_API_KEY is not set. Set it in the environment or a secret store "
+                "(never in .patchfrog.yml) before running a real AI review. "
+                "Use --dry-run to build candidates/context without calling the provider."
+            )
+        return OpenAILLMProvider(
+            api_key=settings.openai_api_key, model=model, timeout_seconds=timeout_seconds
+        )
     raise ValueError(
         f"unsupported review provider: {provider!r} (supported: {', '.join(SUPPORTED_PROVIDERS)})"
     )
+
+
+def has_credentials(provider: str, *, settings: Settings) -> bool:
+    """Whether ``settings`` has a non-empty API key for ``provider`` --
+    used by :mod:`patchfrog.routing` to determine which configured
+    providers are actually usable without constructing a real client (and
+    therefore without needing a model name yet). Never logs or returns
+    the credential itself, only presence."""
+
+    if provider == "anthropic":
+        return bool(settings.anthropic_api_key)
+    if provider == "gemini":
+        return bool(settings.gemini_api_key)
+    if provider == "openai":
+        return bool(settings.openai_api_key)
+    return False

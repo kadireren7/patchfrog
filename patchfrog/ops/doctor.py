@@ -44,6 +44,7 @@ from patchfrog.executable_verification.sandbox import is_sandbox_available
 from patchfrog.github.auth import build_app_jwt
 from patchfrog.ops.health import check_database, check_redis
 from patchfrog.persistence.database import create_engine
+from patchfrog.review.provider_factory import has_credentials
 from patchfrog.review.runtime_config import SUPPORTED_PROVIDERS, resolve_review_runtime_config
 
 _VERIFIER_INSPECT_TIMEOUT_SECONDS = 3.0
@@ -64,8 +65,17 @@ _PLACEHOLDER_WEBHOOK_SECRETS = frozenset({"change-me", "changeme", "your-webhook
 #: unset (or copy-pasted from an Anthropic example), silently defaulting
 #: to `claude-opus-5` and 404ing against Gemini's API on the first real
 #: review.
-_MODEL_FAMILY_PREFIX: dict[str, str] = {"anthropic": "claude-", "gemini": "gemini-"}
+_MODEL_FAMILY_PREFIX: dict[str, str] = {"anthropic": "claude-", "gemini": "gemini-", "openai": "gpt-"}
 _MODEL_RESOURCE_PREFIX = "models/"
+
+#: Milestone U: the env var name to report for each supported provider's
+#: credential -- kept as an explicit table (not a string-format guess)
+#: since it must exactly match each Settings field's own alias.
+_CREDENTIAL_ENV_VAR: dict[str, str] = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
 
 
 class DoctorStatus(StrEnum):
@@ -170,9 +180,8 @@ def _provider_checks(settings: Settings) -> list[DoctorCheck]:
         )
     )
 
-    credential = settings.anthropic_api_key if runtime_config.provider == "anthropic" else settings.gemini_api_key
-    credential_env_var = "ANTHROPIC_API_KEY" if runtime_config.provider == "anthropic" else "GEMINI_API_KEY"
-    if not credential:
+    credential_env_var = _CREDENTIAL_ENV_VAR.get(runtime_config.provider, "?")
+    if not has_credentials(runtime_config.provider, settings=settings):
         checks.append(
             DoctorCheck(
                 name="review_provider_credential",
@@ -188,7 +197,7 @@ def _provider_checks(settings: Settings) -> list[DoctorCheck]:
             DoctorCheck(
                 name="review_provider_credential",
                 status=DoctorStatus.PASS,
-                detail=f"{credential_env_var} present (length={len(credential)})",
+                detail=f"{credential_env_var} present",
             )
         )
 

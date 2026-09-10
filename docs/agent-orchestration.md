@@ -39,14 +39,17 @@ free-form planner agent. Those can come later if evidence justifies
 them -- this milestone is scoped to two roles precisely so evaluation
 can measure "Agent Orchestration alone" cleanly.
 
-Both roles are **provider-neutral**: the same operator-selected provider
-and model (see `docs/deployment.md`'s "Provider/model selection"
-section -- this remains entirely unchanged, unavailable to repository
-configuration) serve both roles, with different role-scoped prompts.
-`AgentOrchestrator` accepts a `Mapping[AgentRole, LLMProvider]`, so a
-future milestone could route roles to different models without any
-repository-controlled field ever needing to exist for it -- v1 always
-maps both roles to the identical provider instance.
+Both roles are **provider-neutral**: `AgentOrchestrator` accepts a
+`Mapping[AgentRole, LLMProvider]` -- both roles mapped to the identical
+provider instance by default, but which instance(s) is entirely
+operator/deployment-controlled (see `docs/deployment.md`'s "Provider/
+model selection" section), unavailable to repository configuration
+either way. Milestone U's Model Router (`docs/model-routing.md`)
+populates this exact mapping from operator policy -- including,
+optionally, a different provider family for the critic than the
+reviewer role(s) -- without any change to this module's own shape;
+Correctness/Security still always receive the same instance as each
+other in v1 (the router routes once per review run, not per role).
 
 ## Intelligence layer ownership
 

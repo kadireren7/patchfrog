@@ -23,6 +23,7 @@ from patchfrog.persistence.models.review import (
     ReviewRunModel,
 )
 from patchfrog.persistence.repositories import RepositoryRepository
+from patchfrog.persistence.repositories.pull_request import PullRequestRepository
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import ProposalStatus, ReviewCandidateReason, ReviewRunStatus
 
@@ -263,6 +264,115 @@ async def test_start_fix_attempt_handoff_id_mismatch_rejected(session_factory: a
         finding_id=str(finding_ids[0]), candidate_fix_commit_sha="a" * 40, handoff_id="wrong-hash",
     )
     assert result["error"] == "handoff_id_mismatch"
+
+
+async def _stage_pull_request_with_run(
+    session_factory: async_sessionmaker[AsyncSession], *, repository_id: uuid.UUID, head_sha: str, count: int = 0,
+) -> uuid.UUID:
+    async with session_factory() as session:
+        pull_request = await PullRequestRepository().upsert(
+            session, repository_id=repository_id, github_pr_number=1, title="t", author="a",
+            base_sha="a" * 40, head_sha=head_sha, state="open",
+        )
+        await session.commit()
+        pull_request_id = pull_request.id
+
+    async with session_factory() as session:
+        run = ReviewRunModel(
+            id=uuid.uuid4(), repository_id=repository_id, repository_index_id=uuid.uuid4(),
+            pull_request_id=pull_request_id, commit_sha=head_sha, config_fingerprint="c" * 64,
+            model_fingerprint="m" * 64, incremental_context_fingerprint="i" * 64,
+            status=ReviewRunStatus.SUCCEEDED, reviewer_provider="fake", reviewer_model="fake-model",
+            started_at=datetime.now(UTC), completed_at=datetime.now(UTC),
+        )
+        session.add(run)
+        await session.flush()
+        for i in range(count):
+            candidate = ReviewCandidateModel(
+                id=uuid.uuid4(), review_run_id=run.id, file_path=f"m{i}.py", symbol_id=None,
+                symbol_name="f", qualified_name=f"m{i}.f", start_line=1, end_line=2,
+                changed_lines="[1]", reason=ReviewCandidateReason.CHANGED_SYMBOL,
+            )
+            session.add(candidate)
+            await session.flush()
+            proposal = AIFindingProposalModel(
+                id=uuid.uuid4(), review_run_id=run.id, candidate_id=candidate.id, title=f"finding {i}",
+                message="m", category=FindingCategory.SECURITY, severity=Severity.HIGH,
+                confidence=Confidence.HIGH, file_path=f"m{i}.py", start_line=1, end_line=2, evidence="[]",
+                reasoning_summary="r", status=ProposalStatus.ACCEPTED, agent_role=AgentRole.SECURITY,
+            )
+            session.add(proposal)
+            await session.flush()
+            finding = AIFindingModel(
+                id=uuid.uuid4(), review_run_id=run.id, proposal_id=proposal.id, candidate_id=candidate.id,
+                title=f"finding {i}", message="m", category=FindingCategory.SECURITY, severity=Severity.HIGH,
+                confidence=Confidence.HIGH, file_path=f"m{i}.py", start_line=1, end_line=2, evidence="[]",
+                reasoning_summary="r", agent_role=AgentRole.SECURITY,
+            )
+            session.add(finding)
+        await session.commit()
+        return pull_request_id
+
+
+async def test_get_merge_readiness_ready_for_clean_pull_request(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    repository_id = await _make_repository(session_factory, "acme/a")
+    await _stage_pull_request_with_run(session_factory, repository_id=repository_id, head_sha="b" * 40, count=0)
+
+    result = await _call(
+        _server(session_factory), "get_merge_readiness", repository_full_name="acme/a", pull_request_number=1,
+    )
+    readiness = result["merge_readiness"]
+    assert isinstance(readiness, dict)
+    assert readiness["decision"] == "ready"
+    assert readiness["head_sha"] == "b" * 40
+
+
+async def test_get_merge_readiness_blocked_for_unresolved_high_security_finding(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    repository_id = await _make_repository(session_factory, "acme/a")
+    await _stage_pull_request_with_run(session_factory, repository_id=repository_id, head_sha="b" * 40, count=1)
+
+    result = await _call(
+        _server(session_factory), "get_merge_readiness", repository_full_name="acme/a", pull_request_number=1,
+    )
+    readiness = result["merge_readiness"]
+    assert isinstance(readiness, dict)
+    assert readiness["decision"] == "blocked"
+    assert readiness["reason_codes"] == ["unresolved_blocking_finding"]
+    assert len(readiness["finding_ids"]) == 1
+
+
+async def test_get_merge_readiness_unknown_repository_rejected(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    result = await _call(
+        _server(session_factory), "get_merge_readiness", repository_full_name="nope/nope", pull_request_number=1,
+    )
+    assert result["error"] == "repository_not_found"
+
+
+async def test_get_merge_readiness_unknown_pull_request_rejected(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    await _make_repository(session_factory, "acme/a")
+    result = await _call(
+        _server(session_factory), "get_merge_readiness", repository_full_name="acme/a", pull_request_number=999,
+    )
+    assert result["error"] == "pull_request_not_found"
+
+
+async def test_get_merge_readiness_cross_repo_pull_request_rejected_same_as_not_found(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    repository_a = await _make_repository(session_factory, "acme/a")
+    await _make_repository(session_factory, "acme/b")
+    await _stage_pull_request_with_run(session_factory, repository_id=repository_a, head_sha="b" * 40, count=0)
+
+    result = await _call(
+        _server(session_factory), "get_merge_readiness", repository_full_name="acme/b", pull_request_number=1,
+    )
+    # acme/a's PR #1 must never be visible under acme/b's name -- the
+    # exact same shape as a genuinely-missing pull request number.
+    assert result["error"] == "pull_request_not_found"
 
 
 async def test_mcp_server_boots_and_shuts_down_cleanly_over_stdio(tmp_path: Path) -> None:

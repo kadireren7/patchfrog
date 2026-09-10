@@ -407,3 +407,24 @@ class ReviewRunRepository:
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def get_latest_for_pull_request(
+        self, session: AsyncSession, *, pull_request_id: uuid.UUID
+    ) -> ReviewRunModel | None:
+        """Milestone V (Merge Readiness): unlike
+        :meth:`get_latest_succeeded_for_pull_request`, returns the latest
+        run *regardless of status* -- Merge Readiness must distinguish
+        "no review ever ran at this head" (no row at all / a stale
+        commit_sha) from "a review ran at this head but didn't finish"
+        (``RUNNING``/``PARTIAL``/``FAILED``), and only the latter is a
+        ``REVIEW_INCOMPLETE``-worthy state rather than a stale one.
+        Ordered by ``created_at`` (not ``completed_at``, which is null
+        for a run that never finished)."""
+
+        result = await session.execute(
+            select(ReviewRunModel)
+            .where(ReviewRunModel.pull_request_id == pull_request_id)
+            .order_by(ReviewRunModel.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()

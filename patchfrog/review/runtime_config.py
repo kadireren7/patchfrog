@@ -28,11 +28,27 @@ from patchfrog.config.settings import Settings
 #: support. Kept here (rather than duplicated in `provider_factory`) so
 #: both the CLI dry-run path (which never constructs a provider) and
 #: `provider_factory` (which does) validate against the same list.
-SUPPORTED_PROVIDERS = ("anthropic", "gemini")
+SUPPORTED_PROVIDERS = ("anthropic", "gemini", "openai")
 
 DEFAULT_PROVIDER = "anthropic"
 DEFAULT_MODEL = "claude-opus-5"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
+
+#: Milestone U (Model Router, family diversity): the default model name
+#: for a provider *other than* the operator's configured
+#: `PATCHFROG_REVIEW_PROVIDER`/`PATCHFROG_REVIEW_MODEL` pair -- used only
+#: when the router selects a different provider family for the critic
+#: role (`PATCHFROG_ROUTER_CRITIC_PROVIDER`, see
+#: `patchfrog.routing.router`) and the operator did not also set
+#: `PATCHFROG_REVIEW_CRITIC_MODEL` to a model name valid for that other
+#: family. Never used for the reviewer role or a single-provider setup --
+#: those always use `DEFAULT_MODEL`/the operator's own explicit value,
+#: unchanged from before this milestone.
+DEFAULT_MODEL_BY_PROVIDER: dict[str, str] = {
+    "anthropic": DEFAULT_MODEL,
+    "gemini": "gemini-3.6-flash",
+    "openai": "gpt-6-astra",
+}
 
 #: Per-provider effective timeout used only when the operator omits
 #: `PATCHFROG_REVIEW_REQUEST_TIMEOUT_SECONDS` entirely. Anthropic keeps

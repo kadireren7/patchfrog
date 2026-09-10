@@ -28,7 +28,7 @@ import shutil
 import tempfile
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -175,6 +175,7 @@ from patchfrog.review.effort_types import ReviewEffortTier
 from patchfrog.review.orchestration import CRITIC_BUDGET_EXHAUSTED, AgentOrchestrator
 from patchfrog.review.provider import LLMProvider
 from patchfrog.review.redaction import redact_secrets
+from patchfrog.routing.domain import ReviewRoutePlan
 from patchfrog.test_intelligence.domain import TestIntelligenceReport
 from patchfrog.test_intelligence.evidence import (
     evidence_text_for_candidate as test_evidence_text_for_candidate,
@@ -381,8 +382,9 @@ class PullRequestReviewService:
         self,
         *,
         session_factory: async_sessionmaker[AsyncSession],
-        reviewer_provider: LLMProvider,
+        reviewer_provider: LLMProvider | None = None,
         critic_provider: LLMProvider | None = None,
+        route_plan: ReviewRoutePlan | None = None,
         query_service: RepositoryQueryService | None = None,
         candidate_generator: ReviewCandidateGenerator | None = None,
         context_service: ContextService | None = None,
@@ -390,7 +392,17 @@ class PullRequestReviewService:
         verifier_dispatcher: VerifierDispatcher | None = None,
         verification_snapshot_root: str | None = None,
     ) -> None:
-        """``effort_decision_override``: the Phase 8/evaluation-harness
+        """``route_plan`` (Milestone U, Model Router): when given, its own
+        ``reviewer_providers``/``critic_provider`` govern every provider
+        call this run makes, and ``reviewer_provider``/``critic_provider``
+        above are ignored entirely (never silently merged) -- see
+        :mod:`patchfrog.routing.router`. ``None`` (the default) preserves
+        this class's exact pre-Milestone-U behavior: ``reviewer_provider``
+        is required and used uniformly for every role, exactly as before.
+        Exactly one of ``route_plan`` or ``reviewer_provider`` must be
+        given.
+
+        ``effort_decision_override``: the Phase 8/evaluation-harness
         "uniform baseline" ablation hook (spec sections 24/25) --
         see :func:`patchfrog.review.effort.uniform_baseline_decision`.
         When given, used verbatim for every candidate in place of this
@@ -414,15 +426,27 @@ class PullRequestReviewService:
         separate trust domain to enforce there."""
 
         self._session_factory = session_factory
-        self._reviewer_provider = reviewer_provider
-        self._critic_provider = critic_provider
+        if route_plan is not None:
+            self._reviewer_providers: Mapping[AgentRole, LLMProvider] = route_plan.reviewer_providers
+            # Every role maps to the same instance in v1 (Model Router
+            # routes once per run, not per candidate -- see
+            # patchfrog.routing.router's own module docstring); an
+            # arbitrary one is representative for identity reporting.
+            self._reviewer_provider = next(iter(route_plan.reviewer_providers.values()))
+            self._critic_provider = route_plan.critic_provider
+        elif reviewer_provider is not None:
+            self._reviewer_providers = {AgentRole.CORRECTNESS: reviewer_provider, AgentRole.SECURITY: reviewer_provider}
+            self._reviewer_provider = reviewer_provider
+            self._critic_provider = critic_provider
+        else:
+            raise ValueError("PullRequestReviewService requires either route_plan or reviewer_provider")
         self._effort_decision_override = effort_decision_override
         self._verifier_dispatcher = verifier_dispatcher
         self._verification_snapshot_root = verification_snapshot_root
         self._queries = query_service or RepositoryQueryService()
         self._candidates = candidate_generator or ReviewCandidateGenerator(query_service=self._queries)
         self._context_service = context_service or ContextService(session_factory=session_factory)
-        self._critic = CriticService(provider=critic_provider) if critic_provider is not None else None
+        self._critic = CriticService(provider=self._critic_provider) if self._critic_provider is not None else None
         self._effort_policy = ReviewEffortPolicy()
         self._run_repo = ReviewRunRepository()
         self._candidate_repo = ReviewCandidateRepository()
@@ -1007,10 +1031,7 @@ class PullRequestReviewService:
                 staged_artifact = None
 
         orchestrator = AgentOrchestrator(
-            reviewer_providers={
-                AgentRole.CORRECTNESS: self._reviewer_provider,
-                AgentRole.SECURITY: self._reviewer_provider,
-            },
+            reviewer_providers=self._reviewer_providers,
             critic=self._critic,
             critic_enabled=config.critic_enabled,
             max_output_tokens_per_candidate=config.max_output_tokens_per_candidate,
