@@ -1114,6 +1114,7 @@ async def test_executable_verification_confirmed_failure_alone_is_inconclusive(
     assert any("not proof this is the original finding" in e for e in attempt.result.deterministic_evidence)
 
 
+@pytest.mark.skipif(not _ev_infra_available, reason="bwrap sandbox and/or Redis not available on this host")
 @respx.mock
 async def test_executable_verification_confirmed_failure_plus_llm_confirms_still_present(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, staging_root: Path,
@@ -1148,6 +1149,7 @@ async def test_executable_verification_confirmed_failure_plus_llm_confirms_still
     assert len(provider.calls) == 1
 
 
+@pytest.mark.skipif(not _ev_infra_available, reason="bwrap sandbox and/or Redis not available on this host")
 @respx.mock
 async def test_original_finding_remains_but_candidate_test_happens_to_pass_is_not_fixed(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, staging_root: Path,
@@ -1187,6 +1189,7 @@ async def test_original_finding_remains_but_candidate_test_happens_to_pass_is_no
     assert attempt.result.executable_verification_outcome == "passed"
 
 
+@pytest.mark.skipif(not _ev_infra_available, reason="bwrap sandbox and/or Redis not available on this host")
 @respx.mock
 async def test_weak_present_and_weak_resolved_conflict_forces_no_terminal_verdict(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, staging_root: Path,
