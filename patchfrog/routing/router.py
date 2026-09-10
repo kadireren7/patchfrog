@@ -155,9 +155,11 @@ class ModelRouter:
 
         # Runtime execution failover (distinct from config_fallback_used
         # above -- see this module's own docstring). Eligible only when
-        # a *different*, credentialed provider actually exists: prefer
-        # the operator's explicit PATCHFROG_ROUTER_FALLBACK_PROVIDER if
-        # it names one; otherwise any other configured provider.
+        # the operator *explicitly* named PATCHFROG_ROUTER_FALLBACK_PROVIDER
+        # and it is itself configured/credentialed and distinct from this
+        # role's own primary -- never auto-selected from whatever else
+        # merely happens to have a credential (see
+        # _select_runtime_fallback_family's own docstring).
         runtime_fallback_family = self._select_runtime_fallback_family(configured, exclude=reviewer_family)
         reviewer_fallback_providers: Mapping[AgentRole, LLMProvider] | None = None
         if runtime_fallback_family is not None:
@@ -194,10 +196,20 @@ class ModelRouter:
         )
 
     def _select_runtime_fallback_family(self, configured: list[str], *, exclude: str) -> str | None:
+        """Final correction: runtime fallback is **never** auto-selected
+        from whatever else happens to be configured/credentialed --
+        having a credential for a provider is not, by itself, permission
+        to use it as a fallback. Eligible only when the operator
+        *explicitly* named it via ``PATCHFROG_ROUTER_FALLBACK_PROVIDER``,
+        and it is actually configured and distinct from the role's own
+        primary. No credential at all for the named provider, or no
+        setting at all, both mean "no runtime fallback" -- identical to
+        having none configured."""
+
         explicit = self._settings.router_fallback_provider
         if explicit is not None and explicit in configured and explicit != exclude:
             return explicit
-        return next((provider for provider in configured if provider != exclude), None)
+        return None
 
     def _select_reviewer_family(
         self, configured: list[str], *, preferred: str, reasons: list[RouteReason]

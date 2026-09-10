@@ -544,13 +544,18 @@ class AgentOrchestrator:
           vendor by default in v1 (see ``docs/model-routing.md``).
 
         The fallback attempt itself uses ``max_retries=0`` -- a single
-        try, never its own retry loop -- and is gated by a read-only
-        budget check (``budget_state["used_input_tokens"] + role_estimate
-        > max_total_input_tokens`` denies it, preserving "no free
-        fallback calls outside accounting" and "budget exhausted ->
-        fallback denied" without a separate top-up reservation that
-        could desync the existing reconcile-after-actual-usage math
-        below in the caller)."""
+        try, never its own retry loop. Final correction: the budget
+        check-and-reserve is now atomic under ``budget_lock`` (a
+        check-then-later-increment pattern would let two concurrent
+        fallback attempts -- e.g. this run's two specialist roles --
+        both pass a stale check before either actually reserves,
+        overspending the run's budget). The reservation is a *temporary*
+        hold, always fully released before this method returns (success
+        or failure) -- the caller's own existing reconcile-after-actual-
+        usage pass (crediting the original per-role estimate against
+        whichever provider's real usage is returned) already accounts
+        for the fallback's real cost correctly once this temporary hold
+        is gone, so it is never double-counted."""
 
         system_prompt, user_prompt = prompt
         request = ProviderRequest(
@@ -584,9 +589,17 @@ class AgentOrchestrator:
             async with budget_lock:
                 if budget_state["used_input_tokens"] + role_estimate > max_total_input_tokens:
                     raise
-            (validated, usage, latency_ms, served_by), _ = await call_with_retry(
-                lambda: _attempt(fallback), max_retries=0
-            )
+                budget_state["used_input_tokens"] += role_estimate
+            try:
+                (validated, usage, latency_ms, served_by), _ = await call_with_retry(
+                    lambda: _attempt(fallback), max_retries=0
+                )
+            except BaseException:
+                async with budget_lock:
+                    budget_state["used_input_tokens"] = max(0, budget_state["used_input_tokens"] - role_estimate)
+                raise
+            async with budget_lock:
+                budget_state["used_input_tokens"] = max(0, budget_state["used_input_tokens"] - role_estimate)
             return validated, usage, max_retries, latency_ms, True, served_by
 
     async def _critique(
@@ -718,6 +731,10 @@ class AgentOrchestrator:
                     all_proposals=proposals,
                     max_retries=max_retries,
                     executable_verification_text=executable_verification_text,
+                    fallback_estimate=reserved_estimates[i],
+                    budget_lock=budget_lock,
+                    budget_state=budget_state,
+                    max_total_input_tokens=max_total_input_tokens,
                 )
                 for i in reserved
             ),
@@ -769,6 +786,10 @@ class AgentOrchestrator:
         contradiction_indices: frozenset[int],
         all_proposals: tuple[AgentProposal, ...],
         max_retries: int,
+        fallback_estimate: int,
+        budget_lock: asyncio.Lock,
+        budget_state: dict[str, int],
+        max_total_input_tokens: int,
         executable_verification_text: str = "",
     ) -> tuple[CriticVerdict, TokenUsage, int, bool, str]:
         """Returns ``(verdict, usage, retries_used, used_fallback,
@@ -777,11 +798,23 @@ class AgentOrchestrator:
         (after the primary's own retry allowance) or
         ``ResponseSchemaError`` (``CriticService.critique`` itself
         raises this for a malformed verdict), never on
-        ``ProviderFatalError``. No budget-gate check here (unlike the
-        reviewer path): each critique call's cost was already reserved
-        individually, atomically, by the caller *before* this method
-        runs (spec section 15/21) -- the fallback reuses that exact same
-        reservation rather than needing its own gate."""
+        ``ProviderFatalError``.
+
+        The primary's own cost was already reserved individually,
+        atomically, by the caller *before* this method runs (spec
+        section 15/21). The fallback hop is a genuinely *additional*
+        call, so it gets its own atomic check-and-reserve under the same
+        ``budget_lock`` (final correction: never a separate, non-atomic
+        check that a concurrent critique could race past) --
+        ``fallback_estimate`` is that same original per-proposal
+        estimate, reused as the fallback's own *temporary* reservation
+        size. That temporary hold is always fully released before this
+        method returns, success or failure -- never also credited
+        against ``usage.input_tokens`` here, since the caller's own
+        end-of-batch reconciliation (crediting ``reserved_estimates[i]``
+        against this same returned ``usage.input_tokens``) already
+        accounts for the fallback's real cost correctly once the
+        temporary hold is gone; doing both would double-count it."""
 
         critic = self._critic
         assert critic is not None
@@ -812,7 +845,24 @@ class AgentOrchestrator:
         except (ProviderTransientError, ResponseSchemaError):
             if self._critic_fallback is None:
                 raise
-            (verdict, usage, served_by), _ = await call_with_retry(
-                lambda: _attempt(self._critic_fallback), max_retries=0  # type: ignore[arg-type]
-            )
+            async with budget_lock:
+                if budget_state["used_input_tokens"] + fallback_estimate > max_total_input_tokens:
+                    raise
+                budget_state["used_input_tokens"] += fallback_estimate
+            try:
+                (verdict, usage, served_by), _ = await call_with_retry(
+                    lambda: _attempt(self._critic_fallback), max_retries=0  # type: ignore[arg-type]
+                )
+            except BaseException:
+                async with budget_lock:
+                    budget_state["used_input_tokens"] = max(0, budget_state["used_input_tokens"] - fallback_estimate)
+                raise
+            async with budget_lock:
+                # Release the temporary hold only -- never also add
+                # usage.input_tokens here: the caller's own end-of-batch
+                # reconciliation (crediting reserved_estimates[i] against
+                # this same usage.input_tokens) already accounts for the
+                # fallback's real cost correctly once this hold is gone,
+                # so adding it again here would double-count it.
+                budget_state["used_input_tokens"] = max(0, budget_state["used_input_tokens"] - fallback_estimate)
             return verdict, usage, max_retries, True, served_by

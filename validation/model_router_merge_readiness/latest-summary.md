@@ -454,3 +454,71 @@ New test files added by this correction: 19 cases
 refusal-ordering cases within the existing contract-test file (24 -> 29).
 Zero regressions across the pre-correction 2321-test baseline -- see the
 final report for the exact fresh full-suite count.
+
+## 8. Final short correction: explicit-only fallback + atomic budget reservation
+
+Two remaining gaps found in review of commit `b106a53`.
+
+### 8.1 Runtime fallback was silently auto-selected
+
+`ModelRouter._select_runtime_fallback_family` fell back to "any other
+configured provider" when `PATCHFROG_ROUTER_FALLBACK_PROVIDER` was
+unset -- a credential existing for a second provider is not, by itself,
+operator permission to use it as a runtime backup (this is a materially
+bigger trust decision than critic-family diversity, since it means a
+*different* vendor may end up serving CORRECTNESS/SECURITY specialist
+calls the operator never explicitly authorized for that role). Fixed:
+the method now returns a fallback family only when the setting is
+explicitly present, names a configured/credentialed provider, and that
+provider differs from the role's own primary -- otherwise `None`,
+identical to "no fallback configured." Critic-family *diversity*
+(`_select_critic_family`, a distinct, config-time concern already
+covered by U4) is untouched and still legitimately auto-selects.
+
+### 8.2 Fallback budget check was non-atomic
+
+The original correction's `budget_state["used_input_tokens"] +
+role_estimate > max_total_input_tokens` gate was check-only, with no
+corresponding reservation increment under the same lock acquisition --
+two concurrently-running roles (or a role and the critic) could each
+observe a stale "there's room" reading before either actually spent
+anything, overspending the budget in aggregate. Fixed: the check and
+the reservation increment now happen inside one `async with budget_lock`
+block in both `_call_role` (reviewer) and `_critique_one` (critic). The
+reservation is a *temporary* hold, always released before the method
+returns (success or failure) -- reusing it as a lasting credit against
+actual usage would double-count against the caller's own existing
+end-of-batch reconciliation, which already correctly reconciles the
+original per-role/per-proposal estimate against whichever provider's
+real usage comes back.
+
+Proving this required forcing genuine `asyncio` interleaving:
+`FakeLLMProvider` never actually suspends (no real I/O), so two
+concurrently-`asyncio.gather`ed roles never truly overlap in execution
+without an artificial yield point -- a naive test would pass for the
+wrong reason (one role's entire fallback attempt completing, temporary
+hold released, before the other role even starts checking). A small
+`_DelayedFakeProvider` wrapper (`await asyncio.sleep(...)` before
+delegating to a real `FakeLLMProvider`) is used specifically for the new
+concurrency test to force a real race.
+
+### 8.3 New tests
+
+`tests/unit/test_model_router.py` (+4): multiple providers configured
+but no fallback setting -> no runtime fallback at all (even though
+critic diversity still legitimately uses the second provider); explicit
+fallback setting -> permitted; the fallback setting naming the primary
+itself -> still no fallback (no distinct provider to fail over to); the
+fallback setting naming an uncredentialed provider -> still no fallback.
+
+`tests/integration/test_runtime_provider_failover.py` (+3, 22 total):
+concurrent two-role fallback with budget room for exactly one ->
+exactly one fallback call actually made (proven under genuine
+interleaving via `_DelayedFakeProvider`); critic fallback denied when
+budget has no room (using real `build_critic_prompt`/`estimate_tokens`
+math, not a guessed ceiling); critic fallback budget reservation
+correctly released after a successful fallback (proven by an exact
+final `budget_state` equality, not just "some plausible value").
+
+All pre-existing OpenAI refusal-ordering and Merge Readiness tests
+re-verified green, unaffected.

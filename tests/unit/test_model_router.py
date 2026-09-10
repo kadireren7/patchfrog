@@ -273,3 +273,73 @@ def test_version_is_one() -> None:
     router = ModelRouter(settings=_settings(ANTHROPIC_API_KEY="fake-not-real"))
     plan = router.route(runtime_config=_runtime_config(provider="anthropic"), critic_enabled=True)
     assert plan.version == 1
+
+
+# -- Runtime fallback must be explicit (final correction) --
+
+
+def test_multiple_providers_configured_but_no_fallback_setting_means_no_runtime_fallback() -> None:
+    # A credential existing for gemini is NOT, by itself, permission to
+    # use it as a runtime fallback -- PATCHFROG_ROUTER_FALLBACK_PROVIDER
+    # must be explicitly set, or there is no runtime fallback at all,
+    # even though two providers are configured and critic diversity
+    # (a separate, config-time concept) legitimately uses gemini.
+    router = ModelRouter(
+        settings=_settings(ANTHROPIC_API_KEY="fake-not-real", GEMINI_API_KEY="fake-not-real")
+    )
+    plan = router.route(runtime_config=_runtime_config(provider="anthropic"), critic_enabled=True)
+
+    assert plan.reviewer_fallback_providers is None
+    assert plan.reviewer_runtime_fallback_family is None
+    assert plan.critic_fallback_provider is None
+    assert plan.critic_runtime_fallback_family is None
+    assert plan.runtime_fallback_permitted is False
+    # Critic diversity itself is untouched by this correction.
+    assert plan.critic_provider_family == "gemini"
+
+
+def test_explicit_fallback_provider_setting_permits_runtime_fallback() -> None:
+    router = ModelRouter(
+        settings=_settings(
+            ANTHROPIC_API_KEY="fake-not-real", GEMINI_API_KEY="fake-not-real",
+            PATCHFROG_ROUTER_FALLBACK_PROVIDER="gemini",
+        )
+    )
+    plan = router.route(runtime_config=_runtime_config(provider="anthropic"), critic_enabled=True)
+
+    assert plan.reviewer_fallback_providers is not None
+    assert plan.reviewer_runtime_fallback_family == "gemini"
+    assert plan.runtime_fallback_permitted is True
+    assert isinstance(plan.reviewer_fallback_providers[AgentRole.CORRECTNESS], GeminiLLMProvider)
+
+
+def test_explicit_fallback_naming_the_primary_itself_permits_no_fallback() -> None:
+    # The fallback setting names the same family that is already primary
+    # -- there is no *distinct* provider to fail over to, so this must
+    # still resolve to "no runtime fallback", not a fallback-to-self.
+    router = ModelRouter(
+        settings=_settings(
+            ANTHROPIC_API_KEY="fake-not-real", GEMINI_API_KEY="fake-not-real",
+            PATCHFROG_ROUTER_FALLBACK_PROVIDER="anthropic",
+        )
+    )
+    plan = router.route(runtime_config=_runtime_config(provider="anthropic"), critic_enabled=True)
+
+    assert plan.reviewer_fallback_providers is None
+    assert plan.reviewer_runtime_fallback_family is None
+
+
+def test_fallback_setting_naming_an_uncredentialed_provider_permits_no_runtime_fallback() -> None:
+    # PATCHFROG_ROUTER_FALLBACK_PROVIDER names openai, but OPENAI_API_KEY
+    # is not set -- having a *name* configured is not the same as having
+    # a usable, credentialed provider to fail over to.
+    router = ModelRouter(
+        settings=_settings(
+            ANTHROPIC_API_KEY="fake-not-real", GEMINI_API_KEY="fake-not-real",
+            PATCHFROG_ROUTER_FALLBACK_PROVIDER="openai",
+        )
+    )
+    plan = router.route(runtime_config=_runtime_config(provider="anthropic"), critic_enabled=True)
+
+    assert plan.reviewer_fallback_providers is None
+    assert plan.reviewer_runtime_fallback_family is None

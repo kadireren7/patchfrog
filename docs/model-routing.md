@@ -157,6 +157,17 @@ distinction:
    backup provider, two distinct trigger points, never a second config
    surface.
 
+**Runtime fallback is never auto-selected** (final correction): having a
+credential for some other provider is not, by itself, permission to use
+it as a runtime backup -- `ModelRouter._select_runtime_fallback_family`
+returns a fallback family *only* when `PATCHFROG_ROUTER_FALLBACK_PROVIDER`
+explicitly names one, and that provider is itself configured/credentialed
+and distinct from the role's own primary. With two providers configured
+but no explicit fallback setting, `runtime_fallback_permitted` is
+`False` -- exactly as if only one provider were configured -- even
+though critic family diversity (a separate, config-time concept,
+unaffected by this) may still legitimately use the second provider.
+
 **What triggers runtime failover** (after the primary's own existing
 bounded retry allowance, `max_retries`, is exhausted):
 
@@ -186,14 +197,22 @@ provider to escalate to.
 **Quality + Cost Guard integration**: the fallback's actual usage (not
 an estimate) flows through the exact same reservation-then-reconcile
 accounting every role's call already goes through -- never a "free" call
-outside budget tracking. Before attempting the fallback hop specifically,
-a read-only check (`budget_state["used_input_tokens"] + role_estimate >
-max_total_input_tokens`) denies it outright when the run's remaining
-budget has no room, without a separate top-up reservation that could
-desync the existing, carefully-tuned reconcile-after-actual-usage
-math elsewhere in `patchfrog.review.orchestration`. A denied fallback
-behaves exactly like "no fallback configured" -- the original error
-propagates, the role is honestly marked failed.
+outside budget tracking. The check-and-reserve for the fallback hop is
+**atomic** under the run's shared `budget_lock` (final correction: a
+check-then-later-increment pattern would let two concurrently-running
+roles' fallback attempts both pass a stale check before either actually
+reserved, overspending the budget -- proven by
+`test_concurrent_two_role_fallback_with_budget_room_for_one_allows_exactly_one`,
+which forces genuine interleaving since `FakeLLMProvider` alone never
+actually suspends). The reservation this creates is a *temporary* hold,
+always released before the method returns (success or failure) --
+never double-counted alongside the existing reconcile-after-actual-usage
+pass, which already correctly credits the original per-role estimate
+against whichever provider's real usage comes back. A denied fallback
+(no budget room) behaves exactly like "no fallback configured" -- the
+original error propagates, the role is honestly marked failed. The same
+atomic reserve/release applies identically to the critic's own fallback
+hop.
 
 **Review completeness**: if a candidate's every selected role fails
 (even after a permitted, attempted fallback), that candidate is marked

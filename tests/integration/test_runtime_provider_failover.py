@@ -29,12 +29,33 @@ from patchfrog.review.domain import ReviewCandidate, ReviewCandidateReason
 from patchfrog.review.effort import ReviewEffortDecision
 from patchfrog.review.effort_types import CriticExpectation, ReviewEffortTier
 from patchfrog.review.orchestration import AgentOrchestrator
-from patchfrog.review.prompt import build_agent_prompt
-from patchfrog.review.provider import ProviderFatalError, ProviderTransientError
+from patchfrog.review.prompt import build_agent_prompt, build_critic_prompt
+from patchfrog.review.provider import (
+    ProviderFatalError,
+    ProviderIdentity,
+    ProviderRequest,
+    ProviderResult,
+    ProviderTransientError,
+)
 from patchfrog.review.providers.fake import FakeLLMProvider, ScriptedResponse
+from patchfrog.review.validation import parse_findings
 
 _VALID = ScriptedResponse(raw_json='{"findings": []}')
 _MALFORMED = ScriptedResponse(raw_json="not valid json at all")
+
+# A real, schema-valid finding whose evidence quotes verbatim from
+# _evidence()'s own context_text ("ctx") -- needed only for the critic
+# fallback tests below, since an empty findings array (like _VALID)
+# never reaches the critic at all (CriticSelectionPolicy has nothing to
+# critique).
+_ONE_FINDING = ScriptedResponse(
+    raw_json='{"findings": [{'
+    '"title": "t", "message": "m", "category": "correctness", "severity": "medium", '
+    '"confidence": "medium", "file_path": "m.py", "start_line": 1, "end_line": 2, '
+    '"evidence": [{"file_path": "m.py", "start_line": 1, "end_line": 2, "quoted_text": "ctx"}], '
+    '"reasoning_summary": "r", "suggested_fix": null'
+    '}]}'
+)
 
 _log = structlog.get_logger(__name__)
 
@@ -56,12 +77,38 @@ def _evidence() -> CandidateEvidencePackage:
 
 def _effort_decision(
     *, roles: frozenset[AgentRole] = frozenset({AgentRole.CORRECTNESS}), retry_limit: int = 1,
+    critic_expectation: CriticExpectation = CriticExpectation.OPTIONAL,
 ) -> ReviewEffortDecision:
     return ReviewEffortDecision(
         tier=ReviewEffortTier.LIGHT, reasons=(), selected_roles=roles,
         context_token_fraction=0.5, context_adaptive_enabled=False,
-        critic_expectation=CriticExpectation.OPTIONAL, retry_limit=retry_limit, per_role_output_token_fraction=0.5,
+        critic_expectation=critic_expectation, retry_limit=retry_limit, per_role_output_token_fraction=0.5,
     )
+
+
+class _DelayedFakeProvider:
+    """Wraps a real :class:`FakeLLMProvider` but adds a genuine
+    ``await asyncio.sleep`` before delegating -- ``FakeLLMProvider``
+    itself never actually suspends (no real I/O), so two concurrent
+    ``asyncio.gather``ed roles calling it never truly interleave; this
+    forces a real yield point so a genuine race between two roles'
+    fallback attempts can actually be exercised and proven bounded."""
+
+    def __init__(self, inner: FakeLLMProvider, *, delay_seconds: float = 0.05) -> None:
+        self._inner = inner
+        self._delay_seconds = delay_seconds
+
+    @property
+    def identity(self) -> ProviderIdentity:
+        return self._inner.identity
+
+    @property
+    def calls(self) -> list[ProviderRequest]:
+        return self._inner.calls
+
+    async def generate_structured(self, request: ProviderRequest) -> ProviderResult:
+        await asyncio.sleep(self._delay_seconds)
+        return await self._inner.generate_structured(request)
 
 
 async def _run_review(orchestrator: AgentOrchestrator, *, roles: frozenset[AgentRole], retry_limit: int = 1):  # type: ignore[no-untyped-def]
@@ -401,6 +448,139 @@ async def test_executed_provider_provenance_reports_primary_when_no_failure() ->
     assert result.executed_provider_by_role[AgentRole.CORRECTNESS] == "primary-family"
     assert result.fallback_used_roles == ()
     assert fallback.calls == []
+
+
+# ---- Final correction: atomic budget reservation for the fallback hop ----
+
+
+async def test_concurrent_two_role_fallback_with_budget_room_for_one_allows_exactly_one() -> None:
+    # Both CORRECTNESS and SECURITY are selected and run concurrently
+    # (asyncio.gather); both primaries fail transiently and both have a
+    # fallback configured. The budget ceiling is set so there is room
+    # for the upfront reservation of *both* roles' prompts, plus exactly
+    # one more role-sized fallback attempt -- never two. This proves the
+    # check-and-reserve is genuinely atomic under the shared budget_lock:
+    # a non-atomic (check, then separately increment) implementation
+    # could let both concurrent fallback attempts pass a stale check
+    # before either reserves, overspending the budget.
+    correctness_estimate = sum(
+        estimate_tokens(t) for t in build_agent_prompt(
+            AgentRole.CORRECTNESS, candidate=_candidate(), context_text="ctx", diff_excerpt="", static_findings=(),
+        )
+    )
+    security_estimate = sum(
+        estimate_tokens(t) for t in build_agent_prompt(
+            AgentRole.SECURITY, candidate=_candidate(), context_text="ctx", diff_excerpt="", static_findings=(),
+        )
+    )
+    combined_estimate = correctness_estimate + security_estimate
+    max_total_input_tokens = combined_estimate + max(correctness_estimate, security_estimate)
+
+    # FakeLLMProvider never actually suspends (no real I/O), so without
+    # an artificial delay the two roles would never genuinely interleave
+    # under asyncio.gather -- one would run its entire primary-fails ->
+    # fallback-succeeds -> release-hold sequence to completion before
+    # the other even started, which would trivially "pass" this test
+    # for the wrong reason. Both primaries get a small delay so they
+    # fail at roughly the same simulated time; the shared fallback gets
+    # a longer delay so whichever role wins the reservation race is
+    # still holding it when the other role's check runs.
+    correctness_primary = _DelayedFakeProvider(
+        FakeLLMProvider([ProviderTransientError("down")], provider_name="correctness-primary"), delay_seconds=0.01,
+    )
+    security_primary = _DelayedFakeProvider(
+        FakeLLMProvider([ProviderTransientError("down")], provider_name="security-primary"), delay_seconds=0.01,
+    )
+    fallback = _DelayedFakeProvider(
+        FakeLLMProvider([_VALID], provider_name="shared-fallback"), delay_seconds=0.05,
+    )
+    orchestrator = AgentOrchestrator(
+        reviewer_providers={AgentRole.CORRECTNESS: correctness_primary, AgentRole.SECURITY: security_primary},
+        reviewer_fallback_providers={AgentRole.CORRECTNESS: fallback, AgentRole.SECURITY: fallback},
+        critic=None, critic_enabled=False, max_output_tokens_per_candidate=1000, max_retries=0,
+    )
+    result = await orchestrator.review_candidate(
+        _evidence(), effort_decision=_effort_decision(roles=frozenset({AgentRole.CORRECTNESS, AgentRole.SECURITY}), retry_limit=0),
+        min_final_confidence=Confidence.MEDIUM, max_total_input_tokens=max_total_input_tokens,
+        budget_lock=asyncio.Lock(), budget_state={"used_input_tokens": 0}, log=_log,
+    )
+
+    # Exactly one role's fallback was actually attempted -- never both,
+    # never zero.
+    assert len(fallback.calls) == 1
+    assert len(result.fallback_used_roles) == 1
+    assert len(result.failed_roles) == 1
+    assert result.failed is False  # the candidate still has one surviving role
+
+
+# ---- Final correction: critic fallback budget reservation ----
+
+
+async def test_critic_fallback_is_denied_when_budget_has_no_room() -> None:
+    finding = parse_findings(_ONE_FINDING.raw_json)[0]
+    critic_system, critic_user = build_critic_prompt(candidate=_candidate(), context_text="ctx", finding=finding)
+    critic_estimate = estimate_tokens(critic_system) + estimate_tokens(critic_user)
+    # The reviewer's own *upfront* estimate is credited back and replaced
+    # by its actual usage the moment it succeeds -- ScriptedResponse's
+    # default input_tokens (100), not the (much larger) prompt estimate
+    # -- so that reconciled, *actual* value is what remains in the budget
+    # by the time the critic's own reservation is checked. Enough room
+    # for that plus the critic's *primary* attempt's own reservation, but
+    # zero room left over for a second, fallback-sized critic reservation.
+    reviewer_actual_usage = 100
+    max_total_input_tokens = reviewer_actual_usage + critic_estimate
+
+    primary = FakeLLMProvider([_ONE_FINDING], provider_name="reviewer")
+    critic_primary = CriticService(provider=FakeLLMProvider([ProviderTransientError("down")], provider_name="critic-primary"))
+    critic_fallback_provider = FakeLLMProvider([], provider_name="critic-fallback")  # exhausted -- raises if ever called
+    critic_fallback = CriticService(provider=critic_fallback_provider)
+    orchestrator = AgentOrchestrator(
+        reviewer_providers={AgentRole.CORRECTNESS: primary},
+        critic=critic_primary, critic_fallback=critic_fallback, critic_enabled=True,
+        max_output_tokens_per_candidate=1000, max_retries=0,
+    )
+    result = await orchestrator.review_candidate(
+        _evidence(),
+        effort_decision=_effort_decision(
+            roles=frozenset({AgentRole.CORRECTNESS}), retry_limit=0, critic_expectation=CriticExpectation.MANDATORY,
+        ),
+        min_final_confidence=Confidence.MEDIUM, max_total_input_tokens=max_total_input_tokens,
+        budget_lock=asyncio.Lock(), budget_state={"used_input_tokens": 0}, log=_log,
+    )
+    assert result.critic_fallback_used is False
+    assert critic_fallback_provider.calls == []
+
+
+async def test_critic_fallback_budget_reservation_is_released_after_success() -> None:
+    primary = FakeLLMProvider([_ONE_FINDING], provider_name="reviewer")
+    critic_primary_provider = FakeLLMProvider([ProviderTransientError("down")], provider_name="critic-primary")
+    critic_fallback_provider = FakeLLMProvider(
+        response_factory=lambda _req: ScriptedResponse(
+            raw_json='{"decision": "accept", "reasoning_summary": "r"}', input_tokens=321,
+        ),
+        provider_name="critic-fallback",
+    )
+    orchestrator = AgentOrchestrator(
+        reviewer_providers={AgentRole.CORRECTNESS: primary},
+        critic=CriticService(provider=critic_primary_provider),
+        critic_fallback=CriticService(provider=critic_fallback_provider),
+        critic_enabled=True, max_output_tokens_per_candidate=1000, max_retries=0,
+    )
+    budget_state = {"used_input_tokens": 0}
+    result = await orchestrator.review_candidate(
+        _evidence(),
+        effort_decision=_effort_decision(
+            roles=frozenset({AgentRole.CORRECTNESS}), retry_limit=0, critic_expectation=CriticExpectation.MANDATORY,
+        ),
+        min_final_confidence=Confidence.MEDIUM, max_total_input_tokens=100_000,
+        budget_lock=asyncio.Lock(), budget_state=budget_state, log=_log,
+    )
+    assert result.critic_fallback_used is True
+    assert result.critic_executed_provider == "critic-fallback"
+    # The critic fallback's temporary reservation was fully released --
+    # never double-counted alongside the final reconciliation's own
+    # crediting of the critic's real usage.
+    assert budget_state["used_input_tokens"] == result.reviewer_usage.input_tokens + 321
 
 
 # ---- 24: no live providers (structural -- every test above uses FakeLLMProvider) ----
