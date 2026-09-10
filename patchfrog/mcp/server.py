@@ -44,6 +44,8 @@ from patchfrog.config.settings import Settings
 from patchfrog.executable_verification.dispatch import VerifierDispatcher
 from patchfrog.fix_verification.domain import FixAttempt, FixAttemptStatus
 from patchfrog.fix_verification.service import FixAttemptValidationError, FixVerificationService
+from patchfrog.merge_readiness.domain import MergeReadinessResult
+from patchfrog.merge_readiness.service import MergeReadinessService
 from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.persistence.repositories import (
     AIFindingRepository,
@@ -117,6 +119,20 @@ def _attempt_to_wire(attempt: FixAttempt) -> dict[str, Any]:
     return wire
 
 
+def _readiness_to_wire(result: MergeReadinessResult) -> dict[str, Any]:
+    return {
+        "decision": result.decision.value,
+        "reason_codes": [r.value for r in result.reason_codes],
+        "repository_id": str(result.repository_id),
+        "pull_request_number": result.pull_request_number,
+        "review_run_id": str(result.review_run_id) if result.review_run_id is not None else None,
+        "head_sha": result.head_sha,
+        "finding_ids": [str(f) for f in result.finding_ids],
+        "limitations": list(result.limitations),
+        "version": result.version,
+    }
+
+
 class PatchFrogMCPServer:
     """Builds the four-tool MCP surface. One instance per
     ``python -m patchfrog.cli mcp serve`` process."""
@@ -145,15 +161,18 @@ class PatchFrogMCPServer:
         self._finding_repo = AIFindingRepository()
         self._pull_request_repo = PullRequestRepository()
         self._fix_attempt_repo = FixAttemptRepository()
+        self._readiness_service = MergeReadinessService()
 
         self.mcp: FastMCP = FastMCP(
             name="patchfrog",
             instructions=(
                 "Read-only-mostly access to PatchFrog's already-verified code "
-                "review findings and fix-verification results for self-hosted "
-                "repositories. PatchFrog remains the source of truth for review "
-                "evidence; this server never writes source code, never commits "
-                "or pushes, and never writes to GitHub."
+                "review findings, fix-verification results, and merge-readiness "
+                "decisions for self-hosted repositories. PatchFrog remains the "
+                "source of truth for review evidence; this server never writes "
+                "source code, never commits or pushes, and never writes to "
+                "GitHub. Merge readiness is exact-head-bound: it reflects only "
+                "the PR's current head SHA at call time, never a stale decision."
             ),
         )
         self._register_tools()
@@ -217,6 +236,19 @@ class PatchFrogMCPServer:
 
             return await self._get_fix_attempt(
                 repository_full_name=repository_full_name, fix_attempt_id=fix_attempt_id
+            )
+
+        @self.mcp.tool()
+        async def get_merge_readiness(repository_full_name: str, pull_request_number: int) -> dict[str, Any]:
+            """Compute PatchFrog's current merge-readiness decision
+            (``ready``/``blocked``/``human_review_required``) for this PR's
+            *exact current head* -- deterministic over already-persisted
+            evidence, never a new review or an LLM call. See
+            :mod:`patchfrog.merge_readiness.domain` for the full semantics.
+            Always recomputed fresh; never a cached/stale-head result."""
+
+            return await self._get_merge_readiness(
+                repository_full_name=repository_full_name, pull_request_number=pull_request_number
             )
 
     async def _list_findings(
@@ -356,6 +388,22 @@ class PatchFrogMCPServer:
                 return {"error": "fix_attempt_not_found"}
 
             return {"fix_attempt": _attempt_to_wire(attempt)}
+
+    async def _get_merge_readiness(
+        self, *, repository_full_name: str, pull_request_number: int
+    ) -> dict[str, Any]:
+        async with self._session_factory() as session:
+            repository = await self._repository_repo.get_by_full_name(session, full_name=repository_full_name)
+            if repository is None:
+                return {"error": "repository_not_found"}
+
+            result = await self._readiness_service.evaluate(
+                session, repository_id=repository.id, pull_request_number=pull_request_number
+            )
+            if result is None:
+                return {"error": "pull_request_not_found"}
+
+            return {"merge_readiness": _readiness_to_wire(result)}
 
     async def run_stdio(self) -> None:
         await self.mcp.run_stdio_async()

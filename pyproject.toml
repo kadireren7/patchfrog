@@ -43,6 +43,12 @@ dependencies = [
     # AI Reviewer, second provider: official Google GenAI SDK for the
     # Gemini API provider adapter (patchfrog.review.providers.gemini_provider).
     "google-genai>=2.0,<3.0",
+    # AI Reviewer, third provider (Milestone U): official OpenAI SDK for
+    # the Responses API provider adapter
+    # (patchfrog.review.providers.openai_provider). Pinned to the current
+    # major line, the same major-version-locked pattern as anthropic/
+    # google-genai above.
+    "openai>=3.11,<4.0",
     # Public beta readiness: Prometheus-compatible /metrics exposition
     # (patchfrog.ops.metrics) -- the standard client library, never a
     # hand-rolled text-format exporter.

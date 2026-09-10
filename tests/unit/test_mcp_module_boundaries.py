@@ -70,7 +70,7 @@ def test_mcp_never_defines_a_source_writing_or_git_mutation_tool() -> None:
         assert not overlap, f"{path} defines {overlap} -- never a source-writing or git-mutating tool"
 
 
-async def test_mcp_exposes_exactly_the_four_documented_tools() -> None:
+async def test_mcp_exposes_exactly_the_five_documented_tools() -> None:
     from patchfrog.config.settings import Settings
     from patchfrog.mcp.server import PatchFrogMCPServer
     from patchfrog.persistence.database import create_engine, create_session_factory
@@ -81,4 +81,6 @@ async def test_mcp_exposes_exactly_the_four_documented_tools() -> None:
 
     tools = await server.mcp.list_tools()
     tool_names = {t.name for t in tools}
-    assert tool_names == {"list_findings", "get_finding_handoff", "start_fix_attempt", "get_fix_attempt"}
+    assert tool_names == {
+        "list_findings", "get_finding_handoff", "start_fix_attempt", "get_fix_attempt", "get_merge_readiness",
+    }

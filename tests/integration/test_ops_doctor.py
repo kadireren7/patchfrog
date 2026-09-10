@@ -179,13 +179,61 @@ async def test_models_prefixed_gemini_name_is_normalized_before_family_check(
 
 async def test_unsupported_provider_fails(db_engine: AsyncEngine, test_private_key: str) -> None:
     engine = await _migrated_engine(db_engine)
-    settings = _settings(test_private_key=test_private_key, PATCHFROG_REVIEW_PROVIDER="openai")
+    settings = _settings(test_private_key=test_private_key, PATCHFROG_REVIEW_PROVIDER="not-a-real-provider")
 
     report = await run_doctor(settings=settings, engine=engine, check_github_auth=False)
 
     assert report.overall is DoctorStatus.FAIL
     provider_check = next(c for c in report.checks if c.name == "review_provider")
     assert provider_check.status is DoctorStatus.FAIL
+
+
+async def test_openai_provider_with_credential_passes(db_engine: AsyncEngine, test_private_key: str) -> None:
+    engine = await _migrated_engine(db_engine)
+    settings = _settings(
+        test_private_key=test_private_key,
+        PATCHFROG_REVIEW_PROVIDER="openai",
+        PATCHFROG_REVIEW_MODEL="gpt-6-astra",
+        OPENAI_API_KEY="fake-not-real",
+    )
+
+    report = await run_doctor(settings=settings, engine=engine, check_github_auth=False)
+
+    credential_check = next(c for c in report.checks if c.name == "review_provider_credential")
+    assert credential_check.status is DoctorStatus.PASS
+    assert "OPENAI_API_KEY" in credential_check.detail
+
+
+async def test_openai_provider_without_credential_warns(db_engine: AsyncEngine, test_private_key: str) -> None:
+    engine = await _migrated_engine(db_engine)
+    settings = _settings(
+        test_private_key=test_private_key, PATCHFROG_REVIEW_PROVIDER="openai", PATCHFROG_REVIEW_MODEL="gpt-6-astra",
+    )
+
+    report = await run_doctor(settings=settings, engine=engine, check_github_auth=False)
+
+    credential_check = next(c for c in report.checks if c.name == "review_provider_credential")
+    assert credential_check.status is DoctorStatus.WARN
+    assert "OPENAI_API_KEY" in credential_check.detail
+
+
+async def test_openai_provider_never_reports_gemini_credential(db_engine: AsyncEngine, test_private_key: str) -> None:
+    # Regression: the credential check previously collapsed to a binary
+    # anthropic/gemini ternary -- a third provider would have silently
+    # checked (and reported) the wrong env var entirely.
+    engine = await _migrated_engine(db_engine)
+    settings = _settings(
+        test_private_key=test_private_key,
+        PATCHFROG_REVIEW_PROVIDER="openai",
+        PATCHFROG_REVIEW_MODEL="gpt-6-astra",
+        GEMINI_API_KEY="fake-not-real",
+    )
+
+    report = await run_doctor(settings=settings, engine=engine, check_github_auth=False)
+
+    credential_check = next(c for c in report.checks if c.name == "review_provider_credential")
+    assert credential_check.status is DoctorStatus.WARN
+    assert "GEMINI_API_KEY" not in credential_check.detail
 
 
 async def test_no_secret_values_ever_appear_in_report_output(

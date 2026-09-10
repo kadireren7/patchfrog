@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     # Optional: patchfrog.review.provider_factory raises a clear,
     # actionable error only when provider="gemini" is actually requested.
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
+    # Milestone U: same environment-only security model as
+    # anthropic_api_key/gemini_api_key above -- never read from
+    # .patchfrog.yml, never logged, never persisted.
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
 
     # Operator-controlled AI provider/model runtime selection (see
     # patchfrog.review.runtime_config.ReviewRuntimeConfig). Deliberately
@@ -72,6 +76,16 @@ class Settings(BaseSettings):
     review_critic_model: str | None = Field(default=None, alias="PATCHFROG_REVIEW_CRITIC_MODEL")
     review_request_timeout_seconds: float | None = Field(
         default=None, alias="PATCHFROG_REVIEW_REQUEST_TIMEOUT_SECONDS"
+    )
+    # Milestone U (Model Router): operator-controlled routing policy --
+    # see patchfrog.routing. review_provider above remains the preferred/
+    # primary provider family. Both below are optional and, like every
+    # other provider field, never read from .patchfrog.yml.
+    router_fallback_provider: str | None = Field(
+        default=None, alias="PATCHFROG_ROUTER_FALLBACK_PROVIDER"
+    )
+    router_critic_provider: str | None = Field(
+        default=None, alias="PATCHFROG_ROUTER_CRITIC_PROVIDER"
     )
 
     # Operator hard cost/candidate ceilings for the Quality + Cost Guard

@@ -81,6 +81,7 @@ missing:
 |---|---|
 | `ANTHROPIC_API_KEY` | Claude API key. Required when `PATCHFROG_REVIEW_PROVIDER` is `anthropic` (the default). Unset -> `patchfrog.review.provider_factory` raises a clear, actionable error only when a real review is actually requested; nothing silently degrades to a fake provider in production. |
 | `GEMINI_API_KEY` | Google Gemini API key. Required only when `PATCHFROG_REVIEW_PROVIDER` is set to `gemini`. Same fail-closed behavior as `ANTHROPIC_API_KEY` -- unset raises `MissingProviderCredentialsError` only when a Gemini review actually runs. |
+| `OPENAI_API_KEY` | OpenAI API key (Milestone U). Required only when `PATCHFROG_REVIEW_PROVIDER` is set to `openai`, or when configured as a `PATCHFROG_ROUTER_FALLBACK_PROVIDER`/`PATCHFROG_ROUTER_CRITIC_PROVIDER` (see below). Same fail-closed behavior as the other two. |
 
 PatchFrog's provider architecture is deliberately provider-neutral (see
 `patchfrog.review.provider.LLMProvider`) -- deployment configuration
@@ -103,7 +104,7 @@ shared resolver -- they can never diverge):
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `PATCHFROG_REVIEW_PROVIDER` | `anthropic` or `gemini` | `anthropic` |
+| `PATCHFROG_REVIEW_PROVIDER` | `anthropic`, `gemini`, or `openai` | `anthropic` |
 | `PATCHFROG_REVIEW_MODEL` | Reviewer model name | `claude-opus-5` |
 | `PATCHFROG_REVIEW_CRITIC_MODEL` | Critic model name (optional) | same as `PATCHFROG_REVIEW_MODEL` |
 | `PATCHFROG_REVIEW_REQUEST_TIMEOUT_SECONDS` | Per-request timeout, seconds (optional) | `30` (`120` if provider is `gemini`) |
@@ -166,6 +167,27 @@ by `patchfrog.review.config.load_review_config`:
 > `review.provider are no longer repository-controlled. Remove these
 > fields from '.patchfrog.yml' and configure the PatchFrog
 > runtime/operator instead (see docs/deployment.md).`
+
+### Model Router (Milestone U, optional)
+
+Two further environment variables, both optional, both never
+`.patchfrog.yml`-controlled, resolved by `patchfrog.routing.router.ModelRouter`
+-- see `docs/model-routing.md` for the full architecture:
+
+| Variable | Purpose |
+|---|---|
+| `PATCHFROG_ROUTER_FALLBACK_PROVIDER` | A single provider to fall back to if `PATCHFROG_REVIEW_PROVIDER` has no credential configured. Bounded to exactly one hop -- no chain to a further fallback. |
+| `PATCHFROG_ROUTER_CRITIC_PROVIDER` | Explicitly pin the critic role to a specific provider family (must also have its own credential set). If unset and more than one provider is configured, the router auto-selects a different family than the reviewer for family diversity; with only one provider configured, the critic always uses that same family. |
+
+```
+PATCHFROG_REVIEW_PROVIDER=anthropic
+ANTHROPIC_API_KEY=<secret>
+PATCHFROG_ROUTER_CRITIC_PROVIDER=gemini
+GEMINI_API_KEY=<secret>
+```
+
+Omitting both leaves routing exactly as it always was before this
+milestone: one configured provider serves every role.
 
 **Data policy**: Google's Gemini API free tier states that prompts and
 responses may be used to improve Google's products (see Google's current

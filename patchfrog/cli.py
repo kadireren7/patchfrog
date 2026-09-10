@@ -144,7 +144,6 @@ from patchfrog.review.provider import LLMProvider
 from patchfrog.review.provider_factory import (
     MissingProviderCredentialsError,
     build_critic_provider,
-    build_reviewer_provider,
 )
 from patchfrog.review.runtime_config import ReviewRuntimeConfig, resolve_review_runtime_config
 from patchfrog.review.service import (
@@ -156,6 +155,7 @@ from patchfrog.review_memory.config_resolution import resolve_repository_increme
 from patchfrog.review_memory.domain import IncrementalPlan, ReviewMemoryFinding
 from patchfrog.review_memory.queries import ReviewMemoryQueryService
 from patchfrog.review_memory.service import IncrementalReviewMemoryService
+from patchfrog.routing.router import ModelRouter
 from patchfrog.telemetry.beta_summary import BetaSummary, compute_beta_summary, parse_since
 from patchfrog.telemetry.collector import collect_review_telemetry
 from patchfrog.telemetry.reporting import render_markdown_snapshot, snapshot_to_dict
@@ -417,17 +417,16 @@ async def _review_local(
 
         # Provider/model selection is operator/deployment-controlled --
         # resolved from trusted Settings, never from the repository's
-        # config above (see patchfrog.review.runtime_config).
+        # config above (see patchfrog.review.runtime_config,
+        # patchfrog.routing.router).
         runtime_config = resolve_review_runtime_config(settings)
-        reviewer_provider = build_reviewer_provider(runtime_config, settings=settings)
-        critic_provider = build_critic_provider(
-            runtime_config, settings=settings, critic_enabled=config.critic_enabled
+        route_plan = ModelRouter(settings=settings).route(
+            runtime_config=runtime_config, critic_enabled=config.critic_enabled
         )
 
         service = PullRequestReviewService(
             session_factory=session_factory,
-            reviewer_provider=reviewer_provider,
-            critic_provider=critic_provider,
+            route_plan=route_plan,
         )
 
         if not incremental:
@@ -452,6 +451,10 @@ async def _review_local(
         incremental_config = await resolve_repository_incremental_config(
             local=True, commit_sha=commit_sha, repository_full_name=full_name, root_path=repository_path
         )
+        # Every role maps to the same provider instance in v1 (Model
+        # Router routes once per run -- see patchfrog.routing.router);
+        # an arbitrary one is representative for this telemetry field.
+        route_plan_reviewer_identity = next(iter(route_plan.reviewer_providers.values())).identity
         memory_service = IncrementalReviewMemoryService(session_factory=session_factory)
         full_candidates = await memory_service.build_candidates(
             repository_id=repository_id,
@@ -467,8 +470,8 @@ async def _review_local(
             clone_url=str(repository_path),
             token=None,
             current_candidates=full_candidates,
-            reviewer_provider=reviewer_provider.identity.provider,
-            reviewer_model=reviewer_provider.identity.model,
+            reviewer_provider=route_plan_reviewer_identity.provider,
+            reviewer_model=route_plan_reviewer_identity.model,
             incremental_config=incremental_config,
         )
         summary = await service.review_local(

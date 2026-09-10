@@ -47,6 +47,7 @@ deepen scrutiny of a candidate that already has independent evidence.
 | R | Cross-Repo Intelligence |
 | S | Executable Verification + Review Effectiveness Benchmark (S1-S5) |
 | S6 | Production Execution Enablement |
+| T | Agent Handoff / MCP + Fix Verification Loop |
 
 Each is a deterministic, non-LLM evidence layer over the repository/PR graph.
 See `docs/agent-orchestration.md`'s "Intelligence layer ownership" table and
@@ -61,32 +62,18 @@ isolation with real `bwrap`-based filesystem confinement after an empirical
 escape was found and fixed -- see
 `validation/executable_verification/latest-summary.md` sections 3 and 22.
 
+Milestone T (T1-T3) shipped in full -- see `docs/agent-handoff.md` and
+`validation/agent_handoff/latest-summary.md` for the full audit,
+architecture, and exactly what evidence is (and is not) exposed, plus two
+post-implementation security correction rounds (false `FIXED` and false
+`STILL_PRESENT` paths in T3's fix-verification classifier) and a final
+acceptance correction (no evidence must never invoke the LLM fallback).
+
 ## Current — Review Engine
 
-**T — Agent Handoff / MCP**
-
-Goal: hand verified PatchFrog evidence directly to coding agents (Claude
-Code, Codex, Cursor, or other MCP-capable tools) and independently verify
-whether an attempted fix actually resolves the original finding. PatchFrog
-remains verifier/judge, not the patch author -- see `docs/agent-handoff.md`
-and `validation/agent_handoff/latest-summary.md` for the full audit,
-architecture, and exactly what evidence is (and is not) exposed.
-
-- T1 — Finding Handoff Schema (`patchfrog.agent_handoff`) — a bounded,
-  deterministic projection of already-persisted finding evidence, never a
-  second review engine.
-- T2 — MCP Server (`patchfrog.mcp`) — a four-tool, read-mostly, stdio-only
-  surface: `list_findings`, `get_finding_handoff`, `start_fix_attempt`,
-  `get_fix_attempt`. Never writes source code, commits, pushes, or writes
-  to GitHub.
-- T3 — Fix Verification Loop (`patchfrog.fix_verification`) — deterministic-
-  first re-evaluation of one finding against a new exact commit SHA
-  (file-level change detection, static-analyzer re-check, S6 Executable
-  Verification re-run), falling back to one bounded LLM call only when no
-  deterministic signal decides it. `FIXED` is never "the agent says it
-  fixed it."
-
-## Next — Review Engine
+Not yet available today -- implemented on `feat/model-router-merge-readiness`,
+open for review, not yet merged to `main` (see each section's own docs for
+exactly what is and is not implemented).
 
 **U — OpenAI Provider + Model Router**
 
@@ -94,20 +81,38 @@ OpenAI support is deliberately sequenced *after* Executable Verification and
 Agent Handoff: a third provider is less valuable right now than stronger
 empirical verification and agent interoperability.
 
-- U1 — OpenAI provider adapter
-- U2 — model capability registry
-- U3 — deterministic routing
-- U4 — reviewer/critic model-family diversity
-- U5 — disagreement handling / independent verifier
+- U1 — OpenAI provider adapter (`patchfrog.review.providers.openai_provider`)
+  — implemented: official SDK, Responses API, same `LLMProvider` contract as
+  Anthropic/Gemini.
+- U2 — model capability registry (`patchfrog.routing.capabilities`) —
+  implemented, deliberately minimal (structured-output capability only, no
+  marketing-claim cost/reasoning tiers).
+- U3 — deterministic routing (`patchfrog.routing.router.ModelRouter`) —
+  implemented: operator-policy-bounded, once per review run, bounded
+  one-hop fallback.
+- U4 — reviewer/critic model-family diversity — implemented: auto-diversity
+  when more than one provider is configured, never required with one.
+- U5 — disagreement handling / independent verifier — **not implemented**
+  this round; a materially larger, distinct problem from U4's family
+  diversity. See `docs/model-routing.md`'s own "Not implemented this
+  round" section.
+
+See `docs/model-routing.md` for the full architecture and
+`validation/model_router_merge_readiness/latest-summary.md` for the audit.
 
 **V — Merge Readiness / Decision Layer**
 
-Goal: derive explainable outcomes (e.g. `READY` / `BLOCKED` /
+Goal: derive explainable outcomes (`READY` / `BLOCKED` /
 `HUMAN_REVIEW_REQUIRED`) from evidence -- unresolved verified findings,
-contract issues, test evidence, executable verification, historical
-evidence, cross-PR/cross-repo evidence. **Never** an arbitrary numeric risk
-score as the primary decision model; every decision must be explainable back
-to the specific evidence that produced it.
+same-exact-head fix verification, review completeness. **Never** an
+arbitrary numeric risk score; every decision is explainable back to the
+specific evidence that produced it. Implemented: `patchfrog.merge_readiness`
+domain/service (deterministic, recomputed fresh per exact head, never
+persisted/cached), the read-only MCP `get_merge_readiness` tool. The
+GitHub PR Review summary surface is deliberately deferred (see
+`docs/merge-readiness.md`'s own "Exposure surface" section for why). J-R
+Intelligence deliberately never blocks or escalates on its own -- see
+`docs/merge-readiness.md`.
 
 ## Then — Cloud
 

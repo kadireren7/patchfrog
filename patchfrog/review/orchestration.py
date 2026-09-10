@@ -76,7 +76,13 @@ from patchfrog.review.agents.proposal import AgentProposal
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.critic import CriticService
 from patchfrog.review.critic_selection import CriticSelectionInput, CriticSelectionPolicy
-from patchfrog.review.domain import AIReviewFinding, CriticVerdict, TokenUsage, ValidationOutcome
+from patchfrog.review.domain import (
+    AIReviewFinding,
+    CriticVerdict,
+    TokenUsage,
+    ValidatedFinding,
+    ValidationOutcome,
+)
 from patchfrog.review.effort import ReviewEffortDecision, ReviewEffortPolicy
 from patchfrog.review.effort_types import CriticExpectation
 from patchfrog.review.prompt import build_agent_prompt, build_critic_prompt
@@ -160,6 +166,24 @@ class CandidateOrchestrationResult:
     #: candidate in the run for count-only telemetry -- never persisted
     #: raw, never a standalone finding.
     executable_verification_report: ExecutableVerificationReport | None = None
+    #: Milestone U runtime-failover correction: which role(s) actually
+    #: had their bounded one-hop runtime fallback used (the primary
+    #: provider's retry allowance was exhausted, or its response was
+    #: schema-invalid, and a route-plan-configured fallback provider
+    #: stepped in) -- distinct from :attr:`failed_roles`, which is only
+    #: populated when *even the fallback* did not produce a usable
+    #: result. Provenance only; never affects which findings survive.
+    fallback_used_roles: tuple[AgentRole, ...] = ()
+    #: The actual provider family (``LLMProvider.identity.provider``)
+    #: that served each role's *successful* call -- the route plan's own
+    #: ``reviewer_provider_family`` names only the intended primary; this
+    #: is what genuinely executed, which can differ when a role's call
+    #: fell back.
+    executed_provider_by_role: dict[AgentRole, str] = field(default_factory=dict)
+    #: Same distinction as ``fallback_used_roles``/``executed_provider_by_role``,
+    #: for the single critic call this candidate made (if any).
+    critic_fallback_used: bool = False
+    critic_executed_provider: str | None = None
 
 
 def _detect_high_risk_proposal(
@@ -234,9 +258,30 @@ class AgentOrchestrator:
         max_retries: int,
         critic_selection_policy: CriticSelectionPolicy | None = None,
         effort_policy: ReviewEffortPolicy | None = None,
+        reviewer_fallback_providers: Mapping[AgentRole, LLMProvider] | None = None,
+        critic_fallback: CriticService | None = None,
     ) -> None:
+        """``reviewer_fallback_providers``/``critic_fallback`` (Milestone U
+        runtime-failover correction): an optional, distinct provider used
+        for exactly one bounded fallback attempt when the primary
+        provider's bounded retry allowance is exhausted with
+        ``ProviderTransientError``, or the primary's response fails
+        schema validation (``ResponseSchemaError``) -- never for
+        ``ProviderFatalError`` (auth/malformed-request/refusal), which
+        propagates immediately without any fallback attempt (see
+        :meth:`_call_role`'s own docstring for the full policy and why).
+        ``None`` (the default) means no fallback is configured -- a
+        primary failure behaves exactly as it did before this
+        correction. This is config-time-*independent*: it fires only
+        during an actual bounded review call, never when merely
+        *selecting* which provider to use (that is
+        :mod:`patchfrog.routing.router`'s own, separate, config-time
+        concern)."""
+
         self._reviewer_providers = reviewer_providers
+        self._reviewer_fallback_providers = reviewer_fallback_providers
         self._critic = critic
+        self._critic_fallback = critic_fallback
         self._critic_enabled = critic_enabled
         self._max_output_tokens_per_candidate = max_output_tokens_per_candidate
         self._max_retries = max_retries
@@ -321,10 +366,18 @@ class AgentOrchestrator:
                 return CandidateOrchestrationResult(skipped_budget=True)
             budget_state["used_input_tokens"] += combined_estimate
 
+        validation_context = ValidationContext(
+            allowed_file_paths=evidence.allowed_file_paths,
+            context_text=evidence.context_text,
+            diff_excerpt=evidence.diff_excerpt,
+        )
+
         results = await asyncio.gather(
             *(
                 self._call_role(
-                    role, prompts[role], max_output_tokens=role_max_output_tokens, max_retries=role_max_retries
+                    role, prompts[role], max_output_tokens=role_max_output_tokens, max_retries=role_max_retries,
+                    validation_context=validation_context, role_estimate=role_estimates[role],
+                    budget_lock=budget_lock, budget_state=budget_state, max_total_input_tokens=max_total_input_tokens,
                 )
                 for role in selected_roles
             ),
@@ -333,35 +386,29 @@ class AgentOrchestrator:
 
         usage_by_role: dict[AgentRole, TokenUsage] = {}
         failed_roles: list[AgentRole] = []
+        fallback_used_roles: list[AgentRole] = []
+        executed_provider_by_role: dict[AgentRole, str] = {}
         proposals: list[AgentProposal] = []
         retries_consumed = 0
         actual_input_total = 0
         reviewer_latency_ms = 0.0
-        validation_context = ValidationContext(
-            allowed_file_paths=evidence.allowed_file_paths,
-            context_text=evidence.context_text,
-            diff_excerpt=evidence.diff_excerpt,
-        )
 
         for role, outcome in zip(selected_roles, results, strict=True):
             if isinstance(outcome, BaseException):
-                if isinstance(outcome, (ProviderFatalError, ProviderTransientError)):
+                if isinstance(outcome, (ProviderFatalError, ProviderTransientError, ResponseSchemaError)):
                     failed_roles.append(role)
                     log.warning("agent_role_call_failed", role=role.value, error=str(outcome))
                     continue
                 raise outcome
 
-            raw_json, usage, retries_used, latency_ms = outcome
+            validated, usage, retries_used, latency_ms, used_fallback, served_by = outcome
             usage_by_role[role] = usage
+            executed_provider_by_role[role] = served_by
+            if used_fallback:
+                fallback_used_roles.append(role)
             actual_input_total += usage.input_tokens
             retries_consumed += retries_used
             reviewer_latency_ms += latency_ms
-            try:
-                validated = parse_and_validate_response(raw_json, context=validation_context)
-            except ResponseSchemaError as exc:
-                failed_roles.append(role)
-                log.warning("agent_role_response_schema_error", role=role.value, error=str(exc))
-                continue
 
             for v in validated:
                 proposals.append(AgentProposal(role=role, validated=v, reviewer_usage=usage))
@@ -385,6 +432,8 @@ class AgentOrchestrator:
                 failed_roles=tuple(failed_roles),
                 calls_by_role=calls_by_role,
                 retries_consumed=retries_consumed,
+                fallback_used_roles=tuple(fallback_used_roles),
+                executed_provider_by_role=executed_provider_by_role,
             )
 
         proposals_t = tuple(proposals)
@@ -409,18 +458,20 @@ class AgentOrchestrator:
         )
         critic_max_retries = min(self._max_retries, effort_decision.retry_limit)
 
-        proposals_t, critic_calls, critic_retries, verification_report = await self._critique(
-            proposals_t,
-            candidate_evidence=evidence,
-            contradiction_indices=grouping.contradiction_indices,
-            min_final_confidence=min_final_confidence,
-            critic_expectation=effort_decision.critic_expectation,
-            max_retries=critic_max_retries,
-            max_total_input_tokens=max_total_input_tokens,
-            budget_lock=budget_lock,
-            budget_state=budget_state,
-            log=log,
-            executable_verifier=executable_verifier,
+        proposals_t, critic_calls, critic_retries, verification_report, critic_fallback_used, critic_executed_provider = (
+            await self._critique(
+                proposals_t,
+                candidate_evidence=evidence,
+                contradiction_indices=grouping.contradiction_indices,
+                min_final_confidence=min_final_confidence,
+                critic_expectation=effort_decision.critic_expectation,
+                max_retries=critic_max_retries,
+                max_total_input_tokens=max_total_input_tokens,
+                budget_lock=budget_lock,
+                budget_state=budget_state,
+                log=log,
+                executable_verifier=executable_verifier,
+            )
         )
         retries_consumed += critic_retries
         proposals_t = resolve_unresolved_contradictions(
@@ -445,13 +496,68 @@ class AgentOrchestrator:
             effort_decision=effort_decision,
             reviewer_latency_ms=reviewer_latency_ms,
             executable_verification_report=verification_report,
+            fallback_used_roles=tuple(fallback_used_roles),
+            executed_provider_by_role=executed_provider_by_role,
+            critic_fallback_used=critic_fallback_used,
+            critic_executed_provider=critic_executed_provider,
         )
 
     async def _call_role(
-        self, role: AgentRole, prompt: tuple[str, str], *, max_output_tokens: int, max_retries: int
-    ) -> tuple[str, TokenUsage, int, float]:
+        self,
+        role: AgentRole,
+        prompt: tuple[str, str],
+        *,
+        max_output_tokens: int,
+        max_retries: int,
+        validation_context: ValidationContext,
+        role_estimate: int,
+        budget_lock: asyncio.Lock,
+        budget_state: dict[str, int],
+        max_total_input_tokens: int,
+    ) -> tuple[list[ValidatedFinding], TokenUsage, int, float, bool, str]:
+        """Returns ``(validated, usage, retries_used, latency_ms,
+        used_fallback, served_by_provider)`` -- validation now happens
+        *inside* this method (previously the caller's own, separate
+        ``parse_and_validate_response`` call) so a schema-invalid
+        response is eligible for the same bounded one-hop runtime
+        fallback as a transient provider failure (Milestone U
+        runtime-failover correction).
+
+        **Fallback policy** (bounded to exactly one hop, never a chain,
+        never back to the primary):
+
+        - ``ProviderTransientError`` (after the primary's own existing
+          bounded retry allowance, ``max_retries``, is exhausted) ->
+          eligible.
+        - ``ResponseSchemaError`` (the primary responded, but its output
+          did not parse/validate against the schema) -> eligible. This
+          is a provider-compliance issue, not an authorization or
+          request-shape issue -- a structurally different provider may
+          simply honor strict JSON-schema mode differently, and
+          retrying the *same* non-compliant provider with the identical
+          request would not help (which is exactly why it is never
+          retried on the same provider either).
+        - ``ProviderFatalError`` (auth failure, malformed *request*,
+          refusal) -> **never** eligible, propagates immediately. Per
+          this correction's own explicit policy: an auth/config/refusal
+          failure is not safe to blindly retry against a different
+          vendor by default in v1 (see ``docs/model-routing.md``).
+
+        The fallback attempt itself uses ``max_retries=0`` -- a single
+        try, never its own retry loop. Final correction: the budget
+        check-and-reserve is now atomic under ``budget_lock`` (a
+        check-then-later-increment pattern would let two concurrent
+        fallback attempts -- e.g. this run's two specialist roles --
+        both pass a stale check before either actually reserves,
+        overspending the run's budget). The reservation is a *temporary*
+        hold, always fully released before this method returns (success
+        or failure) -- the caller's own existing reconcile-after-actual-
+        usage pass (crediting the original per-role estimate against
+        whichever provider's real usage is returned) already accounts
+        for the fallback's real cost correctly once this temporary hold
+        is gone, so it is never double-counted."""
+
         system_prompt, user_prompt = prompt
-        provider = self._reviewer_providers[role]
         request = ProviderRequest(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -459,19 +565,42 @@ class AgentOrchestrator:
             schema_name=f"review_response:{role.value}",
             max_output_tokens=max_output_tokens,
         )
-        result, retries_used = await call_with_retry(
-            lambda: provider.generate_structured(request), max_retries=max_retries
-        )
-        return (
-            result.raw_json,
-            TokenUsage(
+
+        async def _attempt(provider: LLMProvider) -> tuple[list[ValidatedFinding], TokenUsage, float, str]:
+            result = await provider.generate_structured(request)
+            validated = parse_and_validate_response(result.raw_json, context=validation_context)
+            usage = TokenUsage(
                 input_tokens=result.usage.input_tokens,
                 output_tokens=result.usage.output_tokens,
                 thinking_tokens=result.usage.thinking_tokens,
-            ),
-            retries_used,
-            result.latency_ms,
-        )
+            )
+            return validated, usage, result.latency_ms, provider.identity.provider
+
+        primary = self._reviewer_providers[role]
+        try:
+            (validated, usage, latency_ms, served_by), retries_used = await call_with_retry(
+                lambda: _attempt(primary), max_retries=max_retries
+            )
+            return validated, usage, retries_used, latency_ms, False, served_by
+        except (ProviderTransientError, ResponseSchemaError):
+            fallback = (self._reviewer_fallback_providers or {}).get(role)
+            if fallback is None:
+                raise
+            async with budget_lock:
+                if budget_state["used_input_tokens"] + role_estimate > max_total_input_tokens:
+                    raise
+                budget_state["used_input_tokens"] += role_estimate
+            try:
+                (validated, usage, latency_ms, served_by), _ = await call_with_retry(
+                    lambda: _attempt(fallback), max_retries=0
+                )
+            except BaseException:
+                async with budget_lock:
+                    budget_state["used_input_tokens"] = max(0, budget_state["used_input_tokens"] - role_estimate)
+                raise
+            async with budget_lock:
+                budget_state["used_input_tokens"] = max(0, budget_state["used_input_tokens"] - role_estimate)
+            return validated, usage, max_retries, latency_ms, True, served_by
 
     async def _critique(
         self,
@@ -487,8 +616,9 @@ class AgentOrchestrator:
         budget_state: dict[str, int],
         log: structlog.stdlib.BoundLogger,
         executable_verifier: Callable[[], Awaitable[ExecutableVerificationReport]] | None = None,
-    ) -> tuple[tuple[AgentProposal, ...], int, int, ExecutableVerificationReport | None]:
-        """Returns ``(proposals, critic_calls, retries_consumed, verification_report)``.
+    ) -> tuple[tuple[AgentProposal, ...], int, int, ExecutableVerificationReport | None, bool, str | None]:
+        """Returns ``(proposals, critic_calls, retries_consumed,
+        verification_report, critic_fallback_used, critic_executed_provider)``.
 
         ``executable_verifier`` (Milestone S,
         :mod:`patchfrog.executable_verification`), when given, is a
@@ -510,7 +640,7 @@ class AgentOrchestrator:
         """
 
         if self._critic is None or not self._critic_enabled:
-            return proposals, 0, 0, None
+            return proposals, 0, 0, None, False, None
 
         valid_indices = [
             i for i, p in enumerate(proposals)
@@ -545,7 +675,7 @@ class AgentOrchestrator:
                 to_critique.append(i)
 
         if not to_critique:
-            return proposals, 0, 0, None
+            return proposals, 0, 0, None, False, None
 
         executable_verification_text = ""
         verification_report: ExecutableVerificationReport | None = None
@@ -590,7 +720,7 @@ class AgentOrchestrator:
             reserved_estimates[i] = estimate
 
         if not reserved:
-            return tuple(result), 0, 0, verification_report
+            return tuple(result), 0, 0, verification_report, False, None
 
         verdicts = await asyncio.gather(
             *(
@@ -601,6 +731,10 @@ class AgentOrchestrator:
                     all_proposals=proposals,
                     max_retries=max_retries,
                     executable_verification_text=executable_verification_text,
+                    fallback_estimate=reserved_estimates[i],
+                    budget_lock=budget_lock,
+                    budget_state=budget_state,
+                    max_total_input_tokens=max_total_input_tokens,
                 )
                 for i in reserved
             ),
@@ -610,6 +744,8 @@ class AgentOrchestrator:
         critic_calls = 0
         retries_consumed = 0
         actual_total = 0
+        critic_fallback_used = False
+        critic_executed_provider: str | None = None
         for i, verdict_outcome in zip(reserved, verdicts, strict=True):
             critic_calls += 1
             if isinstance(verdict_outcome, BaseException):
@@ -623,10 +759,13 @@ class AgentOrchestrator:
                     )
                     continue
                 raise verdict_outcome
-            verdict, usage, retries_used = verdict_outcome
+            verdict, usage, retries_used, used_fallback, served_by = verdict_outcome
             retries_consumed += retries_used
             actual_total += usage.input_tokens
             result[i] = result[i].with_critic_verdict(verdict, usage=usage)
+            critic_executed_provider = served_by
+            if used_fallback:
+                critic_fallback_used = True
 
         async with budget_lock:
             total_estimate = sum(reserved_estimates[i] for i in reserved)
@@ -634,7 +773,10 @@ class AgentOrchestrator:
                 0, budget_state["used_input_tokens"] - total_estimate + actual_total
             )
 
-        return tuple(result), critic_calls, retries_consumed, verification_report
+        return (
+            tuple(result), critic_calls, retries_consumed, verification_report,
+            critic_fallback_used, critic_executed_provider,
+        )
 
     async def _critique_one(
         self,
@@ -644,30 +786,83 @@ class AgentOrchestrator:
         contradiction_indices: frozenset[int],
         all_proposals: tuple[AgentProposal, ...],
         max_retries: int,
+        fallback_estimate: int,
+        budget_lock: asyncio.Lock,
+        budget_state: dict[str, int],
+        max_total_input_tokens: int,
         executable_verification_text: str = "",
-    ) -> tuple[CriticVerdict, TokenUsage, int]:
+    ) -> tuple[CriticVerdict, TokenUsage, int, bool, str]:
+        """Returns ``(verdict, usage, retries_used, used_fallback,
+        served_by_provider)``. Same bounded one-hop fallback policy as
+        :meth:`_call_role` -- eligible on ``ProviderTransientError``
+        (after the primary's own retry allowance) or
+        ``ResponseSchemaError`` (``CriticService.critique`` itself
+        raises this for a malformed verdict), never on
+        ``ProviderFatalError``.
+
+        The primary's own cost was already reserved individually,
+        atomically, by the caller *before* this method runs (spec
+        section 15/21). The fallback hop is a genuinely *additional*
+        call, so it gets its own atomic check-and-reserve under the same
+        ``budget_lock`` (final correction: never a separate, non-atomic
+        check that a concurrent critique could race past) --
+        ``fallback_estimate`` is that same original per-proposal
+        estimate, reused as the fallback's own *temporary* reservation
+        size. That temporary hold is always fully released before this
+        method returns, success or failure -- never also credited
+        against ``usage.input_tokens`` here, since the caller's own
+        end-of-batch reconciliation (crediting ``reserved_estimates[i]``
+        against this same returned ``usage.input_tokens``) already
+        accounts for the fallback's real cost correctly once the
+        temporary hold is gone; doing both would double-count it."""
+
         critic = self._critic
         assert critic is not None
         conflicting = _find_conflicting(
             proposal, all_proposals=all_proposals, contradiction_indices=contradiction_indices
         )
 
-        verdict, retries_used = await call_with_retry(
-            lambda: critic.critique(
+        async def _attempt(service: CriticService) -> tuple[CriticVerdict, TokenUsage, str]:
+            verdict = await service.critique(
                 proposal.validated,
                 candidate=candidate_evidence.candidate,
                 context_text=candidate_evidence.context_text,
                 conflicting_finding=conflicting,
                 executable_verification_text=executable_verification_text,
-            ),
-            max_retries=max_retries,
-        )
-        return (
-            verdict,
-            TokenUsage(
+            )
+            usage = TokenUsage(
                 input_tokens=verdict.input_tokens,
                 output_tokens=verdict.output_tokens,
                 thinking_tokens=verdict.thinking_tokens,
-            ),
-            retries_used,
-        )
+            )
+            return verdict, usage, service.identity.provider
+
+        try:
+            (verdict, usage, served_by), retries_used = await call_with_retry(
+                lambda: _attempt(critic), max_retries=max_retries
+            )
+            return verdict, usage, retries_used, False, served_by
+        except (ProviderTransientError, ResponseSchemaError):
+            if self._critic_fallback is None:
+                raise
+            async with budget_lock:
+                if budget_state["used_input_tokens"] + fallback_estimate > max_total_input_tokens:
+                    raise
+                budget_state["used_input_tokens"] += fallback_estimate
+            try:
+                (verdict, usage, served_by), _ = await call_with_retry(
+                    lambda: _attempt(self._critic_fallback), max_retries=0  # type: ignore[arg-type]
+                )
+            except BaseException:
+                async with budget_lock:
+                    budget_state["used_input_tokens"] = max(0, budget_state["used_input_tokens"] - fallback_estimate)
+                raise
+            async with budget_lock:
+                # Release the temporary hold only -- never also add
+                # usage.input_tokens here: the caller's own end-of-batch
+                # reconciliation (crediting reserved_estimates[i] against
+                # this same usage.input_tokens) already accounts for the
+                # fallback's real cost correctly once this hold is gone,
+                # so adding it again here would double-count it.
+                budget_state["used_input_tokens"] = max(0, budget_state["used_input_tokens"] - fallback_estimate)
+            return verdict, usage, max_retries, True, served_by
