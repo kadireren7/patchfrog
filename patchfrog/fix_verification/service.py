@@ -59,10 +59,17 @@ Algorithm (deterministic-first, Part V/W/X/Y/Z/AA):
    both outcomes are only ever weak: a confirmed failure is
    ``SUPPORTS_PRESENT``, a pass is ``SUPPORTS_RESOLVED``.
 5. Combine: any ``CONFIRMS_PRESENT`` signal wins outright ->
-   ``STILL_PRESENT``, unconditionally. Otherwise, only when the surface
-   was safely mapped and a fallback provider is configured, one bounded
-   LLM call (:mod:`patchfrog.fix_verification.critic`) judges the
-   *actual, mapped* current code -- itself instructed to prefer
+   ``STILL_PRESENT``, unconditionally. If none of the three signals
+   carries *any* direction (all ``NO_SIGNAL``), the fallback is never
+   invoked at all -> ``INCONCLUSIVE`` without a provider call, since
+   there is nothing for the model to arbitrate -- the LLM fallback
+   judges *existing* evidence, it does not manufacture a verdict from a
+   mapped code excerpt alone (it must not become an independent second
+   review engine). Otherwise, when at least one weak signal
+   (``SUPPORTS_PRESENT``/``SUPPORTS_RESOLVED``) exists *and* the surface
+   was safely mapped *and* a fallback provider is configured, one
+   bounded LLM call (:mod:`patchfrog.fix_verification.critic`) judges
+   the *actual, mapped* current code -- itself instructed to prefer
    ``inconclusive`` whenever the shown code does not establish
    resolution *or* continued presence with real confidence, and warned
    that the original finding may depend on context not shown to it. No
@@ -639,6 +646,20 @@ class FixVerificationService:
             # future, genuinely finding-specific deterministic proof has
             # somewhere safe to land without a domain change.
             return FixAttemptStatus.FIXED, None, limitations
+
+        has_supporting_signal = any(
+            direction in {FixEvidenceDirection.SUPPORTS_PRESENT, FixEvidenceDirection.SUPPORTS_RESOLVED}
+            for direction in directions
+        )
+        if not has_supporting_signal:
+            # No deterministic check produced any signal at all, in
+            # either direction -- the LLM fallback arbitrates existing
+            # evidence, it does not manufacture a verdict from a mapped
+            # code excerpt alone. Without at least one weak signal there
+            # is nothing to arbitrate, so this must never reach the
+            # provider.
+            limitations.append("no deterministic evidence (weak or strong) was available -- the fallback model was not consulted")
+            return FixAttemptStatus.INCONCLUSIVE, None, limitations
 
         if self._fix_critic_provider is None:
             limitations.append("no fix-verification provider configured -- no deterministic signal was available")

@@ -264,7 +264,11 @@ one of:
 
 Any weak signal, in either direction (or both at once, when they
 conflict), can only ever unlock the bounded LLM fallback -- never skips
-straight to a terminal verdict.
+straight to a terminal verdict. Conversely, if *no* signal exists at all
+(every one of the three checks below comes back `NO_SIGNAL`), the fallback
+is never invoked either -- there is nothing for it to arbitrate, so the
+result is `INCONCLUSIVE` without a provider call (final acceptance
+correction: see step 5 below).
 
 ### Algorithm -- deterministic-first, no unconditional provider call
 
@@ -315,14 +319,21 @@ straight to a terminal verdict.
 5. **Combine.** Any `CONFIRMS_PRESENT` signal wins outright ->
    `STILL_PRESENT`, unconditionally. A `PROVES_RESOLVED` signal (with
    nothing contradicting) -> `FIXED` -- unreachable from steps 2-4 in v1
-   (see above). Otherwise (any combination of `SUPPORTS_PRESENT`/
-   `SUPPORTS_RESOLVED` and/or no signal, including the two conflicting),
-   the bounded LLM fallback runs *only if* the surface was safely mapped
+   (see above). If every one of the three signals is `NO_SIGNAL` -- no
+   static corroboration, no EV eligibility/result, and the surface neither
+   byte-identical nor unchanged -- the LLM fallback is **never invoked at
+   all** -> `INCONCLUSIVE`, with no provider call (final acceptance
+   correction: the fallback arbitrates *existing* evidence, it must never
+   become an independent second review engine that manufactures a verdict
+   from a mapped code excerpt alone when PatchFrog has no finding-specific
+   signal whatsoever). Otherwise -- at least one `SUPPORTS_PRESENT`/
+   `SUPPORTS_RESOLVED` signal exists (including the two conflicting) -- the
+   bounded LLM fallback runs *only if* the surface was also safely mapped
    *and* a fallback provider is configured; its own decision (itself
    instructed to prefer `inconclusive` whenever the shown code doesn't
-   establish resolution *or* continued presence with real confidence,
-   and warned that the original finding may depend on context it cannot
-   see) becomes the result. No safe mapping, no provider, or no decisive
+   establish resolution *or* continued presence with real confidence, and
+   warned that the original finding may depend on context it cannot see)
+   becomes the result. No safe mapping, no provider, or no decisive
    evidence at all -> `INCONCLUSIVE`.
 
 Any infrastructure failure (clone/network/git error) at any point ->

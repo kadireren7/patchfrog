@@ -30,8 +30,9 @@ from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.config.settings import Settings
 from patchfrog.executable_verification.dispatch import VerifierDispatcher
 from patchfrog.executable_verification.sandbox import is_sandbox_available
-from patchfrog.fix_verification.domain import FixAttemptStatus
+from patchfrog.fix_verification.domain import FixAttemptStatus, FixEvidenceDirection
 from patchfrog.fix_verification.service import FixAttemptValidationError, FixVerificationService
+from patchfrog.fix_verification.surface_mapping import MappedSurface, SurfaceMappingStatus
 from patchfrog.indexing.service import RepositoryIndexingService
 from patchfrog.persistence.models.analysis import AnalysisRunModel, AnalysisRunStatus, FindingModel
 from patchfrog.persistence.models.repository import RepositoryModel
@@ -595,6 +596,12 @@ async def test_static_recheck_confirms_still_present(
 async def test_no_deterministic_signal_and_no_provider_is_inconclusive(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
+    """No qualified_name symbol exists in this plain-assignment file at
+    all (so the surface is UNMAPPABLE on top of there being no static/EV
+    signal) -- with no weak evidence and no provider, the "no evidence"
+    gate is what actually resolves this to INCONCLUSIVE, before the
+    mapping/provider checks are even reached."""
+
     _mock_token_route()
     remote = _init_bare_remote(tmp_path)
     original_sha = _push_commit(remote, tmp_path, files={"m.py": "a = 1\nb = 2\n"})
@@ -613,13 +620,54 @@ async def test_no_deterministic_signal_and_no_provider_is_inconclusive(
 
     assert attempt.status == FixAttemptStatus.INCONCLUSIVE
     assert attempt.result is not None
-    assert any("no fix-verification provider configured" in lim for lim in attempt.result.limitations)
+    assert any("no deterministic evidence" in lim for lim in attempt.result.limitations)
 
 
 @respx.mock
-async def test_critic_fallback_used_only_when_no_deterministic_signal(
+async def test_no_evidence_at_all_never_calls_the_provider(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
+    """Final blocker: when every deterministic signal is NO_SIGNAL (no
+    static corroboration, no EV dispatcher, and the flagged surface
+    genuinely changed so "unchanged" doesn't fire either), the LLM
+    fallback must never be invoked at all -- there is nothing for it to
+    arbitrate, and it must not become an independent second review
+    engine. A provider that raises if ever called proves this."""
+
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    original = "def f():\n    a = 1\n    b = 2\n    return a + b\n"
+    candidate = "def f():\n    a = 1\n    b = 3\n    return a + b\n"
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": original})
+    candidate_sha = _push_commit(remote, tmp_path, files={"m.py": candidate})
+
+    repository = await _make_repository(session_factory, "acme/widgets")
+    finding_id = await _stage_finding(
+        session_factory, repository_id=repository.id, commit_sha=original_sha, start_line=1, end_line=4,
+    )
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    provider = FakeLLMProvider([])  # exhausted -- raises if ever called
+    async with session_factory() as session:
+        attempt = await _service(remote=remote, fix_critic_provider=provider).start_fix_attempt(
+            session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
+        )
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+    assert provider.calls == []
+    assert attempt.result is not None
+    assert any("no deterministic evidence" in lim for lim in attempt.result.limitations)
+
+
+@pytest.mark.parametrize("scripted_decision", ["fixed", "still_present"])
+@respx.mock
+async def test_no_evidence_at_all_stays_inconclusive_regardless_of_what_the_provider_would_say(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, scripted_decision: str
+) -> None:
+    """Even a provider scripted to answer as confidently as possible in
+    either direction must never be consulted -- and so never gets a
+    chance to decide -- when there is no deterministic evidence at all."""
+
     _mock_token_route()
     remote = _init_bare_remote(tmp_path)
     original = "def f():\n    a = 1\n    b = 2\n    return a + b\n"
@@ -634,15 +682,15 @@ async def test_critic_fallback_used_only_when_no_deterministic_signal(
     handoff = await _build_handoff(session_factory, finding_id=finding_id)
 
     provider = FakeLLMProvider(
-        [ScriptedResponse(raw_json=json.dumps({"decision": "fixed", "reasoning_summary": "value corrected"}))]
+        [ScriptedResponse(raw_json=json.dumps({"decision": scripted_decision, "reasoning_summary": "n/a"}))]
     )
     async with session_factory() as session:
         attempt = await _service(remote=remote, fix_critic_provider=provider).start_fix_attempt(
             session, handoff=handoff, candidate_fix_commit_sha=candidate_sha
         )
 
-    assert attempt.status == FixAttemptStatus.FIXED
-    assert len(provider.calls) == 1
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+    assert provider.calls == []
 
 
 @respx.mock
@@ -886,7 +934,14 @@ async def test_unmapped_surface_never_asks_the_llm(
 ) -> None:
     """Blocker 2 / LLM fallback gate: when the original symbol cannot be
     safely mapped to the candidate head, the fallback model must never be
-    invoked at all -- not invoked-and-ignored, never invoked."""
+    invoked at all -- not invoked-and-ignored, never invoked. In this
+    scenario there is also no other deterministic evidence at all, so the
+    final blocker's earlier "no evidence" gate is what actually stops it
+    first -- either way, the outcome the test cares about (the LLM is
+    never asked) holds. See
+    test_no_evidence_with_weak_signal_and_unmappable_surface_never_asks_the_llm
+    for the case where a weak signal exists but the surface is still
+    unmapped."""
 
     _mock_token_route()
     remote = _init_bare_remote(tmp_path)
@@ -905,8 +960,6 @@ async def test_unmapped_surface_never_asks_the_llm(
 
     assert attempt.status == FixAttemptStatus.INCONCLUSIVE
     assert provider.calls == []
-    assert attempt.result is not None
-    assert any("could not be safely mapped" in lim for lim in attempt.result.limitations)
 
 
 async def test_analyzer_unavailable_is_inconclusive_not_fixed(
@@ -1253,25 +1306,134 @@ async def test_weak_present_and_weak_resolved_conflict_forces_no_terminal_verdic
     assert any("supporting evidence only" in e for e in attempt.result.deterministic_evidence)
 
 
+@pytest.mark.skipif(not _ev_infra_available, reason="bwrap sandbox and/or Redis not available on this host")
+@respx.mock
+async def test_weak_present_and_weak_resolved_conflict_with_provider_configured_unlocks_fallback(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, staging_root: Path,
+    verifier_worker: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same two-conflicting-weak-signals scenario as above, but this
+    time a provider *is* configured -- since at least one weak signal
+    exists (in fact two, conflicting), the fallback is legitimately
+    unlocked and its own judgment is what decides the outcome, exactly as
+    it would for a single weak signal."""
+
+    monkeypatch.setenv("VERIFICATION_SNAPSHOT_ROOT", str(staging_root))
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    weak_test = "from src import add\n\n\ndef test_add():\n    assert add(0, 0) == 0\n"
+    work = tmp_path / f"ev-work-{uuid.uuid4()}"
+    run_git(["clone", "--quiet", str(remote), str(work)])
+    init_git_repo_config(work)
+    (work / "src.py").write_text(_EV_SOURCE_BUGGY)
+    (work / "test_src.py").write_text(weak_test)
+    original_sha = commit_and_push(work, remote, "add src + weak test")
+
+    repository = await _make_repository(session_factory, "acme/widgets")
+    await RepositoryIndexingService(session_factory=session_factory).index_local_repository(
+        repository_id=repository.id, root_path=work, repository_full_name=repository.full_name,
+    )
+    async with session_factory() as session:
+        index = await RepositoryIndexRepository().get_active(session, repository_id=repository.id)
+        assert index is not None
+    finding_id = await _stage_finding(
+        session_factory, repository_id=repository.id, commit_sha=original_sha,
+        file_path="src.py", start_line=1, end_line=2,
+    )
+    async with session_factory() as session:
+        finding = await session.get(AIFindingModel, finding_id)
+        assert finding is not None
+        run = await session.get(ReviewRunModel, finding.review_run_id)
+        assert run is not None
+        run.repository_index_id = index.id
+        candidate = await session.get(ReviewCandidateModel, finding.candidate_id)
+        assert candidate is not None
+        candidate.qualified_name = "add"
+        candidate.symbol_name = "add"
+        await session.commit()
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    dispatcher = VerifierDispatcher(celery_app=_ev_producer_app(), wait_timeout_seconds=20.0)
+    provider = FakeLLMProvider(
+        [ScriptedResponse(raw_json=json.dumps({"decision": "still_present", "reasoning_summary": "the subtraction bug is untouched"}))]
+    )
+    async with session_factory() as session:
+        attempt = await _service(
+            remote=remote, verifier_dispatcher=dispatcher, fix_critic_provider=provider,
+        ).start_fix_attempt(session, handoff=handoff, candidate_fix_commit_sha=original_sha)
+
+    assert attempt.status == FixAttemptStatus.STILL_PRESENT
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.skipif(not _ev_infra_available, reason="bwrap sandbox and/or Redis not available on this host")
+@respx.mock
+async def test_weak_signal_with_unmappable_surface_never_asks_the_llm(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path, staging_root: Path,
+    verifier_worker: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Final blocker's "no evidence" gate and Blocker 2's mapping-safety
+    gate are two independent protections -- this proves the mapping gate
+    still holds even when a real weak signal exists. The candidate head
+    renames the flagged function *and* updates the companion test to
+    match (so the test still collects and runs, still fails, a genuine
+    EV CONFIRMED_FAILURE / SUPPORTS_PRESENT weak signal) -- but the
+    original `add` symbol no longer exists anywhere in the file by
+    identity or by content-hash, so it cannot be safely mapped, and the
+    LLM fallback must never be invoked."""
+
+    monkeypatch.setenv("VERIFICATION_SNAPSHOT_ROOT", str(staging_root))
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    _repository_id, finding_id, _original_sha = await _stage_ev_finding(
+        session_factory, tmp_path=tmp_path, remote=remote, source=_EV_SOURCE_BUGGY,
+    )
+    # Renamed (and re-commented, so content-hash matching also can't find
+    # it) to `plus`, with the companion test updated to match and still
+    # genuinely failing -- a real weak EV signal with no safe mapping for
+    # the original `add` symbol anywhere in this file.
+    candidate_sha = _push_commit(
+        remote, tmp_path,
+        files={
+            "src.py": "def plus(a, b):\n    return a - b  # renamed, still buggy\n",
+            "test_src.py": "from src import plus\n\n\ndef test_plus():\n    assert plus(2, 3) == 5\n",
+        },
+    )
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    dispatcher = VerifierDispatcher(celery_app=_ev_producer_app(), wait_timeout_seconds=20.0)
+    provider = FakeLLMProvider([])  # exhausted -- raises if ever called
+    async with session_factory() as session:
+        attempt = await _service(
+            remote=remote, verifier_dispatcher=dispatcher, fix_critic_provider=provider,
+        ).start_fix_attempt(session, handoff=handoff, candidate_fix_commit_sha=candidate_sha)
+
+    assert attempt.status == FixAttemptStatus.INCONCLUSIVE
+    assert provider.calls == []
+    assert attempt.result is not None
+    assert any("could not be safely mapped" in lim for lim in attempt.result.limitations)
+
+
 @respx.mock
 async def test_llm_decides_inconclusive_when_context_is_insufficient(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
-    """A safely mapped surface does not guarantee the LLM fallback can
-    actually decide -- when it says inconclusive (e.g. because the shown
-    excerpt alone cannot establish resolution), the fix attempt honestly
-    reports INCONCLUSIVE, never forced to a terminal verdict."""
+    """A weak signal that legitimately unlocks the fallback (the static
+    rule no longer firing at the mapped surface) does not guarantee the
+    LLM can actually decide -- when it says inconclusive (e.g. because the
+    shown excerpt alone cannot establish resolution), the fix attempt
+    honestly reports INCONCLUSIVE, never forced to a terminal verdict."""
 
     _mock_token_route()
     remote = _init_bare_remote(tmp_path)
-    original = "def f():\n    a = 1\n    b = 2\n    return a + b\n"
-    candidate = "def f():\n    a = 1\n    b = 3\n    return a + b\n"
-    original_sha = _push_commit(remote, tmp_path, files={"m.py": original})
-    candidate_sha = _push_commit(remote, tmp_path, files={"m.py": candidate})
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE})
+    candidate_sha = _push_commit(remote, tmp_path, files={"m.py": _FIXED_MODULE})
 
+    static_finding = await _make_static_finding(session_factory, file_path="m.py", start_line=2, end_line=2)
     repository = await _make_repository(session_factory, "acme/widgets")
     finding_id = await _stage_finding(
-        session_factory, repository_id=repository.id, commit_sha=original_sha, start_line=1, end_line=4,
+        session_factory, repository_id=repository.id, commit_sha=original_sha,
+        corroborated_by_static=True, static_finding=static_finding,
     )
     handoff = await _build_handoff(session_factory, finding_id=finding_id)
 
@@ -1305,3 +1467,41 @@ def test_no_code_path_produces_proves_resolved_in_v1() -> None:
     ev_source = inspect.getsource(FixVerificationService._ev_signal)
     assert "PROVES_RESOLVED" not in static_source
     assert "PROVES_RESOLVED" not in ev_source
+
+
+@respx.mock
+async def test_proves_resolved_reaches_fixed_without_a_provider_call(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Unit-level proof of _classify's own PROVES_RESOLVED handling,
+    exercised directly since no current signal can ever actually produce
+    it (see test_no_code_path_produces_proves_resolved_in_v1). If a
+    future milestone ever gives static or EV re-check genuinely
+    finding-specific deterministic proof of resolution, this is the
+    contract that path must honor: strong resolved evidence reaches FIXED
+    deterministically, without ever consulting the fallback model -- a
+    provider that raises if ever called proves this."""
+
+    _mock_token_route()
+    remote = _init_bare_remote(tmp_path)
+    original_sha = _push_commit(remote, tmp_path, files={"m.py": _UNDEFINED_NAME_MODULE})
+    repository = await _make_repository(session_factory, "acme/widgets")
+    finding_id = await _stage_finding(session_factory, repository_id=repository.id, commit_sha=original_sha)
+    handoff = await _build_handoff(session_factory, finding_id=finding_id)
+
+    provider = FakeLLMProvider([])  # exhausted -- raises if ever called
+    service = _service(remote=remote, fix_critic_provider=provider)
+    status, remaining_issue, limitations = await service._classify(
+        static_direction=FixEvidenceDirection.NO_SIGNAL,
+        ev_direction=FixEvidenceDirection.PROVES_RESOLVED,
+        unchanged_direction=FixEvidenceDirection.NO_SIGNAL,
+        handoff=handoff,
+        mapped_surface=MappedSurface(status=SurfaceMappingStatus.UNMAPPABLE),
+        checkout_path=tmp_path,
+        evidence=[],
+    )
+
+    assert status == FixAttemptStatus.FIXED
+    assert remaining_issue is None
+    assert provider.calls == []
+    assert isinstance(limitations, list)

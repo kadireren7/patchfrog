@@ -624,9 +624,110 @@ unreachable from any current code path. 32/32 pass in
 `test_fix_verification_corpus.py`; 112 total across every T1/T2/T3 test
 file touched by this correction.
 
-### 7.7 Controlled false-terminal-verdict corpus result
+### 7.7 Controlled false-terminal-verdict corpus result (round 2)
 
 Across the full `test_fix_verification_corpus.py` adversarial suite (32
 cases spanning both correction rounds): **false FIXED = 0, false
 STILL_PRESENT = 0.** This is a controlled-corpus result, not a claim
 about real-world AI findings in general.
+
+## 8. Final acceptance correction: no evidence must not invoke the LLM
+
+Round 2 (section 7) fixed the *strength* of individual signals but left
+one gap in the combination logic itself: `_classify` checked for strong
+evidence (`CONFIRMS_PRESENT`/`PROVES_RESOLVED`), then fell straight
+through to "is a provider configured and is the surface safely mapped" --
+with no check that *any* signal, weak or strong, existed at all. So when
+`static_direction`, `ev_direction`, and `unchanged_direction` were all
+`NO_SIGNAL` (no static corroboration, no EV eligibility/result, and the
+surface neither byte-identical nor unchanged -- e.g. an unrelated
+variable inside the same function body changed), a configured provider
+with a safely-mapped surface was still consulted, and the LLM's own
+answer -- `fixed` or `still_present` -- became the terminal verdict
+despite PatchFrog having zero finding-specific deterministic evidence.
+This contradicted the documented evidence lattice (`NO EVIDENCE ->
+INCONCLUSIVE`) and, more importantly, let the fallback become exactly
+what Milestone T's own product rule forbids: an independent second
+review engine that can manufacture a fix-verification verdict from a
+mapped code excerpt alone.
+
+### 8.1 Fix
+
+`FixVerificationService._classify` (`patchfrog/fix_verification/service.py`)
+now computes `has_supporting_signal` explicitly (type-safe, not
+truthiness) immediately after the two strong-evidence checks:
+
+```python
+has_supporting_signal = any(
+    direction in {FixEvidenceDirection.SUPPORTS_PRESENT, FixEvidenceDirection.SUPPORTS_RESOLVED}
+    for direction in directions
+)
+if not has_supporting_signal:
+    return FixAttemptStatus.INCONCLUSIVE, None, limitations
+```
+
+placed *before* the provider-configured and safe-mapping checks, so a
+provider is structurally never called when there is no weak or strong
+evidence at all -- verified by a `FakeLLMProvider([])` (raises if ever
+called) in every "no evidence" test below, not merely asserting on the
+returned status.
+
+### 8.2 Corrected evidence lattice
+
+- strong present (`CONFIRMS_PRESENT`) -> `STILL_PRESENT`, no provider call.
+- strong resolved (`PROVES_RESOLVED`) -> `FIXED`, no provider call
+  (unreachable from any current signal in v1, see 7.3/8.4).
+- weak evidence (`SUPPORTS_PRESENT` and/or `SUPPORTS_RESOLVED`, including
+  both at once when conflicting) + safely mapped surface + provider
+  configured -> exactly one bounded LLM judgment decides the result.
+- weak evidence but no provider configured -> `INCONCLUSIVE`.
+- weak evidence but the surface is unsafe/unmapped -> `INCONCLUSIVE`, no
+  provider call.
+- **no evidence at all (`NO_SIGNAL`/`NO_SIGNAL`/`NO_SIGNAL`) ->
+  `INCONCLUSIVE`, no provider call, regardless of provider configuration
+  or mapping safety.**
+
+### 8.3 New/updated tests
+
+`tests/integration/test_fix_verification_corpus.py`: renamed
+`test_critic_fallback_used_only_when_no_deterministic_signal` (which was
+itself the exact reproduction of this bug -- it asserted the provider
+*was* called and its answer became the verdict, with zero deterministic
+signal present) into `test_no_evidence_at_all_never_calls_the_provider`
+(asserts `INCONCLUSIVE` + `provider.calls == []`), plus a parametrized
+`test_no_evidence_at_all_stays_inconclusive_regardless_of_what_the_provider_would_say`
+(`fixed`/`still_present` scripted decisions, both still never consulted).
+Added `test_weak_present_and_weak_resolved_conflict_with_provider_configured_unlocks_fallback`
+(the mirror of 7's no-provider case: the *same* conflicting-weak-signals
+scenario, but with a provider configured, correctly does run the
+fallback). Added `test_weak_signal_with_unmappable_surface_never_asks_the_llm`
+(a real EV `CONFIRMED_FAILURE` weak signal exists, but the flagged symbol
+is renamed with no content-hash match either -- proves the mapping-safety
+gate and the no-evidence gate are two independent protections, not one
+subsuming the other). Added `test_proves_resolved_reaches_fixed_without_a_provider_call`
+(direct unit-style call into `_classify` with a fabricated
+`PROVES_RESOLVED` direction, since no real signal can produce one --
+documents the contract a future genuinely-deterministic resolution proof
+must honor). Fixed two pre-existing tests whose scenarios had zero
+deterministic signal but asserted on the old (now-superseded) later-stage
+limitation message: `test_no_deterministic_signal_and_no_provider_is_inconclusive`
+and `test_unmapped_surface_never_asks_the_llm` (both still correctly
+resolve to `INCONCLUSIVE` with no provider call -- only *which* gate
+catches them, and the exact limitation string, changed). Fixed
+`test_llm_decides_inconclusive_when_context_is_insufficient`, which
+previously relied on the same zero-signal bug to reach the LLM at all --
+now uses a genuine weak signal (static rule absent at the mapped surface)
+to legitimately unlock the fallback, whose own answer is still
+`inconclusive`.
+
+37/37 pass in `test_fix_verification_corpus.py` (32 baseline + 6 new - 1
+renamed-away = 37); 2223 total across the full suite.
+
+### 8.4 Docs/PR body agreement
+
+`docs/agent-handoff.md`'s T3 "Combine" step (previously already stating
+`NO EVIDENCE -> INCONCLUSIVE` in prose without the implementation
+actually enforcing it) is now updated to explicitly describe the
+no-provider-call guarantee. PR #53's body already stated the intended
+final semantics; this correction makes the implementation match what was
+already documented, rather than the other way around.
