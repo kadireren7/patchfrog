@@ -36,6 +36,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from apps.worker.celery_app import celery_app
 from apps.worker.tasks.run_review_pipeline import run_review_pipeline_task
 from patchfrog.analysis.domain import AnalysisRunSummary
 from patchfrog.analysis.service import StaleIndexError, StaticAnalysisService
@@ -77,6 +78,7 @@ from patchfrog.evaluation.runner import (
     build_evaluation_identity,
     oracle_reviewer_provider_factory,
 )
+from patchfrog.executable_verification.dispatch import VerifierDispatcher
 from patchfrog.feedback.domain import FeedbackEvent, FeedbackEventType, FindingFeedbackSummary
 from patchfrog.feedback.export import build_export_records, write_jsonl
 from patchfrog.feedback.metrics import (
@@ -89,6 +91,7 @@ from patchfrog.github.auth import InstallationTokenProvider
 from patchfrog.github.client import GitHubClient
 from patchfrog.indexing.models import IndexingSummary
 from patchfrog.indexing.service import RepositoryIndexingService
+from patchfrog.mcp.server import PatchFrogMCPServer
 from patchfrog.ops.doctor import DoctorReport, run_doctor
 from patchfrog.ops.health import check_readiness
 from patchfrog.ops.preflight import PreflightOutcome, run_preflight
@@ -2043,6 +2046,51 @@ def _run_eval_update_baseline(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _mcp_serve(settings: Settings) -> None:
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+
+    # Milestone T reuses the exact same S6 verifier boundary normal
+    # review already uses -- only when the operator has explicitly opted
+    # in (settings.verifier_enabled, default False); this process never
+    # imports apps.verifier's own task module either way, so it never
+    # needs any of the verifier's own credentials.
+    verifier_dispatcher = (
+        VerifierDispatcher(celery_app=celery_app, wait_timeout_seconds=settings.verifier_wait_timeout_seconds)
+        if settings.verifier_enabled
+        else None
+    )
+
+    # Reuses the exact same operator-configured critic provider/model as
+    # normal review (Part AA: no new provider config surface for fix
+    # verification) -- absent credentials means no LLM fallback is
+    # available, never a crash: T3's own algorithm already treats a
+    # missing provider as "fall back to INCONCLUSIVE," exactly like a
+    # normal review's critic_enabled=False already means "no critic
+    # verdict," not a failure.
+    fix_critic_provider: LLMProvider | None = None
+    try:
+        runtime_config = resolve_review_runtime_config(settings)
+        fix_critic_provider = build_critic_provider(runtime_config, settings=settings, critic_enabled=True)
+    except (ValueError, MissingProviderCredentialsError):
+        fix_critic_provider = None
+
+    server = PatchFrogMCPServer(
+        session_factory=session_factory,
+        settings=settings,
+        verifier_dispatcher=verifier_dispatcher,
+        fix_critic_provider=fix_critic_provider,
+    )
+    await server.run_stdio()
+
+
+def _run_mcp_serve(args: argparse.Namespace) -> int:
+    del args
+    settings = get_settings()
+    asyncio.run(_mcp_serve(settings))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="patchfrog.cli")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2390,6 +2438,20 @@ def main(argv: list[str] | None = None) -> int:
     eval_update_baseline_parser.add_argument("--input", default=None, help="JSON report path (default: evaluation_baselines/latest_run.json)")
     eval_update_baseline_parser.add_argument("--baseline", default=None, help="Baseline path (default: evaluation_baselines/phase8_baseline.json)")
 
+    mcp_parser = subparsers.add_parser(
+        "mcp", help="Milestone T: Agent Handoff MCP server (patchfrog.mcp) -- stdio only"
+    )
+    mcp_subparsers = mcp_parser.add_subparsers(dest="mcp_command", required=True)
+    mcp_subparsers.add_parser(
+        "serve",
+        help=(
+            "Run the PatchFrog MCP server over stdio. Read-mostly: exposes already-persisted "
+            "findings as bounded handoffs and independently verifies fix attempts; never writes "
+            "source code, commits, or GitHub. Access inherits this process's own local user and "
+            "database credentials -- see docs/agent-handoff.md for the full trust model."
+        ),
+    )
+
     args = parser.parse_args(argv)
     if args.command == "index":
         return _run_index(args)
@@ -2422,6 +2484,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_eval_report(args)
         if args.eval_command == "update-baseline":
             return _run_eval_update_baseline(args)
+    if args.command == "mcp" and args.mcp_command == "serve":
+        return _run_mcp_serve(args)
 
     return 1
 

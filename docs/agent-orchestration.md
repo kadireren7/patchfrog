@@ -303,3 +303,13 @@ funnel (`compute_role_funnel`), so "is Security producing more
 unsupported claims than Correctness?" is answerable directly from
 already-persisted data -- never by re-deriving it from raw provider call
 logs.
+
+**Not to be confused with `docs/agent-handoff.md` (Milestone T).** "Agent
+Orchestration" (this document) describes PatchFrog's own internal
+specialist roles (Correctness/Security) that produce findings during a
+review. "Agent Handoff" describes a completely separate, later concept:
+exposing an already-finished finding to an *external* coding agent (Claude
+Code, Codex, Cursor, ...) so it can attempt a fix, and independently
+verifying that attempt. Milestone T adds no new `AgentRole`, no new
+specialist, and no new review-time agent -- see that document's own
+"What Agent Handoff is not" section.

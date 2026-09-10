@@ -46,6 +46,7 @@ deepen scrutiny of a candidate that already has independent evidence.
 | Q | Cross-PR Intelligence |
 | R | Cross-Repo Intelligence |
 | S | Executable Verification + Review Effectiveness Benchmark (S1-S5) |
+| S6 | Production Execution Enablement |
 
 Each is a deterministic, non-LLM evidence layer over the repository/PR graph.
 See `docs/agent-orchestration.md`'s "Intelligence layer ownership" table and
@@ -62,31 +63,30 @@ escape was found and fixed -- see
 
 ## Current — Review Engine
 
-**S6 — Production Execution Enablement**
-
-Milestone S's hardened sandbox correctly refuses to run at all under
-PatchFrog's default self-hosted Docker deployment (the container's own
-security profile blocks the namespaces `bwrap` needs) -- safe, but
-operationally incomplete. S6 splits the review worker (trusted: GitHub App
-key, provider keys, DB) from a separate, credential-minimal verifier
-process that actually executes hostile test code, connected by a narrow,
-independently-versioned request/result protocol over the existing Celery/
-Redis queue. See `validation/production_execution/latest-summary.md` for
-the full trust-boundary audit, architecture options considered, and exactly
-which deployment shape this milestone could and could not validate
-end-to-end.
-
-## Next — Review Engine
-
 **T — Agent Handoff / MCP**
 
 Goal: hand verified PatchFrog evidence directly to coding agents (Claude
-Code, Codex, Cursor, or other MCP-capable tools). PatchFrog remains
-verifier/judge, not necessarily the patch author.
+Code, Codex, Cursor, or other MCP-capable tools) and independently verify
+whether an attempted fix actually resolves the original finding. PatchFrog
+remains verifier/judge, not the patch author -- see `docs/agent-handoff.md`
+and `validation/agent_handoff/latest-summary.md` for the full audit,
+architecture, and exactly what evidence is (and is not) exposed.
 
-- T1 — Finding Handoff Schema
-- T2 — MCP Server
-- T3 — Fix Verification Loop
+- T1 — Finding Handoff Schema (`patchfrog.agent_handoff`) — a bounded,
+  deterministic projection of already-persisted finding evidence, never a
+  second review engine.
+- T2 — MCP Server (`patchfrog.mcp`) — a four-tool, read-mostly, stdio-only
+  surface: `list_findings`, `get_finding_handoff`, `start_fix_attempt`,
+  `get_fix_attempt`. Never writes source code, commits, pushes, or writes
+  to GitHub.
+- T3 — Fix Verification Loop (`patchfrog.fix_verification`) — deterministic-
+  first re-evaluation of one finding against a new exact commit SHA
+  (file-level change detection, static-analyzer re-check, S6 Executable
+  Verification re-run), falling back to one bounded LLM call only when no
+  deterministic signal decides it. `FIXED` is never "the agent says it
+  fixed it."
+
+## Next — Review Engine
 
 **U — OpenAI Provider + Model Router**
 

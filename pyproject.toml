@@ -47,6 +47,13 @@ dependencies = [
     # (patchfrog.ops.metrics) -- the standard client library, never a
     # hand-rolled text-format exporter.
     "prometheus-client>=0.21,<1.0",
+    # Agent Handoff / MCP (Milestone T): the official Model Context
+    # Protocol Python SDK (patchfrog.mcp), stdio server only. Already
+    # present transitively via semgrep's own dependency in this dev
+    # environment (installed 1.29.0) but not previously declared as a
+    # first-class PatchFrog dependency -- pinned to the already-vetted
+    # 1.x line deliberately, not the newer, unaudited 2.x line.
+    "mcp>=1.29,<2.0",
 ]
 
 [project.optional-dependencies]

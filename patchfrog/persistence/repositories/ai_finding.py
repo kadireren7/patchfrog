@@ -61,3 +61,10 @@ class AIFindingRepository:
             .order_by(AIFindingModel.file_path, AIFindingModel.start_line)
         )
         return list(result.scalars().all())
+
+    async def get_by_id(self, session: AsyncSession, *, finding_id: uuid.UUID) -> AIFindingModel | None:
+        """Milestone T (Agent Handoff): the one place a single persisted
+        finding is looked up by its own id, rather than as part of a
+        whole run's list -- see :mod:`patchfrog.agent_handoff.service`."""
+
+        return await session.get(AIFindingModel, finding_id)
