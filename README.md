@@ -93,4 +93,4 @@ See [`docs/brand.md`](docs/brand.md) for identity/tone guidelines and asset usag
 
 ## License
 
-[Elastic License 2.0](LICENSE) (source available). See [`docs/licensing.md`](docs/licensing.md) for what changed from this repository's earlier Apache-2.0 releases (not retroactive) and what ELv2 means in practice, and [`TRADEMARK.md`](TRADEMARK.md) for name/logo/bot-identity usage.
+PatchFrog is source-available under the [Elastic License 2.0](LICENSE) (ELv2) -- you can read the code and self-host it under the license's terms. See [`docs/licensing.md`](docs/licensing.md) for what ELv2 means in practice, and [`TRADEMARK.md`](TRADEMARK.md) for name/logo/bot-identity usage. **PatchFrog Cloud** is the hosted product for teams who'd rather not run their own infrastructure.

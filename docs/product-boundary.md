@@ -147,43 +147,58 @@ PatchFrog as a hosted SaaS business, it belongs in the private Cloud control
 plane.**
 
 - **Public**: `kadireren7/patchfrog` (this repository).
-- **Future private**: `kadireren7/patchfrog-cloud` -- **not created yet**.
-  Cloud implementation must never be added under `patchfrog/cloud/` in this
-  repository, and the private repository must not be created without an
-  explicit instruction to do so.
-- **Cloud consumes the engine; it never forks or duplicates it.** Cloud is
-  expected to depend on this engine (as a library/internal API boundary),
-  never to reimplement a second review pipeline, a second Intelligence
-  layer, or a second Quality + Cost Guard. Engine decisions (how a PR is
-  reviewed) stay owned by this repository even once Cloud exists.
+- **Private**: `kadireren7/patchfrog-cloud` -- created; Milestone W (Cloud
+  Foundation) and X (Private Beta) are under development there. Cloud
+  implementation must never be added under `patchfrog/cloud/` in this
+  repository -- it lives exclusively in the private repository.
+- **Cloud consumes the engine; it never forks or duplicates it.** Cloud
+  depends on this engine as a pinned library dependency (a tagged/pinned
+  `main` commit of `kadireren7/patchfrog`), calling the engine's existing
+  services (webhook signature verification, installation sync, PR
+  ingestion, review pipeline, Merge Readiness) directly rather than
+  reimplementing a second review pipeline, a second Intelligence layer, or
+  a second Quality + Cost Guard. Engine decisions (how a PR is reviewed)
+  stay owned by this repository even now that Cloud exists. Cloud's own
+  tables (accounts, workspaces, installation ownership, usage/quota) are
+  additive: they reference the engine's own GitHub-identifier space
+  (`github_installation_id`, `github_repository_id`) rather than
+  duplicating the engine's own installation/repository/review-run rows.
 
 The following newer engine components extend this same split:
 
-- **Generic model router** (planned, Milestone U): the routing *algorithm*
-  (how to pick a provider/model given a declared policy) may live in this
-  engine. Cloud's own *production* routing configuration -- provider
-  weights, rollout percentages, experiment assignment, provider-health
-  state, Cloud fallback policy -- is Cloud-only and never enters this
-  repository, even as sample configuration.
-- **Executable Verification engine** (Milestone S, extended by S6): the
-  verification domain, eligibility rules, adapters, sandbox interface,
-  deterministic execution policy, result classification, the separate
-  credential-minimal verifier process (`apps/verifier/`), and its
+- **Generic model router** (Milestone U, shipped): the routing *algorithm*
+  (how to pick a provider/model given a declared policy) lives in this
+  engine (`patchfrog.routing`). Cloud's own *production* routing
+  configuration -- provider weights, rollout percentages, experiment
+  assignment, provider-health state, Cloud fallback policy -- is Cloud-only
+  and never enters this repository, even as sample configuration.
+- **Executable Verification engine** (Milestone S, extended by S6,
+  shipped): the verification domain, eligibility rules, adapters, sandbox
+  interface, deterministic execution policy, result classification, the
+  separate credential-minimal verifier process (`apps/verifier/`), and its
   request/result protocol (`patchfrog.executable_verification.protocol`)
-  are all source-available. A future Cloud may own the *production*
-  sandbox fleet: verifier autoscaling, container/job orchestration,
-  isolation infrastructure configuration (e.g. a nested-sandboxing-capable
-  runtime), Cloud quotas, hosted caching, abuse prevention, and Cloud
-  execution billing -- operational concerns around running the engine at
-  hosted scale, never a second verification engine or a second verifier
-  protocol.
-- **Agent Handoff / MCP protocol layer** (planned, Milestone T): the
+  are all source-available. Cloud owns the *production* sandbox fleet:
+  verifier autoscaling, container/job orchestration, isolation
+  infrastructure configuration, Cloud quotas, hosted caching, abuse
+  prevention, and Cloud execution billing -- operational concerns around
+  running the engine at hosted scale, never a second verification engine or
+  a second verifier protocol.
+- **Agent Handoff / MCP protocol layer** (Milestone T, shipped): the
   protocol layer and the shape of evidence handed to a coding agent are
   source-available. Any Cloud-hosted agent marketplace, billing for agent
   usage, or Cloud-specific agent orchestration policy would be Cloud-only,
   if/when it exists.
+- **Merge Readiness / Decision Layer** (Milestone V, shipped): the
+  `READY` / `BLOCKED` / `HUMAN_REVIEW_REQUIRED` decision semantics and the
+  read-only `get_merge_readiness` computation live only in this engine
+  (`patchfrog.merge_readiness`). Cloud's dashboard surfaces this exact
+  result for the exact PR head SHA -- it never recomputes readiness, adds a
+  numeric score, or diverges from engine semantics.
 - **Accounts, billing, organizations/workspaces, admin tooling, hosted
   infrastructure**: always private Cloud-only, per the "PatchFrog Cloud"
-  section above -- never duplicated or stubbed out in this repository.
+  section above -- never duplicated or stubbed out in this repository. The
+  official `patchfrog[bot]` GitHub App identity, hosted GitHub App
+  credentials, Cloud auth/session handling, and Cloud production provider
+  routing policy live only in `patchfrog-cloud`.
 
 See `docs/roadmap.md` for how these milestones are sequenced and why.

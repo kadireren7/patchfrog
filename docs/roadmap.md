@@ -48,6 +48,8 @@ deepen scrutiny of a candidate that already has independent evidence.
 | S | Executable Verification + Review Effectiveness Benchmark (S1-S5) |
 | S6 | Production Execution Enablement |
 | T | Agent Handoff / MCP + Fix Verification Loop |
+| U | OpenAI Provider + Model Router |
+| V | Merge Readiness / Decision Layer |
 
 Each is a deterministic, non-LLM evidence layer over the repository/PR graph.
 See `docs/agent-orchestration.md`'s "Intelligence layer ownership" table and
@@ -68,12 +70,6 @@ architecture, and exactly what evidence is (and is not) exposed, plus two
 post-implementation security correction rounds (false `FIXED` and false
 `STILL_PRESENT` paths in T3's fix-verification classifier) and a final
 acceptance correction (no evidence must never invoke the LLM fallback).
-
-## Current — Review Engine
-
-Not yet available today -- implemented on `feat/model-router-merge-readiness`,
-open for review, not yet merged to `main` (see each section's own docs for
-exactly what is and is not implemented).
 
 **U — OpenAI Provider + Model Router**
 
@@ -114,7 +110,12 @@ GitHub PR Review summary surface is deliberately deferred (see
 Intelligence deliberately never blocks or escalates on its own -- see
 `docs/merge-readiness.md`.
 
-## Then — Cloud
+## Current — Cloud
+
+Not yet available today -- under development in the private
+`kadireren7/patchfrog-cloud` repository, not merged/released, no public
+signup yet (see `docs/product-boundary.md`'s "Repository split and the
+engine/Cloud relationship" section).
 
 **W — Cloud Foundation**
 
@@ -124,11 +125,9 @@ Intelligence deliberately never blocks or escalates on its own -- see
 - W4 — Managed Provider Runtime
 - W5 — Usage Metering
 
-Future private repository: `kadireren7/patchfrog-cloud` (**not created
-yet** -- see `docs/product-boundary.md`'s "Repository split and the
-engine/Cloud relationship" section). Cloud must consume the public,
-source-available PatchFrog Engine; it must never become a second review
-engine.
+Private repository: `kadireren7/patchfrog-cloud` (created). Cloud consumes
+the public, source-available PatchFrog Engine as a pinned dependency; it
+must never become a second review engine.
 
 **X — Cloud Private Beta**
 
@@ -137,7 +136,8 @@ failed-review recovery, review history, a minimal Cloud dashboard, real
 usage observation. Success is not "Cloud deploys" -- success is "real users
 use it and findings are useful," tracked via PRs reviewed, useful findings,
 false-positive feedback, review latency, provider cost per PR, and
-executable-verification cost per PR.
+executable-verification cost per PR. Neither W nor X are released or
+publicly announced yet.
 
 ## Then — Product Intelligence
 
