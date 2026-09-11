@@ -50,6 +50,8 @@ deepen scrutiny of a candidate that already has independent evidence.
 | T | Agent Handoff / MCP + Fix Verification Loop |
 | U | OpenAI Provider + Model Router |
 | V | Merge Readiness / Decision Layer |
+| W | Cloud Foundation (private `patchfrog-cloud` repository) |
+| X | Cloud Private Beta (private `patchfrog-cloud` repository) |
 
 Each is a deterministic, non-LLM evidence layer over the repository/PR graph.
 See `docs/agent-orchestration.md`'s "Intelligence layer ownership" table and
@@ -110,50 +112,52 @@ GitHub PR Review summary surface is deliberately deferred (see
 Intelligence deliberately never blocks or escalates on its own -- see
 `docs/merge-readiness.md`.
 
-## Current — Cloud
+Milestones W (Cloud Foundation) and X (Cloud Private Beta) shipped in
+the private `kadireren7/patchfrog-cloud` repository -- accounts,
+workspaces, official GitHub App installation ownership, repository
+enrollment, an idempotent hosted review-job pipeline consuming this
+engine as a pinned dependency (never forking or duplicating it), usage/
+quota, and a minimal dashboard. Neither is publicly released or
+announced yet -- private beta only. See `docs/product-boundary.md`'s
+"Repository split and the engine/Cloud relationship" section.
 
-Not yet available today -- under development in the private
-`kadireren7/patchfrog-cloud` repository, not merged/released, no public
-signup yet (see `docs/product-boundary.md`'s "Repository split and the
-engine/Cloud relationship" section).
+## Current — Product Intelligence
 
-**W — Cloud Foundation**
-
-- W1 — Private Cloud Control Plane Skeleton
-- W2 — Official GitHub App
-- W3 — Engine Invocation Boundary
-- W4 — Managed Provider Runtime
-- W5 — Usage Metering
-
-Private repository: `kadireren7/patchfrog-cloud` (created). Cloud consumes
-the public, source-available PatchFrog Engine as a pinned dependency; it
-must never become a second review engine.
-
-**X — Cloud Private Beta**
-
-Goal: invite-only users/teams, repository onboarding, installation health,
-failed-review recovery, review history, a minimal Cloud dashboard, real
-usage observation. Success is not "Cloud deploys" -- success is "real users
-use it and findings are useful," tracked via PRs reviewed, useful findings,
-false-positive feedback, review latency, provider cost per PR, and
-executable-verification cost per PR. Neither W nor X are released or
-publicly announced yet.
-
-## Then — Product Intelligence
+Under development on `feat/y-z-learning-governance`, open for review,
+not yet merged to `main`.
 
 **Y — Repository & Organization Learning**
 
-Possible areas: repository review profile, accepted/rejected patterns,
-feedback-calibrated prioritization, architecture conventions, trusted
-organization knowledge. User preference must never redefine objective
-correctness.
+Implemented: a durable, explainable snapshot layer
+(`patchfrog.learning_records`) over evidence already persisted by
+Milestones N/O/Phase 9 -- `useful_finding_pattern` (a snapshot of
+Milestone O's own repeated-trusted-surface detection) and
+`noise_suppression` (repeated, uncontradicted false-positive feedback on
+one exact surface), each with simple `candidate`/`established`/`retired`
+maturity, never a fake percentage. Organization-level aggregation is a
+generic engine primitive scoped only by an explicit `repository_ids`
+tuple the caller (Cloud) supplies -- the public engine still has no
+workspace concept of its own. Personalization effects
+(`patchfrog.learning_records.personalization`) are advisory/ordering-
+only by construction and fully tested, but **not yet wired into**
+`patchfrog/review/service.py`'s live candidate scheduling -- a
+deliberate, documented scope cut (see
+`validation/org_learning_governance/latest-summary.md` section 4.3 and
+`docs/repository-learning.md`). User preference never redefines
+objective correctness: nothing here can suppress a strong deterministic
+or security finding.
 
 **Z — Policy / Governance**
 
-Possible areas: organization review policies, required checks, security
-policy, repository groups, audit trail, retention controls, RBAC, SSO/SAML,
-enterprise administration. The public engine may contain generic
-policy-evaluation primitives; Cloud-specific administration remains private.
+Implemented: one generic, deterministic policy evaluation system
+(`patchfrog.governance`) -- platform/organization/repository precedence
+that can only ever tighten, typed reason codes, integration with Merge
+Readiness (tightening-only wrapper, never a second readiness engine),
+the Model Router (an optional provider allowlist), and Executable
+Verification (policy-required verification, S/S6's sandbox semantics
+untouched). Cloud owns policy definition, assignment, audit, and UI; the
+public engine owns evaluation only. RBAC/SSO/SAML/retention controls
+remain out of scope for this round -- see `docs/governance-policy.md`.
 
 ## Then — Advanced Verification
 

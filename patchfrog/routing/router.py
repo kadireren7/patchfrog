@@ -103,12 +103,37 @@ def _build_provider(provider: str, model: str, *, settings: Settings, timeout_se
     raise ValueError(f"unsupported provider: {provider!r}")  # pragma: no cover -- filtered out upstream
 
 
+class ProviderNotAllowedByPolicyError(NoProviderConfiguredError):
+    """Every credentialed, structured-output-capable provider was
+    excluded by an explicit governance ``allowed_providers`` policy
+    (Milestone Z, Z14) -- distinct from
+    :class:`NoProviderConfiguredError` (no credential at all) so a
+    caller/operator can tell "you forgot to set a credential" apart from
+    "governance forbids every provider you've credentialed", but still a
+    subclass of the existing :class:`~patchfrog.review.provider_factory.MissingProviderCredentialsError`
+    so every pre-existing call site that already handles that error
+    keeps working unchanged."""
+
+
 class ModelRouter:
     """Computes one :class:`~patchfrog.routing.domain.ReviewRoutePlan`
-    per review run from operator-controlled configuration alone."""
+    per review run from operator-controlled configuration alone.
 
-    def __init__(self, *, settings: Settings) -> None:
+    ``allowed_providers`` (Milestone Z, Z14): an optional governance-
+    supplied allowlist. ``None`` (the default) means "no governance
+    restriction" -- byte-for-byte identical behavior to every release
+    before this milestone, for every self-hosted deployment with no
+    Cloud governance configured. When given, it is applied to the
+    credentialed-provider list *before* any selection happens (reviewer,
+    critic, and runtime fallback all inherit the restriction
+    automatically) -- **credential existence is never itself permission
+    to use a provider** (the same rule Milestone U's own runtime
+    fallback already established for ``PATCHFROG_ROUTER_FALLBACK_PROVIDER``,
+    now generalized to governance)."""
+
+    def __init__(self, *, settings: Settings, allowed_providers: frozenset[str] | None = None) -> None:
         self._settings = settings
+        self._allowed_providers = allowed_providers
 
     def route(self, *, runtime_config: ReviewRuntimeConfig, critic_enabled: bool) -> ReviewRoutePlan:
         reasons: list[RouteReason] = []
@@ -118,6 +143,17 @@ class ModelRouter:
             for provider in SUPPORTED_PROVIDERS
             if supports_structured_output(provider) and has_credentials(provider, settings=self._settings)
         ]
+        if self._allowed_providers is not None:
+            excluded_by_policy = [p for p in configured if p not in self._allowed_providers]
+            configured = [p for p in configured if p in self._allowed_providers]
+            if excluded_by_policy:
+                reasons.append(RouteReason.PROVIDER_EXCLUDED_BY_POLICY)
+            if not configured:
+                raise ProviderNotAllowedByPolicyError(
+                    "Every credentialed provider is excluded by the effective governance policy's "
+                    f"allowed_providers={sorted(self._allowed_providers)!r}. Set a credential for an "
+                    "allowed provider, or ask a workspace owner to widen the policy."
+                )
         if not configured:
             raise NoProviderConfiguredError(
                 "No configured provider has a credential set. Set at least one of "

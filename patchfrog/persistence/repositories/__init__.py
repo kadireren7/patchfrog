@@ -22,6 +22,7 @@ from patchfrog.persistence.repositories.fix_attempt import FixAttemptRepository
 from patchfrog.persistence.repositories.import_reference import ImportReferenceRepository
 from patchfrog.persistence.repositories.indexed_file import IndexedFileRepository
 from patchfrog.persistence.repositories.installation import InstallationRepository
+from patchfrog.persistence.repositories.learning import RepositoryLearningRecordRepository
 from patchfrog.persistence.repositories.parsed_file_cache import ParsedFileCacheRepository
 from patchfrog.persistence.repositories.pull_request import PullRequestRepository
 from patchfrog.persistence.repositories.pull_request_ingestion import (
@@ -66,6 +67,7 @@ __all__ = [
     "RepositoryContractKeyRepository",
     "RepositoryEdgeRepository",
     "RepositoryIndexRepository",
+    "RepositoryLearningRecordRepository",
     "RepositoryRelationRepository",
     "RepositoryRepository",
     "ReviewCandidateRepository",
