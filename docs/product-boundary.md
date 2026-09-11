@@ -200,5 +200,23 @@ The following newer engine components extend this same split:
   official `patchfrog[bot]` GitHub App identity, hosted GitHub App
   credentials, Cloud auth/session handling, and Cloud production provider
   routing policy live only in `patchfrog-cloud`.
+- **Repository & Organization Learning** (Milestone Y): the durable
+  learning-derivation logic (`patchfrog.learning_records`) -- what
+  counts as repeated/independent evidence, maturity classification,
+  personalization effects -- is source-available. The public engine has
+  no workspace concept and never aggregates across tenants on its own;
+  organization-level aggregation is a generic primitive that only ever
+  acts on an explicit `repository_ids` scope Cloud supplies. Cloud owns
+  workspace-to-repository scoping, the "Learnings" dashboard, and any
+  per-workspace/per-repository learning controls (disable
+  personalization, retire a learning manually).
+- **Policy & Governance** (Milestone Z): the deterministic policy
+  evaluation engine, precedence-merge semantics, and integration with
+  Merge Readiness/the Model Router/Executable Verification
+  (`patchfrog.governance`) are source-available. Cloud owns policy
+  *definition* (`PolicyDefinitionModel`), *assignment*
+  (workspace-wide + repository override, override may only tighten),
+  the audit log, and the policy UI -- never a second policy evaluation
+  engine.
 
 See `docs/roadmap.md` for how these milestones are sequenced and why.

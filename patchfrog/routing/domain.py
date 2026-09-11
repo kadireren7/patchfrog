@@ -62,6 +62,11 @@ class RouteReason(StrEnum):
     #: config, see :mod:`patchfrog.review.config`) -- no critic route
     #: was computed at all.
     CRITIC_DISABLED_BY_CONFIG = "critic_disabled_by_config"
+    #: Milestone Z (governance): at least one credentialed provider was
+    #: excluded from routing consideration by the effective policy's
+    #: ``allowed_providers`` -- having a credential is never itself
+    #: permission to use a provider.
+    PROVIDER_EXCLUDED_BY_POLICY = "provider_excluded_by_policy"
 
 
 @dataclass(frozen=True, slots=True)

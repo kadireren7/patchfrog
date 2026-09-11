@@ -33,6 +33,7 @@ from patchfrog.persistence.models.installation import (
     InstallationModel,
     InstallationStatus,
 )
+from patchfrog.persistence.models.learning import RepositoryLearningRecordModel
 from patchfrog.persistence.models.parsed_file_cache import ParsedFileCacheModel
 from patchfrog.persistence.models.publishing import (
     ReviewPublicationCommentModel,
@@ -91,6 +92,7 @@ __all__ = [
     "RepositoryContractKeyModel",
     "RepositoryEdgeModel",
     "RepositoryIndexModel",
+    "RepositoryLearningRecordModel",
     "RepositoryModel",
     "RepositoryRelationModel",
     "ReviewCandidateModel",

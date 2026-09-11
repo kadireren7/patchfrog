@@ -1,4 +1,8 @@
-"""The four-tool MCP surface -- Milestone T (T2). See the package
+"""The MCP tool surface -- Milestone T (T2): ``list_findings``,
+``get_finding_handoff``, ``start_fix_attempt``, ``get_fix_attempt``,
+``get_merge_readiness``; Milestone Y/Z (Z17): ``list_repository_learnings``,
+``get_effective_policy`` (both read-only -- no governance/learning
+mutation tool exists or will ever be added here). See the package
 docstring (:mod:`patchfrog.mcp`) for the trust-boundary summary.
 
 **Local trust model** (Part AD): stdio access inherits whatever Unix user
@@ -44,6 +48,9 @@ from patchfrog.config.settings import Settings
 from patchfrog.executable_verification.dispatch import VerifierDispatcher
 from patchfrog.fix_verification.domain import FixAttempt, FixAttemptStatus
 from patchfrog.fix_verification.service import FixAttemptValidationError, FixVerificationService
+from patchfrog.governance.domain import EffectivePolicy
+from patchfrog.governance.precedence import PLATFORM_POLICY, merge_policies
+from patchfrog.learning_records.domain import RepositoryLearningRecord
 from patchfrog.merge_readiness.domain import MergeReadinessResult
 from patchfrog.merge_readiness.service import MergeReadinessService
 from patchfrog.persistence.models.repository import RepositoryModel
@@ -51,6 +58,7 @@ from patchfrog.persistence.repositories import (
     AIFindingRepository,
     FixAttemptRepository,
     PullRequestRepository,
+    RepositoryLearningRecordRepository,
     RepositoryRepository,
     ReviewRunRepository,
 )
@@ -119,6 +127,44 @@ def _attempt_to_wire(attempt: FixAttempt) -> dict[str, Any]:
     return wire
 
 
+def _learning_record_to_wire(record: RepositoryLearningRecord) -> dict[str, Any]:
+    return {
+        "learning_type": record.learning_type.value,
+        "surface": {
+            "file_path": record.surface.file_path,
+            "qualified_name": record.surface.qualified_name,
+            "category": record.surface.category.value,
+        },
+        "maturity": record.maturity.value,
+        "support_count": record.support_count,
+        "first_observed_at": record.first_observed_at,
+        "last_observed_at": record.last_observed_at,
+        "retired_reason": record.retired_reason,
+        "explanation": record.explain(),
+        "version": record.version,
+    }
+
+
+def _effective_policy_to_wire(policy: EffectivePolicy) -> dict[str, Any]:
+    return {
+        "security_block_severity_floor": (
+            policy.security_block_severity_floor.value if policy.security_block_severity_floor else None
+        ),
+        "security_requires_human_review_severity_floor": (
+            policy.security_requires_human_review_severity_floor.value
+            if policy.security_requires_human_review_severity_floor
+            else None
+        ),
+        "security_suppression_forbidden": policy.security_suppression_forbidden,
+        "verification_required_categories": sorted(c.value for c in policy.verification_required_categories),
+        "verification_required_path_prefixes": sorted(policy.verification_required_path_prefixes),
+        "allowed_providers": sorted(policy.allowed_providers) if policy.allowed_providers is not None else None,
+        "personalization_enabled": policy.personalization_enabled,
+        "contributing_scopes": [s.value for s in policy.contributing_scopes],
+        "version": policy.version,
+    }
+
+
 def _readiness_to_wire(result: MergeReadinessResult) -> dict[str, Any]:
     return {
         "decision": result.decision.value,
@@ -162,6 +208,7 @@ class PatchFrogMCPServer:
         self._pull_request_repo = PullRequestRepository()
         self._fix_attempt_repo = FixAttemptRepository()
         self._readiness_service = MergeReadinessService()
+        self._learning_repo = RepositoryLearningRecordRepository()
 
         self.mcp: FastMCP = FastMCP(
             name="patchfrog",
@@ -250,6 +297,55 @@ class PatchFrogMCPServer:
             return await self._get_merge_readiness(
                 repository_full_name=repository_full_name, pull_request_number=pull_request_number
             )
+
+        @self.mcp.tool()
+        async def list_repository_learnings(repository_full_name: str, include_retired: bool = False) -> dict[str, Any]:
+            """Read-only (Milestone Y/Z17): the durable, explainable
+            repository-scoped learning records this repository has
+            accumulated -- see :mod:`patchfrog.learning_records.domain`.
+            Never a mutation tool; there is no ``set_learning`` or
+            ``disable_learning`` tool."""
+
+            return await self._list_repository_learnings(
+                repository_full_name=repository_full_name, include_retired=include_retired
+            )
+
+        @self.mcp.tool()
+        async def get_effective_policy(repository_full_name: str) -> dict[str, Any]:
+            """Read-only (Milestone Z, Z17): the effective governance
+            policy for this repository. A self-hosted deployment has no
+            Cloud organization/repository policy layer -- this always
+            reflects the platform safety floor alone
+            (:data:`patchfrog.governance.precedence.PLATFORM_POLICY`).
+            PatchFrog Cloud's own dashboard is where an organization's
+            actual effective (platform + org + repo) policy is surfaced.
+            Never a mutation tool; there is no ``set_policy``,
+            ``disable_security``, ``force_ready``, or ``override_block``
+            tool."""
+
+            return await self._get_effective_policy(repository_full_name=repository_full_name)
+
+    async def _list_repository_learnings(
+        self, *, repository_full_name: str, include_retired: bool
+    ) -> dict[str, Any]:
+        async with self._session_factory() as session:
+            repository = await self._repository_repo.get_by_full_name(session, full_name=repository_full_name)
+            if repository is None:
+                return {"error": "repository_not_found"}
+
+            records = await self._learning_repo.list_for_repository(
+                session, repository_id=repository.id, include_retired=include_retired
+            )
+            return {"learnings": [_learning_record_to_wire(r) for r in records]}
+
+    async def _get_effective_policy(self, *, repository_full_name: str) -> dict[str, Any]:
+        async with self._session_factory() as session:
+            repository = await self._repository_repo.get_by_full_name(session, full_name=repository_full_name)
+            if repository is None:
+                return {"error": "repository_not_found"}
+
+        policy = merge_policies(PLATFORM_POLICY, None, None)
+        return {"effective_policy": _effective_policy_to_wire(policy)}
 
     async def _list_findings(
         self,
