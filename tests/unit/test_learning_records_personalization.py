@@ -25,7 +25,14 @@ from patchfrog.learning_records.personalization import (
 _REPO_ID = uuid.uuid4()
 
 
-def _record(*, learning_type: LearningType, maturity: LearningMaturity, file_path: str = "a.py", qualified_name: str = "a.f", category=FindingCategory.CORRECTNESS) -> RepositoryLearningRecord:
+def _record(
+    *,
+    learning_type: LearningType,
+    maturity: LearningMaturity,
+    file_path: str = "a.py",
+    qualified_name: str = "a.f",
+    category: FindingCategory = FindingCategory.CORRECTNESS,
+) -> RepositoryLearningRecord:
     now = datetime.now(UTC).isoformat()
     return RepositoryLearningRecord(
         id=uuid.uuid4(),

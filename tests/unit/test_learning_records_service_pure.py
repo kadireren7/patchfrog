@@ -36,7 +36,13 @@ def _historical_record(*, run_id: uuid.UUID, file_path: str = "a.py", qualified_
     )
 
 
-def _noise_row(*, run_id: uuid.UUID, file_path: str = "a.py", qualified_name: str | None = "a.f", category=FindingCategory.CORRECTNESS) -> NoiseFeedbackRow:
+def _noise_row(
+    *,
+    run_id: uuid.UUID,
+    file_path: str = "a.py",
+    qualified_name: str | None = "a.f",
+    category: FindingCategory = FindingCategory.CORRECTNESS,
+) -> NoiseFeedbackRow:
     return NoiseFeedbackRow(
         finding_id=uuid.uuid4(), file_path=file_path, qualified_name=qualified_name, category=category,
         review_run_id=run_id, observed_at=datetime.now(UTC),

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -65,8 +66,9 @@ async def test_list_repository_learnings_returns_persisted_records(session_facto
 
     server = _server(session_factory)
     result = await _call(server, "list_repository_learnings", repository_full_name="acme/mcp-learnings")
-    assert len(result["learnings"]) == 1
-    assert result["learnings"][0]["maturity"] == "established"
+    learnings = cast(list[dict[str, Any]], result["learnings"])
+    assert len(learnings) == 1
+    assert learnings[0]["maturity"] == "established"
 
 
 async def test_list_repository_learnings_unknown_repository_returns_error(session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -79,7 +81,7 @@ async def test_get_effective_policy_returns_platform_floor(session_factory: asyn
     await _make_repository(session_factory, "acme/mcp-policy")
     server = _server(session_factory)
     result = await _call(server, "get_effective_policy", repository_full_name="acme/mcp-policy")
-    policy = result["effective_policy"]
+    policy = cast(dict[str, Any], result["effective_policy"])
     assert policy["security_block_severity_floor"] == "high"
     assert policy["contributing_scopes"] == ["platform"]
 
