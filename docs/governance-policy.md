@@ -77,6 +77,25 @@ critic, and runtime fallback all inherit the restriction automatically.
 the same rule Milestone U's own runtime fallback already established,
 now generalized to governance.
 
+**Known gap, discovered while implementing this integration**: the
+production, webhook-driven review task
+(`apps/worker/tasks/review_pull_request.py`) does not construct a
+`ModelRouter` at all today -- it builds providers directly via
+`patchfrog.review.provider_factory.build_reviewer_provider`/
+`build_critic_provider`, bypassing routing, family diversity, and
+runtime failover entirely. `ModelRouter` (all of Milestone U, not just
+this milestone's own `allowed_providers` addition) is currently only
+reachable from `patchfrog.cli`. This means a governance
+`allowed_providers` policy is correctly enforced by the router itself
+(see its own test corpus) but is **not yet reachable from a real hosted
+review** until that task is rewired to use `route_plan=` instead of
+`reviewer_provider=`/`critic_provider=`. Deliberately not fixed in this
+PR: it is a live, heavily-guarded production trust boundary (see
+`tests/integration/test_review_pull_request_provider_trust_boundary.py`,
+which would need its own careful update, not a rushed one) and rewiring
+it safely is a separate, substantial change -- tracked as a follow-up,
+not silently left undocumented.
+
 ## Executable Verification integration (Z15)
 
 `patchfrog.governance.verification_policy.is_verification_required`

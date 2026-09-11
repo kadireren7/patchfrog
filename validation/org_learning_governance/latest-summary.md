@@ -297,3 +297,14 @@ repeated here in full to avoid duplicating the same content twice.
 - Per-path-glob verification requirements beyond a bounded, explicit
   list of path prefixes (no full glob/regex engine).
 - Any UI beyond the minimal views Y13/Z11 specify.
+- **Newly discovered while implementing Z14, not fixed here**: wiring
+  `ModelRouter` (all of Milestone U -- routing, family diversity,
+  runtime failover, and this milestone's own `allowed_providers`) into
+  the production webhook-driven review task
+  (`apps/worker/tasks/review_pull_request.py`), which currently
+  constructs providers directly via `provider_factory` and bypasses the
+  router entirely (`ModelRouter` is reachable only from `patchfrog.cli`
+  today). See `docs/governance-policy.md`'s Z14 section for the full
+  account -- a live production trust-boundary rewire, correctly left to
+  its own dedicated, carefully-tested follow-up rather than folded into
+  this PR.
