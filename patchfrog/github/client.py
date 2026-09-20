@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from patchfrog.domain.github import InstallationRepositoryStub
 from patchfrog.domain.github_feedback import (
     GitHubActor,
     GitHubActorType,
@@ -53,6 +54,8 @@ _COMMENTS_PER_PAGE = 100
 _MAX_COMMENTS_PAGES = 50  # 5,000 review comments — far beyond any realistic PR.
 _REACTIONS_PER_PAGE = 100
 _MAX_REACTIONS_PAGES = 10  # 1,000 reactions on one comment — far beyond realistic use.
+_INSTALLATION_REPOS_PER_PAGE = 100
+_MAX_INSTALLATION_REPOS_PAGES = 100  # 10,000 repositories — far beyond any realistic installation.
 
 
 class GitHubClient:
@@ -125,6 +128,34 @@ class GitHubClient:
                 break
 
         return changed_files
+
+    async def list_installation_repositories(self, *, installation_id: int) -> list[InstallationRepositoryStub]:
+        """The GitHub App installation's own current, authoritative
+        repository selection (`GET /installation/repositories`,
+        installation-token authenticated) -- never a locally-cached
+        guess. Used for reconciliation against locally-persisted
+        selection state (e.g. after a period where a webhook could have
+        been missed), not by the steady-state webhook-driven sync path
+        (see :mod:`patchfrog.services.installation_sync`), which never
+        needs to poll GitHub at all."""
+
+        path = "/installation/repositories"
+        stubs: list[InstallationRepositoryStub] = []
+
+        for page in range(1, _MAX_INSTALLATION_REPOS_PAGES + 1):
+            data = await self._get_json(
+                installation_id=installation_id,
+                path=path,
+                params={"per_page": _INSTALLATION_REPOS_PER_PAGE, "page": page},
+            )
+            if not isinstance(data, dict) or not isinstance(data.get("repositories"), list):
+                raise GitHubResponseError("Expected an object with a 'repositories' list from GitHub")
+            repositories = data["repositories"]
+            stubs.extend(_parse_installation_repository_stub(item) for item in repositories)
+            if len(repositories) < _INSTALLATION_REPOS_PER_PAGE:
+                break
+
+        return stubs
 
     async def list_pull_request_reviews(
         self, *, installation_id: int, ref: PullRequestRef
@@ -448,6 +479,13 @@ def _parse_changed_file(data: dict[str, Any]) -> ChangedFile:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise GitHubResponseError("Malformed changed-file response from GitHub") from exc
+
+
+def _parse_installation_repository_stub(data: dict[str, Any]) -> InstallationRepositoryStub:
+    try:
+        return InstallationRepositoryStub(github_repository_id=data["id"], full_name=data["full_name"])
+    except (KeyError, TypeError) as exc:
+        raise GitHubResponseError("Malformed installation repository response from GitHub") from exc
 
 
 def _parse_submitted_review(data: dict[str, Any]) -> GitHubSubmittedReview:

@@ -118,6 +118,77 @@ async def test_list_pull_request_files_paginates(http_client: httpx.AsyncClient)
 
 
 @respx.mock
+async def test_list_installation_repositories_success(http_client: httpx.AsyncClient) -> None:
+    respx.get(f"{API_BASE}/installation/repositories").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "total_count": 2,
+                "repository_selection": "selected",
+                "repositories": [
+                    {"id": 101, "full_name": "kadireren7/libft"},
+                    {"id": 202, "full_name": "kadireren7/patchfrog-cloud"},
+                ],
+            },
+        )
+    )
+
+    client = _make_client(http_client)
+    stubs = await client.list_installation_repositories(installation_id=1)
+
+    assert len(stubs) == 2
+    assert stubs[0].github_repository_id == 101
+    assert stubs[0].full_name == "kadireren7/libft"
+    assert stubs[1].github_repository_id == 202
+
+
+@respx.mock
+async def test_list_installation_repositories_paginates(http_client: httpx.AsyncClient) -> None:
+    route = respx.get(f"{API_BASE}/installation/repositories")
+    full_page = {
+        "total_count": 101,
+        "repository_selection": "selected",
+        "repositories": [{"id": i, "full_name": f"kadireren7/repo-{i}"} for i in range(100)],
+    }
+    partial_page = {
+        "total_count": 101,
+        "repository_selection": "selected",
+        "repositories": [{"id": 999, "full_name": "kadireren7/last"}],
+    }
+    route.side_effect = [
+        httpx.Response(200, json=full_page),
+        httpx.Response(200, json=partial_page),
+    ]
+
+    client = _make_client(http_client)
+    stubs = await client.list_installation_repositories(installation_id=1)
+
+    assert len(stubs) == 101
+    assert stubs[-1].full_name == "kadireren7/last"
+
+
+@respx.mock
+async def test_list_installation_repositories_empty_selection(http_client: httpx.AsyncClient) -> None:
+    respx.get(f"{API_BASE}/installation/repositories").mock(
+        return_value=httpx.Response(200, json={"total_count": 0, "repository_selection": "selected", "repositories": []})
+    )
+
+    client = _make_client(http_client)
+    stubs = await client.list_installation_repositories(installation_id=1)
+
+    assert stubs == []
+
+
+@respx.mock
+async def test_list_installation_repositories_malformed_response_raises(http_client: httpx.AsyncClient) -> None:
+    respx.get(f"{API_BASE}/installation/repositories").mock(return_value=httpx.Response(200, json=[]))
+
+    client = _make_client(http_client)
+    with pytest.raises(GitHubResponseError):
+        await client.list_installation_repositories(installation_id=1)
+
+
+@respx.mock
 async def test_401_raises_authentication_error(http_client: httpx.AsyncClient) -> None:
     respx.get(f"{API_BASE}/repos/kadireren7/libft/pulls/14").mock(
         return_value=httpx.Response(401, json={"message": "Bad credentials"})
