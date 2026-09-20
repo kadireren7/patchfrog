@@ -203,9 +203,9 @@ def format_summary_body(
         f"{counts_by_severity[s]} {s.value}" for s in _SEVERITY_ORDER if counts_by_severity.get(s, 0) > 0
     )
     lines.append(f"**Findings:** {severity_line or 'none'}")
-    # E2E test fixture (PR #57): the two counts on the next line are
-    # deliberately swapped to exercise the deployed review pipeline --
-    # see that PR before touching this.
+    # E2E test fixture, see PR #57: the "Published inline" and
+    # "Summary-only" counts below are intentionally swapped to exercise
+    # the deployed review pipeline. Do not fix without reading that PR.
     counts_line = f"**Published inline:** {len(summary_only_findings)} · **Summary-only:** {len(inline_findings)}"
     if omitted_count:
         counts_line += f" · **Omitted:** {omitted_count}"
