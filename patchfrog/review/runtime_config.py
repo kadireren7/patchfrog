@@ -62,6 +62,38 @@ _DEFAULT_TIMEOUT_SECONDS_BY_PROVIDER: dict[str, float] = {
     "gemini": 120.0,
 }
 
+#: Conservative model-name family prefixes, after stripping a
+#: `models/`-prefixed resource-path form (see
+#: patchfrog.review.providers.gemini_provider's own docstring on why that
+#: form is legitimate) -- never an exhaustive per-model list, which would
+#: go stale the moment either vendor ships a new model name. The single
+#: source of truth for this check (also used by `patchfrog.ops.doctor`'s
+#: advisory report) -- exists to catch a real, previously-live production
+#: bug: PATCHFROG_REVIEW_PROVIDER=openai with PATCHFROG_REVIEW_MODEL left
+#: unset (or copy-pasted from an Anthropic example) silently resolving to
+#: `claude-opus-5` and 404ing against OpenAI's own API on the first real
+#: review.
+MODEL_FAMILY_PREFIX: dict[str, str] = {"anthropic": "claude-", "gemini": "gemini-", "openai": "gpt-"}
+_MODEL_RESOURCE_PREFIX = "models/"
+
+
+def model_matches_provider_family(provider: str, model: str) -> bool:
+    """`True` unless `model` looks like a *different, known* provider's
+    model name -- conservative by design: an unlisted/future model
+    family (neither `provider`'s own expected prefix nor any other known
+    one) is never rejected, since this check's only job is catching the
+    exact, previously-live misconfiguration above, not acting as an
+    exhaustive per-model allowlist."""
+
+    expected_prefix = MODEL_FAMILY_PREFIX.get(provider)
+    if expected_prefix is None:
+        return True
+    normalized = model.removeprefix(_MODEL_RESOURCE_PREFIX)
+    if normalized.startswith(expected_prefix):
+        return True
+    other_families = [p for p, prefix in MODEL_FAMILY_PREFIX.items() if p != provider and normalized.startswith(prefix)]
+    return not other_families
+
 
 class ReviewRuntimeConfig(BaseModel):
     """The effective, operator-controlled provider/model/timeout for AI
@@ -82,15 +114,22 @@ def resolve_review_runtime_config(settings: Settings) -> ReviewRuntimeConfig:
     used for `.patchfrog.yml`'s (now-removed) `review.critic_model` /
     `review.request_timeout_seconds` fields:
 
-    - `critic_model` omitted -> defaults to the same value as `model`
-      (provider-neutral: never silently falls back to another
-      provider's model).
+    - `model`/`critic_model` omitted -> defaults to *this provider's own*
+      model (`DEFAULT_MODEL_BY_PROVIDER[provider]`) -- never a flat,
+      provider-oblivious default, which is exactly how a real production
+      incident sent `claude-opus-5` to OpenAI's API (404) after
+      `PATCHFROG_REVIEW_PROVIDER=openai` was configured without also
+      setting `PATCHFROG_REVIEW_MODEL`.
     - `request_timeout_seconds` omitted -> a provider-appropriate
       default (30s, 120s for Gemini).
 
-    Raises `ValueError` for an unsupported/unknown provider -- fails
-    clearly rather than deferring to a confusing error deep inside
-    provider construction.
+    Raises `ValueError` for an unsupported/unknown provider, or for an
+    *explicitly* configured `PATCHFROG_REVIEW_MODEL`/
+    `PATCHFROG_REVIEW_CRITIC_MODEL` that looks like a different, known
+    provider's model name -- fails clearly rather than silently sending
+    a mismatched model to the wrong provider's API. A defaulted model
+    (operator didn't set one) is always correct by construction and
+    never reaches this check.
     """
 
     provider = settings.review_provider
@@ -100,8 +139,31 @@ def resolve_review_runtime_config(settings: Settings) -> ReviewRuntimeConfig:
             f"(supported: {', '.join(SUPPORTED_PROVIDERS)})"
         )
 
-    model = settings.review_model if settings.review_model is not None else DEFAULT_MODEL
-    critic_model = settings.review_critic_model if settings.review_critic_model is not None else model
+    provider_default_model = DEFAULT_MODEL_BY_PROVIDER.get(provider, DEFAULT_MODEL)
+
+    if settings.review_model is not None:
+        if not model_matches_provider_family(provider, settings.review_model):
+            raise ValueError(
+                f"PATCHFROG_REVIEW_MODEL={settings.review_model!r} does not look like a {provider!r} "
+                f"model, but PATCHFROG_REVIEW_PROVIDER={provider!r}. Set a model name valid for that "
+                "provider, or unset PATCHFROG_REVIEW_MODEL to use the provider's own default "
+                f"({provider_default_model!r})."
+            )
+        model = settings.review_model
+    else:
+        model = provider_default_model
+
+    if settings.review_critic_model is not None:
+        if not model_matches_provider_family(provider, settings.review_critic_model):
+            raise ValueError(
+                f"PATCHFROG_REVIEW_CRITIC_MODEL={settings.review_critic_model!r} does not look like a "
+                f"{provider!r} model, but PATCHFROG_REVIEW_PROVIDER={provider!r}. Set a model name valid "
+                "for that provider, or unset PATCHFROG_REVIEW_CRITIC_MODEL to use the reviewer model."
+            )
+        critic_model = settings.review_critic_model
+    else:
+        critic_model = model
+
     request_timeout_seconds = (
         settings.review_request_timeout_seconds
         if settings.review_request_timeout_seconds is not None

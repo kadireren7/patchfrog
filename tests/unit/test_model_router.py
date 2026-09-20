@@ -19,7 +19,7 @@ from patchfrog.review.provider_factory import MissingProviderCredentialsError
 from patchfrog.review.providers.anthropic_provider import AnthropicLLMProvider
 from patchfrog.review.providers.gemini_provider import GeminiLLMProvider
 from patchfrog.review.providers.openai_provider import OpenAILLMProvider
-from patchfrog.review.runtime_config import ReviewRuntimeConfig
+from patchfrog.review.runtime_config import DEFAULT_MODEL_BY_PROVIDER, ReviewRuntimeConfig
 from patchfrog.routing.domain import RouteReason
 from patchfrog.routing.router import ModelRouter, NoProviderConfiguredError
 
@@ -43,10 +43,17 @@ def _settings(**overrides: object) -> Settings:
 
 
 def _runtime_config(
-    *, provider: str = "anthropic", model: str = "claude-opus-5", critic_model: str | None = None,
+    *, provider: str = "anthropic", model: str | None = None, critic_model: str | None = None,
 ) -> ReviewRuntimeConfig:
+    # Mirrors resolve_review_runtime_config's own provider-aware default
+    # (model omitted -> that provider's own model, never a flat
+    # anthropic-shaped default) -- a test helper that hardcoded
+    # "claude-opus-5" regardless of `provider` would itself have masked
+    # the exact production bug this module's own router fix addresses.
+    resolved_model = model if model is not None else DEFAULT_MODEL_BY_PROVIDER[provider]
     return ReviewRuntimeConfig(
-        provider=provider, model=model, critic_model=critic_model or model, request_timeout_seconds=30.0,
+        provider=provider, model=resolved_model, critic_model=critic_model or resolved_model,
+        request_timeout_seconds=30.0,
     )
 
 
@@ -68,6 +75,12 @@ def test_only_one_provider_configured_routes_reviewer_and_critic_to_it(provider:
     assert isinstance(plan.reviewer_providers[AgentRole.CORRECTNESS], _ADAPTER_CLASS[provider])
     assert isinstance(plan.reviewer_providers[AgentRole.SECURITY], _ADAPTER_CLASS[provider])
     assert isinstance(plan.critic_provider, _ADAPTER_CLASS[provider])
+    # The actual production bug: provider selection alone isn't enough --
+    # the constructed provider's own model must belong to that provider's
+    # family, never a different family's model name reaching its API.
+    assert plan.reviewer_providers[AgentRole.CORRECTNESS].identity.model == DEFAULT_MODEL_BY_PROVIDER[provider]
+    assert plan.critic_provider is not None
+    assert plan.critic_provider.identity.model == DEFAULT_MODEL_BY_PROVIDER[provider]
 
 
 # -- Multi-provider combinations (items 4-7 of the required matrix) --
@@ -146,6 +159,83 @@ def test_preferred_unavailable_but_fallback_configured_and_credentialed_is_used(
     assert plan.reviewer_provider_family == "gemini"
     assert plan.config_fallback_used is True
     assert RouteReason.PREFERRED_PROVIDER_UNAVAILABLE_FALLBACK_USED in plan.reasons
+    # The actual production bug: falling back to gemini must also fall
+    # back to a gemini-shaped model, never the anthropic model the
+    # reviewer was originally (but no longer) configured for.
+    assert plan.reviewer_providers[AgentRole.CORRECTNESS].identity.model == DEFAULT_MODEL_BY_PROVIDER["gemini"]
+
+
+def test_preferred_anthropic_unavailable_fallback_openai_gets_an_openai_model() -> None:
+    # Requirement 7, scenario 1 -- the exact reported production shape:
+    # ANTHROPIC_API_KEY missing, OPENAI_API_KEY present, provider falls
+    # back to openai and must get an openai-shaped model.
+    router = ModelRouter(
+        settings=_settings(OPENAI_API_KEY="fake-not-real", PATCHFROG_ROUTER_FALLBACK_PROVIDER="openai")
+    )
+    plan = router.route(runtime_config=_runtime_config(provider="anthropic"), critic_enabled=False)
+
+    assert plan.reviewer_provider_family == "openai"
+    model = plan.reviewer_providers[AgentRole.CORRECTNESS].identity.model
+    assert model == DEFAULT_MODEL_BY_PROVIDER["openai"]
+    assert not model.startswith("claude-")
+
+
+def test_preferred_anthropic_unavailable_fallback_gemini_gets_a_gemini_model() -> None:
+    # Requirement 7, scenario 2.
+    router = ModelRouter(
+        settings=_settings(GEMINI_API_KEY="fake-not-real", PATCHFROG_ROUTER_FALLBACK_PROVIDER="gemini")
+    )
+    plan = router.route(runtime_config=_runtime_config(provider="anthropic"), critic_enabled=False)
+
+    assert plan.reviewer_provider_family == "gemini"
+    model = plan.reviewer_providers[AgentRole.CORRECTNESS].identity.model
+    assert model == DEFAULT_MODEL_BY_PROVIDER["gemini"]
+    assert not model.startswith("claude-")
+
+
+def test_explicit_provider_and_compatible_model_is_preserved() -> None:
+    # Requirement 7, scenario 3: an operator-configured, valid model for
+    # the preferred (and available) provider must be honored exactly,
+    # never silently replaced by the provider's own default.
+    router = ModelRouter(settings=_settings(OPENAI_API_KEY="fake-not-real"))
+    plan = router.route(
+        runtime_config=_runtime_config(provider="openai", model="gpt-6-mini"), critic_enabled=False
+    )
+
+    assert plan.reviewer_providers[AgentRole.CORRECTNESS].identity.model == "gpt-6-mini"
+
+
+def test_critic_on_same_fallback_family_as_reviewer_gets_that_familys_model_not_the_original_providers() -> None:
+    """Router-level regression for the second half of the production
+    bug: when critic_family ends up equal to a *fallen-back* reviewer
+    family (not the operator's originally-configured provider), the
+    critic model must also come from that family's own default -- not
+    from `runtime_config.critic_model`, which was only ever valid for
+    the *original* provider. Previously this compared
+    `critic_family == reviewer_family` instead of `critic_family ==
+    runtime_config.provider`, so a critic landing on the same fallback
+    family as the reviewer still got the original provider's critic
+    model."""
+
+    router = ModelRouter(
+        settings=_settings(GEMINI_API_KEY="fake-not-real", PATCHFROG_ROUTER_FALLBACK_PROVIDER="gemini")
+    )
+    # provider="anthropic" (unavailable) falls back to gemini for both
+    # reviewer and critic (gemini is the only configured provider, so
+    # SINGLE_PROVIDER_CONFIGURED routes the critic to the same family).
+    # An explicit critic_model here is deliberately anthropic-shaped --
+    # exactly the value an operator would have set for the *original*
+    # preferred provider, before any fallback ever happened.
+    plan = router.route(
+        runtime_config=_runtime_config(provider="anthropic", critic_model="claude-haiku-5"),
+        critic_enabled=True,
+    )
+
+    assert plan.reviewer_provider_family == "gemini"
+    assert plan.critic_provider_family == "gemini"
+    assert plan.critic_provider is not None
+    assert plan.critic_provider.identity.model == DEFAULT_MODEL_BY_PROVIDER["gemini"]
+    assert plan.critic_provider.identity.model != "claude-haiku-5"
 
 
 def test_preferred_unavailable_and_fallback_also_unavailable_raises() -> None:
