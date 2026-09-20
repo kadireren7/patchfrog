@@ -87,6 +87,19 @@ class Settings(BaseSettings):
     router_critic_provider: str | None = Field(
         default=None, alias="PATCHFROG_ROUTER_CRITIC_PROVIDER"
     )
+    #: Milestone Z14 (governance): deployment-wide provider allowlist fed
+    #: straight into ModelRouter's own `allowed_providers` parameter --
+    #: `None` (default, unset) means no restriction. A comma-separated
+    #: env var, parsed below into a frozenset; never read from
+    #: .patchfrog.yml, like every other provider field on this class.
+    #: This is deployment-level, not per-workspace -- a hosting hub with
+    #: per-workspace policy (e.g. patchfrog-cloud's own governance
+    #: tables) narrows this further at its own call site by passing a
+    #: smaller `allowed_providers` into ModelRouter directly; it does not
+    #: get threaded through this Settings field.
+    allowed_providers: frozenset[str] | None = Field(
+        default=None, alias="PATCHFROG_ALLOWED_PROVIDERS"
+    )
 
     # Operator hard cost/candidate ceilings for the Quality + Cost Guard
     # (patchfrog.review.config_resolution.apply_operator_hard_caps).
@@ -195,6 +208,18 @@ class Settings(BaseSettings):
         if normalized not in allowed:
             raise ValueError(f"LOG_LEVEL must be one of {sorted(allowed)}, got {value!r}")
         return normalized
+
+    @field_validator("allowed_providers", mode="before")
+    @classmethod
+    def _parse_allowed_providers(cls, value: object) -> frozenset[str] | None:
+        if value is None or isinstance(value, frozenset):
+            return value
+        if isinstance(value, str):
+            names = {part.strip().lower() for part in value.split(",") if part.strip()}
+            return frozenset(names) if names else None
+        raise ValueError(
+            f"PATCHFROG_ALLOWED_PROVIDERS must be a comma-separated string, got {value!r}"
+        )
 
     @field_validator("review_request_timeout_seconds")
     @classmethod
