@@ -91,3 +91,21 @@ def test_settings_repr_never_leaks_provider_api_keys(monkeypatch: pytest.MonkeyP
     text = repr(settings)
     assert "sk-ant-fake" not in text
     assert "fake-gemini-key-not-real" not in text
+
+
+def test_allowed_providers_unset_defaults_to_no_restriction(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PATCHFROG_ALLOWED_PROVIDERS", raising=False)
+    settings = Settings(_env_file=None)
+    assert settings.allowed_providers is None
+
+
+def test_allowed_providers_parses_comma_separated_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PATCHFROG_ALLOWED_PROVIDERS", "openai, Gemini ,openai")
+    settings = Settings(_env_file=None)
+    assert settings.allowed_providers == frozenset({"openai", "gemini"})
+
+
+def test_allowed_providers_blank_string_is_no_restriction(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PATCHFROG_ALLOWED_PROVIDERS", "  , ")
+    settings = Settings(_env_file=None)
+    assert settings.allowed_providers is None

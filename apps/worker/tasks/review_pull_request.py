@@ -54,7 +54,6 @@ from patchfrog.review.config_resolution import (
     resolve_repository_review_config,
 )
 from patchfrog.review.domain import ReviewRunStatus, ReviewRunSummary
-from patchfrog.review.provider_factory import build_critic_provider, build_reviewer_provider
 from patchfrog.review.runtime_config import resolve_review_runtime_config
 from patchfrog.review.service import (
     PullRequestReviewService,
@@ -63,6 +62,7 @@ from patchfrog.review.service import (
 )
 from patchfrog.review_memory.config_resolution import resolve_repository_incremental_config
 from patchfrog.review_memory.service import IncrementalReviewMemoryService
+from patchfrog.routing.router import ModelRouter
 
 logger = structlog.get_logger(__name__)
 
@@ -168,12 +168,22 @@ async def _review_pull_request(
         # Provider/model selection is operator/deployment-controlled --
         # resolved from trusted Settings, never from the repository's
         # review_config above (a PR changing .patchfrog.yml must never
-        # change which provider/model actually runs).
+        # change which provider/model actually runs). Routed through the
+        # Model Router (not the older, single-provider provider_factory
+        # path) so a missing credential for the preferred provider falls
+        # back to another allowed, credentialed provider instead of
+        # hard-failing the review -- see patchfrog.routing.router and
+        # docs/governance-policy.md's "Model Router integration (Z14)".
         runtime_config = resolve_review_runtime_config(settings)
-        reviewer_provider = build_reviewer_provider(runtime_config, settings=settings)
-        critic_provider = build_critic_provider(
-            runtime_config, settings=settings, critic_enabled=review_config.critic_enabled
+        route_plan = ModelRouter(settings=settings, allowed_providers=settings.allowed_providers).route(
+            runtime_config=runtime_config, critic_enabled=review_config.critic_enabled
         )
+        # Every role maps to the same provider instance in v1 (the
+        # router routes once per run, not once per candidate -- see
+        # patchfrog.routing.router); an arbitrary one is representative
+        # for memory-service/telemetry fields that still want a single
+        # provider/model string, exactly like the CLI's own usage.
+        route_plan_reviewer_identity = next(iter(route_plan.reviewer_providers.values())).identity
 
         incremental_config = await resolve_repository_incremental_config(
             local=False,
@@ -201,8 +211,8 @@ async def _review_pull_request(
             clone_url=clone_url,
             token=token,
             current_candidates=full_candidates,
-            reviewer_provider=reviewer_provider.identity.provider,
-            reviewer_model=reviewer_provider.identity.model,
+            reviewer_provider=route_plan_reviewer_identity.provider,
+            reviewer_model=route_plan_reviewer_identity.model,
             incremental_config=incremental_config,
         )
 
@@ -221,8 +231,7 @@ async def _review_pull_request(
         )
         service = PullRequestReviewService(
             session_factory=session_factory,
-            reviewer_provider=reviewer_provider,
-            critic_provider=critic_provider,
+            route_plan=route_plan,
             verifier_dispatcher=verifier_dispatcher,
             verification_snapshot_root=settings.verification_snapshot_root,
         )
@@ -253,8 +262,8 @@ async def _review_pull_request(
             )
 
         provider_labels = {
-            "provider": reviewer_provider.identity.provider,
-            "model": reviewer_provider.identity.model,
+            "provider": route_plan_reviewer_identity.provider,
+            "model": route_plan_reviewer_identity.model,
         }
         metrics.reviews_completed_total.labels(status=summary.status.value).inc()
         metrics.review_duration_seconds.observe(summary.duration_ms / 1000)

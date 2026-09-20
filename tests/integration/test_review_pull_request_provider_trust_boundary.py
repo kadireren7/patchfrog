@@ -5,11 +5,12 @@ provider/model/critic model/timeout must never reach provider
 construction at all -- ``_review_pull_request`` must fail with
 ``MalformedReviewConfigError`` (from repository config resolution,
 which always runs in ``on_malformed="raise"`` mode for a real review
-attempt) *before* ``build_reviewer_provider``/``build_critic_provider``
-are ever called. This is the strongest form of the guarantee that a PR
-changing ``.patchfrog.yml`` can never change which provider/model
-actually runs: the repo-supplied selection never even gets as far as
-provider construction.
+attempt) *before* :meth:`~patchfrog.routing.router.ModelRouter.route`
+(Milestone Z14: the task routes through the Model Router, not the older
+single-provider ``provider_factory`` path) is ever called. This is the
+strongest form of the guarantee that a PR changing ``.patchfrog.yml``
+can never change which provider/model actually runs: the repo-supplied
+selection never even gets as far as provider routing.
 
 Runs against a real SQLite *file* database (not ``:memory:``) because
 ``_review_pull_request`` creates its own engine directly from
@@ -29,7 +30,6 @@ from typing import Any
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
-import apps.worker.tasks.review_pull_request as worker_task_module
 from apps.worker.tasks.review_pull_request import _review_pull_request
 from patchfrog.config.settings import Settings
 from patchfrog.domain.pull_request import ChangedFile, PullRequestMetadata
@@ -41,6 +41,7 @@ from patchfrog.persistence.models import Base
 from patchfrog.persistence.repositories import RepositoryRepository
 from patchfrog.repository.snapshot import RepositorySnapshot, RepositorySnapshotProvider
 from patchfrog.review.config import MalformedReviewConfigError
+from patchfrog.routing.router import ModelRouter
 from tests.support.git_repo import commit_all, materialize_fixture_repo
 
 _GITHUB_INSTALLATION_ID = 11223344
@@ -148,13 +149,11 @@ async def test_repo_committed_provider_field_never_reaches_provider_construction
 
     def _must_not_be_called(*args: object, **kwargs: object) -> None:
         raise AssertionError(
-            "build_reviewer_provider/build_critic_provider must never be called when "
-            "repository config resolution fails -- a malicious .patchfrog.yml must never "
-            "get as far as provider construction"
+            "ModelRouter.route must never be called when repository config resolution "
+            "fails -- a malicious .patchfrog.yml must never get as far as provider routing"
         )
 
-    monkeypatch.setattr(worker_task_module, "build_reviewer_provider", _must_not_be_called)
-    monkeypatch.setattr(worker_task_module, "build_critic_provider", _must_not_be_called)
+    monkeypatch.setattr(ModelRouter, "route", _must_not_be_called)
 
     with pytest.raises(MalformedReviewConfigError, match="no longer repository-controlled"):
         await _review_pull_request(
@@ -174,7 +173,7 @@ async def test_repo_config_without_operator_fields_reaches_provider_construction
 ) -> None:
     """Control case: a repository config with only behavior fields (no
     operator-only fields) must resolve cleanly and reach provider
-    construction using the *operator's* runtime config (default
+    routing using the *operator's* runtime config (default
     anthropic/claude-opus-5 here, since no PATCHFROG_REVIEW_* env is
     set) -- never anything derived from the repository."""
 
@@ -203,11 +202,11 @@ async def test_repo_config_without_operator_fields_reaches_provider_construction
 
     captured: dict[str, Any] = {}
 
-    def _capture_reviewer(runtime_config: Any, *, settings: Any) -> Any:
+    def _capture_route(self: Any, *, runtime_config: Any, critic_enabled: bool) -> Any:
         captured["runtime_config"] = runtime_config
         raise _StopAfterProviderResolution()
 
-    monkeypatch.setattr(worker_task_module, "build_reviewer_provider", _capture_reviewer)
+    monkeypatch.setattr(ModelRouter, "route", _capture_route)
 
     with pytest.raises(_StopAfterProviderResolution):
         await _review_pull_request(

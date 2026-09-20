@@ -77,24 +77,42 @@ critic, and runtime fallback all inherit the restriction automatically.
 the same rule Milestone U's own runtime fallback already established,
 now generalized to governance.
 
-**Known gap, discovered while implementing this integration**: the
-production, webhook-driven review task
-(`apps/worker/tasks/review_pull_request.py`) does not construct a
-`ModelRouter` at all today -- it builds providers directly via
+**Resolved**: the production, webhook-driven review task
+(`apps/worker/tasks/review_pull_request.py`) now constructs a
+`ModelRouter` and passes its `route_plan` straight to
+`PullRequestReviewService`, exactly mirroring `patchfrog.cli`'s own
+already-established integration -- it no longer calls
 `patchfrog.review.provider_factory.build_reviewer_provider`/
-`build_critic_provider`, bypassing routing, family diversity, and
-runtime failover entirely. `ModelRouter` (all of Milestone U, not just
-this milestone's own `allowed_providers` addition) is currently only
-reachable from `patchfrog.cli`. This means a governance
-`allowed_providers` policy is correctly enforced by the router itself
-(see its own test corpus) but is **not yet reachable from a real hosted
-review** until that task is rewired to use `route_plan=` instead of
-`reviewer_provider=`/`critic_provider=`. Deliberately not fixed in this
-PR: it is a live, heavily-guarded production trust boundary (see
-`tests/integration/test_review_pull_request_provider_trust_boundary.py`,
-which would need its own careful update, not a rushed one) and rewiring
-it safely is a separate, substantial change -- tracked as a follow-up,
-not silently left undocumented.
+`build_critic_provider` directly. A governance `allowed_providers`
+policy is therefore enforced by the router itself (see its own test
+corpus, `tests/unit/test_router_policy.py`) *and* reachable end-to-end
+from a real hosted review, closing the gap this section previously
+described. The trust boundary this task guards was preserved, not
+loosened, through the rewire:
+`tests/integration/test_review_pull_request_provider_trust_boundary.py`
+was updated to monkeypatch `ModelRouter.route` (instead of the
+now-unused `build_reviewer_provider`) and still asserts a repository's
+`.patchfrog.yml` never reaches provider selection; a new
+`tests/integration/test_review_pull_request_model_router_fallback.py`
+covers the actual production task path for a missing preferred-provider
+credential falling back to an operator-configured alternative, a policy
+restriction excluding a credentialed-but-disallowed provider, and the
+explicit failure when no allowed provider has credentials.
+
+**Still deployment-wide, not yet per-workspace**: `ModelRouter`'s
+`allowed_providers` is threaded here from a single new
+`Settings.allowed_providers` field (`PATCHFROG_ALLOWED_PROVIDERS`,
+comma-separated) -- an operator/deployment-level restriction, exactly
+like every other field on `Settings`. A hosting operator (e.g.
+patchfrog-cloud) that wants a *per-workspace* `allowed_providers`
+restriction (its own `EffectivePolicy.allowed_providers`, already
+computed by `patchfrog.governance`) still has no way to hand that
+narrower, per-review value into this one Celery task without also
+threading a new parameter through the full pipeline chain
+(`run_review_pipeline` -> `index_repository` -> `build_context` ->
+`analyze_repository` -> `review_pull_request` -> `publish_review`) --
+that remains a separate, substantial follow-up, not silently left
+undocumented (see patchfrog-cloud's own `docs/policy-operations.md`).
 
 ## Executable Verification integration (Z15)
 
