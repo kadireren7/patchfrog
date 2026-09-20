@@ -43,6 +43,7 @@ from patchfrog.persistence.models.base import Base
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.domain import (
     CriticDecision,
+    CriticRejectionCategory,
     ProposalStatus,
     ReviewCandidateReason,
     ReviewRunStatus,
@@ -463,6 +464,14 @@ class CriticVerdictModel(Base):
     )
     downgraded_confidence: Mapped[Confidence | None] = mapped_column(
         enum_column(Confidence, length=16), nullable=True
+    )
+    #: Machine-classified reason for a ``REJECT`` verdict -- see
+    #: :class:`patchfrog.review.domain.CriticRejectionCategory`. Nullable:
+    #: ``None`` for every ``ACCEPT``/``DOWNGRADE`` verdict, and for rows
+    #: persisted before this column existed (never fabricated from
+    #: ``reasoning_summary`` prose).
+    rejection_category: Mapped[CriticRejectionCategory | None] = mapped_column(
+        enum_column(CriticRejectionCategory, length=32), nullable=True
     )
     provider: Mapped[str] = mapped_column(String(64))
     model: Mapped[str] = mapped_column(String(128))

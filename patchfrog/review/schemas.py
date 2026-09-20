@@ -14,12 +14,13 @@ from __future__ import annotations
 from typing import Any
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
-from patchfrog.review.domain import CriticDecision
+from patchfrog.review.domain import CriticDecision, CriticRejectionCategory
 
 _CATEGORY_VALUES = [c.value for c in FindingCategory]
 _SEVERITY_VALUES = [s.value for s in Severity]
 _CONFIDENCE_VALUES = [c.value for c in Confidence]
 _CRITIC_DECISION_VALUES = [d.value for d in CriticDecision]
+_CRITIC_REJECTION_CATEGORY_VALUES = [c.value for c in CriticRejectionCategory]
 
 _NULLABLE_STRING: dict[str, Any] = {"anyOf": [{"type": "string"}, {"type": "null"}]}
 
@@ -134,7 +135,16 @@ CRITIC_RESPONSE_SCHEMA: dict[str, Any] = {
         "reasoning_summary": {"type": "string", "description": "1-3 sentences explaining the decision."},
         "downgraded_severity": _nullable_enum(_SEVERITY_VALUES),
         "downgraded_confidence": _nullable_enum(_CONFIDENCE_VALUES),
+        "rejection_category": {
+            **_nullable_enum(_CRITIC_REJECTION_CATEGORY_VALUES),
+            "description": (
+                "Required (non-null) when decision is 'reject'; null otherwise. Which of the "
+                "system prompt's enumerated reject reasons applies."
+            ),
+        },
     },
-    "required": ["decision", "reasoning_summary", "downgraded_severity", "downgraded_confidence"],
+    "required": [
+        "decision", "reasoning_summary", "downgraded_severity", "downgraded_confidence", "rejection_category",
+    ],
     "additionalProperties": False,
 }

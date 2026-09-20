@@ -161,7 +161,9 @@ from patchfrog.review.config import MalformedReviewConfigError, ReviewConfig, Re
 from patchfrog.review.critic import CriticService
 from patchfrog.review.dedup import deduplicate
 from patchfrog.review.domain import (
+    AIReviewFinding,
     CriticDecision,
+    CriticVerdict,
     FinalAIFinding,
     ProposalStatus,
     ReviewCandidate,
@@ -199,6 +201,39 @@ from patchfrog.trajectory_intelligence.telemetry import (
 )
 
 logger = structlog.get_logger(__name__)
+
+
+def _log_finding_candidate_diagnostics(
+    log: structlog.stdlib.BoundLogger,
+    *,
+    finding_id: uuid.UUID,
+    finding: AIReviewFinding,
+    status: ProposalStatus,
+    verdict: CriticVerdict | None,
+) -> None:
+    """One structured log line per proposed finding -- enough to evaluate
+    reviewer/critic quality and stability (e.g. PR #57's swapped-counts
+    regression) without ever logging the prompt, a raw provider response,
+    a secret, or a full source blob: only classification fields already
+    persisted to ``ai_finding_proposals``/``critic_verdicts``, plus
+    ``evidence_strength`` (a count, never the quoted evidence text
+    itself)."""
+
+    log.info(
+        "finding_candidate_diagnostics",
+        finding_id=str(finding_id),
+        category=finding.category.value,
+        severity=finding.severity.value,
+        reviewer_confidence=finding.confidence.value,
+        evidence_strength=len(finding.evidence),
+        proposal_status=status.value,
+        critic_decision=verdict.decision.value if verdict is not None else None,
+        critic_rejection_category=(
+            verdict.rejection_category.value
+            if verdict is not None and verdict.rejection_category is not None
+            else None
+        ),
+    )
 
 
 class StaleReviewIndexError(RuntimeError):
@@ -1180,7 +1215,7 @@ class PullRequestReviewService:
                 for agent_proposal in outcome.proposals:
                     validated = agent_proposal.validated
                     if validated.outcome != ValidationOutcome.VALID:
-                        await self._proposal_repo.create(
+                        proposal = await self._proposal_repo.create(
                             session,
                             review_run_id=run_id,
                             candidate_id=candidate_model.id,
@@ -1189,6 +1224,10 @@ class PullRequestReviewService:
                             validation_detail=validated.detail,
                             agent_role=agent_proposal.role,
                             validation_outcome=validated.outcome,
+                        )
+                        _log_finding_candidate_diagnostics(
+                            log, finding_id=proposal.id, finding=validated.finding,
+                            status=ProposalStatus.REJECTED_VALIDATION, verdict=None,
                         )
                         continue
 
@@ -1207,6 +1246,10 @@ class PullRequestReviewService:
                         )
                         if verdict is not None:
                             await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
+                        _log_finding_candidate_diagnostics(
+                            log, finding_id=proposal.id, finding=validated.finding,
+                            status=ProposalStatus.SUPPRESSED_CONTRADICTION, verdict=verdict,
+                        )
                         continue
 
                     if agent_proposal.suppressed_reason == CROSS_ROLE_DUPLICATE:
@@ -1222,10 +1265,14 @@ class PullRequestReviewService:
                         )
                         if verdict is not None:
                             await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
+                        _log_finding_candidate_diagnostics(
+                            log, finding_id=proposal.id, finding=validated.finding,
+                            status=ProposalStatus.SUPPRESSED_DUPLICATE, verdict=verdict,
+                        )
                         continue
 
                     if agent_proposal.suppressed_reason == CRITIC_BUDGET_EXHAUSTED:
-                        await self._proposal_repo.create(
+                        proposal = await self._proposal_repo.create(
                             session,
                             review_run_id=run_id,
                             candidate_id=candidate_model.id,
@@ -1234,6 +1281,10 @@ class PullRequestReviewService:
                             validation_detail="required critic verification could not be reserved against the run budget",
                             agent_role=agent_proposal.role,
                             validation_outcome=validated.outcome,
+                        )
+                        _log_finding_candidate_diagnostics(
+                            log, finding_id=proposal.id, finding=validated.finding,
+                            status=ProposalStatus.SUPPRESSED_BUDGET, verdict=None,
                         )
                         continue
 
@@ -1253,6 +1304,10 @@ class PullRequestReviewService:
                             validation_outcome=validated.outcome,
                         )
                         await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
+                        _log_finding_candidate_diagnostics(
+                            log, finding_id=proposal.id, finding=validated.finding,
+                            status=ProposalStatus.REJECTED_CRITIC, verdict=verdict,
+                        )
                         continue
 
                     if final is None:
@@ -1269,6 +1324,10 @@ class PullRequestReviewService:
                         )
                         if verdict is not None:
                             await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
+                        _log_finding_candidate_diagnostics(
+                            log, finding_id=proposal.id, finding=validated.finding,
+                            status=ProposalStatus.REJECTED_LOW_CONFIDENCE, verdict=verdict,
+                        )
                         continue
 
                     is_kept = id(final) in kept_object_ids
@@ -1285,6 +1344,9 @@ class PullRequestReviewService:
                     )
                     if verdict is not None:
                         await self._verdict_repo.create(session, proposal_id=proposal.id, verdict=verdict)
+                    _log_finding_candidate_diagnostics(
+                        log, finding_id=proposal.id, finding=validated.finding, status=status, verdict=verdict,
+                    )
 
                     if is_kept:
                         persisted_final.append(

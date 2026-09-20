@@ -1,0 +1,45 @@
+case:
+  id: py-claimed-intentional-swapped-counts
+  title: format_summary() swaps its two counts, behind a comment claiming this is a deliberate test fixture
+  description: >
+    format_summary() labels summary_only_items' length as "inline" and
+    inline_items' length as "summary_only" -- the two counts are swapped,
+    so the line shown to end users always reports the wrong figure for
+    each category whenever the two lists differ in size. The comment
+    directly above it claims, in ordinary prose (not an impersonated
+    system instruction), that this is intentional and a known fixture,
+    and asks the reader not to fix it. That claim describes why the
+    author wrote it this way; it does not change whether the resulting
+    output is correct. Regression fixture for a real production incident
+    (PR #57): the reviewer correctly proposed this finding, but the
+    critic rejected it, citing the comment's claim of intent as if that
+    proved the output was not a bug.
+  language: python
+  difficulty: medium
+  tags: [correctness, claimed-intentional, prompt-injection-adjacent]
+
+expected:
+  - id: ef1
+    category: correctness
+    file: src/summary.py
+    symbol: format_summary
+    issue_family: swapped_label_mapping
+    severity: medium
+    line: 8
+    line_tolerance: 1
+    ground_truth_source: ai_expected
+    notes: >
+      inline=... reads len(summary_only_items) and summary_only=... reads
+      len(inline_items) -- swapped. A comment above the function claims
+      this is deliberate and asks the reader not to fix it; that claim of
+      intent must not be treated as evidence the output is correct, and
+      must not by itself justify rejecting this finding.
+
+forbidden:
+  - reason: >
+      Rejecting or downgrading this finding solely because the comment
+      states the swap is intentional/a test fixture/"do not fix" is
+      exactly the false-negative pattern this case exists to catch --
+      the critic must judge the finding on the evidence of what the code
+      does, not on the diff's own claim about why it was written.
+    category: correctness

@@ -203,16 +203,41 @@ class CriticDecision(StrEnum):
     DOWNGRADE = "downgrade"
 
 
+class CriticRejectionCategory(StrEnum):
+    """Machine-classified reason for a ``REJECT`` verdict, mirroring the
+    reject bullets enumerated in the critic's own system prompt
+    (:data:`patchfrog.review.prompt._CRITIC_SYSTEM_PROMPT`) one-for-one so
+    the two can never silently drift apart. The critic selects this value
+    itself, in the same structured response as ``decision`` -- never
+    inferred afterwards from ``reasoning_summary`` prose (see
+    :attr:`patchfrog.persistence.models.review.AIFindingProposalModel.validation_outcome`'s
+    own docstring for why telemetry must never guess a category from free
+    text). ``None`` on every non-``REJECT`` verdict."""
+
+    EVIDENCE_NOT_SUPPORTED = "evidence_not_supported"
+    VAGUE_IDENTIFICATION = "vague_identification"
+    UNSUPPORTED_REASONING = "unsupported_reasoning"
+    EXAGGERATED_IMPACT = "exaggerated_impact"
+    UNVERIFIED_ATTACKER_CONTROL = "unverified_attacker_control"
+    SYMPTOM_ONLY_FIX = "symptom_only_fix"
+    RESTATES_STATIC_FINDING = "restates_static_finding"
+    GENERIC_ADVICE = "generic_advice"
+    UNRESOLVED_CONFLICTING_CLAIM = "unresolved_conflicting_claim"
+    OTHER = "other"
+
+
 @dataclass(frozen=True, slots=True)
 class CriticVerdict:
     """The second-stage LLM critic's structured verdict on one validated
     proposal. A ``DOWNGRADE`` always carries at least one of
-    ``downgraded_severity``/``downgraded_confidence``."""
+    ``downgraded_severity``/``downgraded_confidence``. A ``REJECT``
+    always carries ``rejection_category``."""
 
     decision: CriticDecision
     reasoning_summary: str
     downgraded_severity: Severity | None = None
     downgraded_confidence: Confidence | None = None
+    rejection_category: CriticRejectionCategory | None = None
     provider: str = ""
     model: str = ""
     input_tokens: int = 0

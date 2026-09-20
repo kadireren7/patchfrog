@@ -20,6 +20,7 @@ class CriticVerdictRepository:
             reasoning_summary=verdict.reasoning_summary,
             downgraded_severity=verdict.downgraded_severity,
             downgraded_confidence=verdict.downgraded_confidence,
+            rejection_category=verdict.rejection_category,
             provider=verdict.provider,
             model=verdict.model,
             input_tokens=verdict.input_tokens,
