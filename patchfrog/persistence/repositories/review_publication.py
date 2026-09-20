@@ -105,6 +105,33 @@ class ReviewPublicationRepository:
         )
         return result.scalars().first()
 
+    async def get_latest_for_review_run(
+        self, session: AsyncSession, *, review_run_id: uuid.UUID
+    ) -> ReviewPublicationModel | None:
+        """The single most recent publication attempt for this run,
+        *regardless* of `mode`/`publication_policy_fingerprint` --
+        unlike :meth:`get_published`/:meth:`get_in_flight`, which both
+        require knowing that identity in advance (this run's own
+        currently-effective publication config), something a caller
+        that only wants to know "what actually happened to publication
+        for this run" should never need to re-resolve just to ask.
+        `None` means no publication attempt was ever made for this run
+        at all (e.g. the review itself failed before reaching that
+        stage, or publication was disabled/skipped upstream before any
+        row was created here) -- distinct from a row that exists with a
+        `SKIPPED_*` status, which means an attempt *was* made and
+        deliberately produced no GitHub write. Mirrors
+        :meth:`~patchfrog.persistence.repositories.review_run.ReviewRunRepository.get_latest_for_pull_request`'s
+        own "latest regardless of status" shape."""
+
+        result = await session.execute(
+            select(ReviewPublicationModel)
+            .where(ReviewPublicationModel.review_run_id == review_run_id)
+            .order_by(ReviewPublicationModel.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def create(
         self,
         session: AsyncSession,
