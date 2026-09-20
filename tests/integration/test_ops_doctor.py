@@ -125,12 +125,16 @@ async def test_missing_provider_credential_warns(db_engine: AsyncEngine, test_pr
     assert "ANTHROPIC_API_KEY" in credential_check.detail
 
 
-async def test_gemini_provider_with_unset_model_warns_family_mismatch(
+async def test_gemini_provider_with_unset_model_now_correctly_defaults_to_gemini(
     db_engine: AsyncEngine, test_private_key: str
 ) -> None:
     """The exact live bug this project hit once: PATCHFROG_REVIEW_PROVIDER=gemini
-    with PATCHFROG_REVIEW_MODEL left unset silently resolves to the
-    Anthropic default (claude-opus-5) and every real review 404s."""
+    with PATCHFROG_REVIEW_MODEL left unset used to silently resolve to
+    the Anthropic default (claude-opus-5) and every real review 404'd.
+    Fixed at the source (resolve_review_runtime_config is now
+    provider-aware for its default model) -- doctor now reports a clean
+    PASS with the correct gemini model, not a WARN papering over a
+    still-broken default."""
 
     engine = await _migrated_engine(db_engine)
     settings = _settings(
@@ -139,10 +143,10 @@ async def test_gemini_provider_with_unset_model_warns_family_mismatch(
 
     report = await run_doctor(settings=settings, engine=engine, check_github_auth=False)
 
-    mismatch_check = next(c for c in report.checks if c.name == "model_family:PATCHFROG_REVIEW_MODEL")
-    assert mismatch_check.status is DoctorStatus.WARN
-    assert "claude-opus-5" in mismatch_check.detail
-    assert "PATCHFROG_REVIEW_MODEL" in mismatch_check.detail
+    assert report.overall is DoctorStatus.PASS, [c for c in report.checks if c.status is not DoctorStatus.PASS]
+    provider_check = next(c for c in report.checks if c.name == "review_provider")
+    assert "model=gemini-3.6-flash" in provider_check.detail
+    assert "claude-opus-5" not in provider_check.detail
 
 
 async def test_matching_provider_and_model_family_passes(db_engine: AsyncEngine, test_private_key: str) -> None:
@@ -156,8 +160,8 @@ async def test_matching_provider_and_model_family_passes(db_engine: AsyncEngine,
 
     report = await run_doctor(settings=settings, engine=engine, check_github_auth=False)
 
-    mismatch_check = next(c for c in report.checks if c.name == "model_family:PATCHFROG_REVIEW_MODEL")
-    assert mismatch_check.status is DoctorStatus.PASS
+    provider_check = next(c for c in report.checks if c.name == "review_provider")
+    assert provider_check.status is DoctorStatus.PASS
 
 
 async def test_models_prefixed_gemini_name_is_normalized_before_family_check(
@@ -173,8 +177,35 @@ async def test_models_prefixed_gemini_name_is_normalized_before_family_check(
 
     report = await run_doctor(settings=settings, engine=engine, check_github_auth=False)
 
-    mismatch_check = next(c for c in report.checks if c.name == "model_family:PATCHFROG_REVIEW_MODEL")
-    assert mismatch_check.status is DoctorStatus.PASS
+    provider_check = next(c for c in report.checks if c.name == "review_provider")
+    assert provider_check.status is DoctorStatus.PASS
+
+
+async def test_openai_provider_with_explicit_anthropic_model_fails_clearly(
+    db_engine: AsyncEngine, test_private_key: str
+) -> None:
+    """The actual production incident this milestone fixes: provider
+    routing selected openai correctly, but an explicitly-configured
+    PATCHFROG_REVIEW_MODEL still named an Anthropic model
+    (claude-opus-5) -- previously only a WARN, silently sent to OpenAI's
+    API and 404ing. Now a hard FAIL, reported before any review ever
+    runs."""
+
+    engine = await _migrated_engine(db_engine)
+    settings = _settings(
+        test_private_key=test_private_key,
+        PATCHFROG_REVIEW_PROVIDER="openai",
+        PATCHFROG_REVIEW_MODEL="claude-opus-5",
+        OPENAI_API_KEY="fake-not-real",
+    )
+
+    report = await run_doctor(settings=settings, engine=engine, check_github_auth=False)
+
+    assert report.overall is DoctorStatus.FAIL
+    provider_check = next(c for c in report.checks if c.name == "review_provider")
+    assert provider_check.status is DoctorStatus.FAIL
+    assert "claude-opus-5" in provider_check.detail
+    assert "openai" in provider_check.detail
 
 
 async def test_unsupported_provider_fails(db_engine: AsyncEngine, test_private_key: str) -> None:

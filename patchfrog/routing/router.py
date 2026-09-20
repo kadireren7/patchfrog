@@ -172,19 +172,38 @@ class ModelRouter:
 
         timeout_seconds = runtime_config.request_timeout_seconds
 
-        def _model_for(family: str) -> str:
+        def _model_for(family: str, *, explicit_model: str) -> str:
+            # `explicit_model` (the operator's configured/defaulted
+            # model for their *own* role -- reviewer's `runtime_config.
+            # model`, critic's `runtime_config.critic_model`) is only
+            # valid for the family it was resolved against
+            # (`runtime_config.provider`, already validated by
+            # `resolve_review_runtime_config` to actually be a model for
+            # that provider). Any *other* family -- whether picked for
+            # diversity or as a config-time fallback -- always gets its
+            # own provider-appropriate default, never a model string
+            # that was validated against a different provider. Comparing
+            # against `runtime_config.provider` specifically (not e.g.
+            # the reviewer's own possibly-fallen-back family) is the
+            # fix for a real bug: a critic that lands on the same
+            # (fallback) family as a fallen-back reviewer previously
+            # still got the *original* preferred provider's critic
+            # model, mismatched with the family actually serving it.
             if family == runtime_config.provider:
-                return runtime_config.model
+                return explicit_model
             return DEFAULT_MODEL_BY_PROVIDER[family]
 
         reviewer_provider = _build_provider(
-            reviewer_family, _model_for(reviewer_family), settings=self._settings, timeout_seconds=timeout_seconds
+            reviewer_family,
+            _model_for(reviewer_family, explicit_model=runtime_config.model),
+            settings=self._settings,
+            timeout_seconds=timeout_seconds,
         )
         reviewer_providers = {AgentRole.CORRECTNESS: reviewer_provider, AgentRole.SECURITY: reviewer_provider}
 
         critic_provider: LLMProvider | None = None
         if critic_family is not None:
-            critic_model = runtime_config.critic_model if critic_family == reviewer_family else _model_for(critic_family)
+            critic_model = _model_for(critic_family, explicit_model=runtime_config.critic_model)
             critic_provider = _build_provider(
                 critic_family, critic_model, settings=self._settings, timeout_seconds=timeout_seconds
             )
@@ -200,7 +219,8 @@ class ModelRouter:
         reviewer_fallback_providers: Mapping[AgentRole, LLMProvider] | None = None
         if runtime_fallback_family is not None:
             fb_provider = _build_provider(
-                runtime_fallback_family, _model_for(runtime_fallback_family),
+                runtime_fallback_family,
+                _model_for(runtime_fallback_family, explicit_model=runtime_config.model),
                 settings=self._settings, timeout_seconds=timeout_seconds,
             )
             reviewer_fallback_providers = {AgentRole.CORRECTNESS: fb_provider, AgentRole.SECURITY: fb_provider}
@@ -211,7 +231,8 @@ class ModelRouter:
             critic_runtime_fallback_family = self._select_runtime_fallback_family(configured, exclude=critic_family)
             if critic_runtime_fallback_family is not None:
                 critic_fallback_provider = _build_provider(
-                    critic_runtime_fallback_family, _model_for(critic_runtime_fallback_family),
+                    critic_runtime_fallback_family,
+                    _model_for(critic_runtime_fallback_family, explicit_model=runtime_config.critic_model),
                     settings=self._settings, timeout_seconds=timeout_seconds,
                 )
 

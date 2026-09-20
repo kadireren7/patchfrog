@@ -55,19 +55,6 @@ _VERIFIER_INSPECT_TIMEOUT_SECONDS = 3.0
 #: signature). Checked case-insensitively.
 _PLACEHOLDER_WEBHOOK_SECRETS = frozenset({"change-me", "changeme", "your-webhook-secret"})
 
-#: Conservative model-name family prefixes, after stripping a
-#: `models/`-prefixed resource-path form (see
-#: patchfrog.review.providers.gemini_provider's own docstring on why that
-#: form is legitimate) -- never an exhaustive per-model list, which would
-#: go stale the moment either vendor ships a new model name. Exists
-#: solely to catch the exact live bug this project already hit once:
-#: PATCHFROG_REVIEW_PROVIDER=gemini with PATCHFROG_REVIEW_MODEL left
-#: unset (or copy-pasted from an Anthropic example), silently defaulting
-#: to `claude-opus-5` and 404ing against Gemini's API on the first real
-#: review.
-_MODEL_FAMILY_PREFIX: dict[str, str] = {"anthropic": "claude-", "gemini": "gemini-", "openai": "gpt-"}
-_MODEL_RESOURCE_PREFIX = "models/"
-
 #: Milestone U: the env var name to report for each supported provider's
 #: credential -- kept as an explicit table (not a string-format guess)
 #: since it must exactly match each Settings field's own alias.
@@ -171,7 +158,19 @@ def _provider_checks(settings: Settings) -> list[DoctorCheck]:
         )
         return checks
 
-    runtime_config = resolve_review_runtime_config(settings)
+    try:
+        runtime_config = resolve_review_runtime_config(settings)
+    except ValueError as exc:
+        # An explicit PATCHFROG_REVIEW_MODEL/PATCHFROG_REVIEW_CRITIC_MODEL
+        # that looks like a different provider's model name -- the same
+        # real production bug this check used to only WARN about
+        # (model_family:*, now removed) is now a hard invariant enforced
+        # by resolve_review_runtime_config itself, so doctor reports it
+        # exactly as severely as a real review would fail: FAIL, not a
+        # WARN that undersells "every review will 404".
+        checks.append(DoctorCheck(name="review_provider", status=DoctorStatus.FAIL, detail=str(exc)))
+        return checks
+
     checks.append(
         DoctorCheck(
             name="review_provider",
@@ -201,40 +200,7 @@ def _provider_checks(settings: Settings) -> list[DoctorCheck]:
             )
         )
 
-    checks.append(_model_family_check(provider=runtime_config.provider, model=runtime_config.model, field="PATCHFROG_REVIEW_MODEL"))
-    if settings.review_critic_model is not None:
-        checks.append(
-            _model_family_check(
-                provider=runtime_config.provider, model=runtime_config.critic_model, field="PATCHFROG_REVIEW_CRITIC_MODEL"
-            )
-        )
     return checks
-
-
-def _model_family_check(*, provider: str, model: str, field: str) -> DoctorCheck:
-    expected_prefix = _MODEL_FAMILY_PREFIX.get(provider)
-    if expected_prefix is None:
-        return DoctorCheck(name=f"model_family:{field}", status=DoctorStatus.PASS, detail="no family check defined for this provider")
-    normalized = model.removeprefix(_MODEL_RESOURCE_PREFIX)
-    if normalized.startswith(expected_prefix):
-        return DoctorCheck(name=f"model_family:{field}", status=DoctorStatus.PASS, detail=f"{model!r} looks like a {provider} model name")
-    # A model name for a *different known* family is a near-certain
-    # misconfiguration (this exact shape happened live: provider=gemini,
-    # PATCHFROG_REVIEW_MODEL left unset -> defaulted to claude-opus-5,
-    # every review 404'd against Gemini's API). A model name that matches
-    # neither known family is conservatively left as PASS -- a new,
-    # unlisted model family is not this check's business to reject.
-    other_families = [p for p, prefix in _MODEL_FAMILY_PREFIX.items() if p != provider and normalized.startswith(prefix)]
-    if other_families:
-        return DoctorCheck(
-            name=f"model_family:{field}",
-            status=DoctorStatus.WARN,
-            detail=(
-                f"{field}={model!r} looks like a {other_families[0]} model name, but PATCHFROG_REVIEW_PROVIDER={provider!r} -- "
-                f"check {field} was actually set (an unset review model silently defaults to the Anthropic model name)"
-            ),
-        )
-    return DoctorCheck(name=f"model_family:{field}", status=DoctorStatus.PASS, detail=f"{model!r} does not match a known mismatched family")
 
 
 def _hard_caps_check(settings: Settings) -> DoctorCheck:

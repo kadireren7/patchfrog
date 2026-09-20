@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from patchfrog.config.settings import Settings
-from patchfrog.review.runtime_config import resolve_review_runtime_config
+from patchfrog.review.runtime_config import DEFAULT_MODEL_BY_PROVIDER, resolve_review_runtime_config
 
 
 def _settings(**overrides: object) -> Settings:
@@ -46,6 +46,93 @@ def test_no_runtime_vars_critic_model_defaults_to_reviewer_model() -> None:
 def test_no_runtime_vars_timeout_defaults_to_30_seconds() -> None:
     runtime_config = resolve_review_runtime_config(_settings())
     assert runtime_config.request_timeout_seconds == 30.0
+
+
+# -- B2: provider-aware model default (the actual production incident:
+# PATCHFROG_REVIEW_PROVIDER=openai with PATCHFROG_REVIEW_MODEL left
+# unset used to silently resolve to the Anthropic model name,
+# "claude-opus-5" -- ModelRouter correctly selected openai, but the
+# reviewer call 404'd against OpenAI's API with a claude model name) --
+
+
+def test_openai_provider_with_model_unset_defaults_to_openai_model_not_anthropic() -> None:
+    runtime_config = resolve_review_runtime_config(_settings(PATCHFROG_REVIEW_PROVIDER="openai"))
+    assert runtime_config.provider == "openai"
+    assert runtime_config.model == DEFAULT_MODEL_BY_PROVIDER["openai"]
+    assert runtime_config.model != "claude-opus-5"
+
+
+def test_gemini_provider_with_model_unset_defaults_to_gemini_model_not_anthropic() -> None:
+    runtime_config = resolve_review_runtime_config(_settings(PATCHFROG_REVIEW_PROVIDER="gemini"))
+    assert runtime_config.provider == "gemini"
+    assert runtime_config.model == DEFAULT_MODEL_BY_PROVIDER["gemini"]
+    assert runtime_config.model != "claude-opus-5"
+
+
+def test_openai_provider_with_model_unset_critic_model_also_defaults_to_openai_model() -> None:
+    runtime_config = resolve_review_runtime_config(_settings(PATCHFROG_REVIEW_PROVIDER="openai"))
+    assert runtime_config.critic_model == DEFAULT_MODEL_BY_PROVIDER["openai"]
+
+
+# -- B3: explicit model/provider pairing is validated -- an explicit,
+# known-mismatched model must fail clearly, never silently reach a
+# provider's API with the wrong model name --
+
+
+def test_explicit_anthropic_model_with_openai_provider_raises_clearly() -> None:
+    with pytest.raises(ValueError, match="does not look like a 'openai' model"):
+        resolve_review_runtime_config(
+            _settings(PATCHFROG_REVIEW_PROVIDER="openai", PATCHFROG_REVIEW_MODEL="claude-opus-5")
+        )
+
+
+def test_explicit_anthropic_model_with_gemini_provider_raises_clearly() -> None:
+    with pytest.raises(ValueError, match="PATCHFROG_REVIEW_MODEL"):
+        resolve_review_runtime_config(
+            _settings(PATCHFROG_REVIEW_PROVIDER="gemini", PATCHFROG_REVIEW_MODEL="claude-opus-5")
+        )
+
+
+def test_explicit_mismatched_critic_model_raises_clearly() -> None:
+    with pytest.raises(ValueError, match="PATCHFROG_REVIEW_CRITIC_MODEL"):
+        resolve_review_runtime_config(
+            _settings(
+                PATCHFROG_REVIEW_PROVIDER="openai",
+                PATCHFROG_REVIEW_MODEL="gpt-6",
+                PATCHFROG_REVIEW_CRITIC_MODEL="claude-opus-5",
+            )
+        )
+
+
+def test_explicit_matching_model_is_preserved_not_overridden() -> None:
+    """Requirement: operator-controlled model configuration is honored
+    exactly as set when it's valid for the configured provider -- never
+    silently replaced by the provider's own default."""
+
+    runtime_config = resolve_review_runtime_config(
+        _settings(PATCHFROG_REVIEW_PROVIDER="openai", PATCHFROG_REVIEW_MODEL="gpt-6")
+    )
+    assert runtime_config.model == "gpt-6"
+
+
+def test_models_resource_prefixed_model_name_is_normalized_before_validation() -> None:
+    # See patchfrog.review.providers.gemini_provider's own docstring on
+    # why a `models/`-prefixed resource-path form is a legitimate Gemini
+    # model name, not a typo.
+    runtime_config = resolve_review_runtime_config(
+        _settings(PATCHFROG_REVIEW_PROVIDER="gemini", PATCHFROG_REVIEW_MODEL="models/gemini-3.6-flash")
+    )
+    assert runtime_config.model == "models/gemini-3.6-flash"
+
+
+def test_unlisted_model_family_is_not_rejected() -> None:
+    # Conservative by design: a model name matching neither known family
+    # is never this check's business to reject -- only a model that
+    # looks like a *different, known* provider's model is rejected.
+    runtime_config = resolve_review_runtime_config(
+        _settings(PATCHFROG_REVIEW_PROVIDER="openai", PATCHFROG_REVIEW_MODEL="some-future-model-name")
+    )
+    assert runtime_config.model == "some-future-model-name"
 
 
 # -- C: Gemini runtime (provider + model set, nothing else) --
