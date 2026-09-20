@@ -203,7 +203,7 @@ def format_summary_body(
         f"{counts_by_severity[s]} {s.value}" for s in _SEVERITY_ORDER if counts_by_severity.get(s, 0) > 0
     )
     lines.append(f"**Findings:** {severity_line or 'none'}")
-    counts_line = f"**Published inline:** {len(inline_findings)} · **Summary-only:** {len(summary_only_findings)}"
+    counts_line = f"**Published inline:** {len(summary_only_findings)} · **Summary-only:** {len(inline_findings)}"
     if omitted_count:
         counts_line += f" · **Omitted:** {omitted_count}"
     lines.append(counts_line)
