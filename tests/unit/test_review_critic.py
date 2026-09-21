@@ -9,12 +9,14 @@ from patchfrog.review.critic import CriticService
 from patchfrog.review.domain import (
     AIReviewFinding,
     CriticDecision,
+    CriticRejectionCategory,
     ReviewCandidate,
     ReviewCandidateReason,
     ValidatedFinding,
     ValidationOutcome,
 )
 from patchfrog.review.providers.fake import FakeLLMProvider, ScriptedResponse
+from patchfrog.review.schemas import CRITIC_RESPONSE_SCHEMA
 from patchfrog.review.validation import ResponseSchemaError
 
 _CANDIDATE = ReviewCandidate(
@@ -67,6 +69,40 @@ async def test_critic_rejects() -> None:
     service = CriticService(provider=provider)
     verdict = await service.critique(_VALIDATED, candidate=_CANDIDATE, context_text="x = 1")
     assert verdict.decision == CriticDecision.REJECT
+
+
+async def test_critic_reject_populates_rejection_category() -> None:
+    provider = FakeLLMProvider(
+        [ScriptedResponse(raw_json=json.dumps({
+            "decision": "reject", "reasoning_summary": "restates the category, no mechanism",
+            "downgraded_severity": None, "downgraded_confidence": None,
+            "rejection_category": "unsupported_reasoning",
+        }))]
+    )
+    service = CriticService(provider=provider)
+    verdict = await service.critique(_VALIDATED, candidate=_CANDIDATE, context_text="x = 1")
+    assert verdict.decision == CriticDecision.REJECT
+    assert verdict.rejection_category == CriticRejectionCategory.UNSUPPORTED_REASONING
+
+
+async def test_critic_accept_rejection_category_is_none_even_if_provider_sends_one() -> None:
+    provider = FakeLLMProvider(
+        [ScriptedResponse(raw_json=json.dumps({
+            "decision": "accept", "reasoning_summary": "real bug",
+            "downgraded_severity": None, "downgraded_confidence": None,
+            "rejection_category": None,
+        }))]
+    )
+    service = CriticService(provider=provider)
+    verdict = await service.critique(_VALIDATED, candidate=_CANDIDATE, context_text="x = 1")
+    assert verdict.decision == CriticDecision.ACCEPT
+    assert verdict.rejection_category is None
+
+
+def test_critic_response_schema_requires_rejection_category() -> None:
+    assert "rejection_category" in CRITIC_RESPONSE_SCHEMA["required"]
+    values = CRITIC_RESPONSE_SCHEMA["properties"]["rejection_category"]["anyOf"][0]["enum"]
+    assert set(values) == {c.value for c in CriticRejectionCategory}
 
 
 async def test_critic_downgrades() -> None:

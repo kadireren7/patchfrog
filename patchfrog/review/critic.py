@@ -17,6 +17,7 @@ from patchfrog.analysis.domain import Confidence, Severity
 from patchfrog.review.domain import (
     AIReviewFinding,
     CriticDecision,
+    CriticRejectionCategory,
     CriticVerdict,
     ReviewCandidate,
     ValidatedFinding,
@@ -71,6 +72,7 @@ class CriticService:
             reasoning_summary = str(payload.get("reasoning_summary", ""))
             downgraded_severity = payload.get("downgraded_severity")
             downgraded_confidence = payload.get("downgraded_confidence")
+            rejection_category = payload.get("rejection_category")
         except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
             raise ResponseSchemaError(f"critic response did not match schema: {exc}") from exc
 
@@ -79,6 +81,7 @@ class CriticService:
             reasoning_summary=reasoning_summary,
             downgraded_severity=Severity(downgraded_severity) if downgraded_severity else None,
             downgraded_confidence=Confidence(downgraded_confidence) if downgraded_confidence else None,
+            rejection_category=CriticRejectionCategory(rejection_category) if rejection_category else None,
             provider=self._provider.identity.provider,
             model=self._provider.identity.model,
             input_tokens=result.usage.input_tokens,
