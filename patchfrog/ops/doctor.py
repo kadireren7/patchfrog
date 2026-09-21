@@ -237,7 +237,8 @@ def _webhook_route_check() -> DoctorCheck:
         status=DoctorStatus.PASS,
         detail=(
             "expected route: POST /webhooks/github -- GitHub App must subscribe to the `pull_request` event only, "
-            "with permissions contents:read, metadata:read, pull_requests:write (see docs/quickstart.md)"
+            "with permissions contents:read, metadata:read, pull_requests:write, checks:write "
+            "(see docs/quickstart.md)"
         ),
     )
 

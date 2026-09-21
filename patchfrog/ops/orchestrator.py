@@ -22,8 +22,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patchfrog.config.settings import Settings
 from patchfrog.domain.github import RepositoryRef
+from patchfrog.domain.pull_request import PullRequestRef
 from patchfrog.ops.eligibility import EligibilityDecision, check_eligibility
 from patchfrog.persistence.repositories import RepositoryRepository
+from patchfrog.publishing.checks import ReviewCheckPublisher, ReviewCheckState, ReviewCheckUpdate
 
 logger = structlog.get_logger(__name__)
 
@@ -35,6 +37,7 @@ async def schedule_pipeline_if_eligible(
     repository_ref: RepositoryRef,
     commit_sha: str,
     pull_request_number: int,
+    check_publisher: ReviewCheckPublisher | None = None,
 ) -> EligibilityDecision:
     """Called once, right after a `pull_request` webhook event is
     successfully ingested. Decides whether to kick off the
@@ -73,6 +76,26 @@ async def schedule_pipeline_if_eligible(
             reason=decision.reason.value if decision.reason else "unknown",
             detail=decision.detail,
         )
+        if check_publisher is not None:
+            try:
+                await check_publisher.reconcile(
+                    ref=PullRequestRef(
+                        owner=repository_ref.owner,
+                        repository=repository_ref.name,
+                        number=pull_request_number,
+                    ),
+                    head_sha=commit_sha,
+                    update=ReviewCheckUpdate(
+                        state=ReviewCheckState.SKIPPED,
+                        detail=decision.detail,
+                    ),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "review_check_skip_publish_failed",
+                    repository=repository_ref.full_name,
+                    error_type=type(exc).__name__,
+                )
         return decision
 
     # Imported here, not at module level -- patchfrog/ never imports from
@@ -80,6 +103,27 @@ async def schedule_pipeline_if_eligible(
     # other way around); this function is the one deliberate exception,
     # so the dependency is scoped to exactly where it's needed.
     from apps.worker.tasks.run_review_pipeline import run_review_pipeline_task
+
+    if check_publisher is not None:
+        try:
+            await check_publisher.reconcile(
+                ref=PullRequestRef(
+                    owner=repository_ref.owner,
+                    repository=repository_ref.name,
+                    number=pull_request_number,
+                ),
+                head_sha=commit_sha,
+                update=ReviewCheckUpdate(state=ReviewCheckState.QUEUED),
+            )
+        except Exception as exc:
+            # A presentation failure must not discard an otherwise valid
+            # review job; the running stage retries reconciliation.
+            logger.warning(
+                "review_check_queue_publish_failed",
+                repository=repository_ref.full_name,
+                pull_request_number=pull_request_number,
+                error_type=type(exc).__name__,
+            )
 
     run_review_pipeline_task.delay(
         github_repository_id=repository_ref.github_repository_id,

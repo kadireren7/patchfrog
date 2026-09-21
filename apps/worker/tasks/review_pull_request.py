@@ -40,6 +40,7 @@ from patchfrog.domain.pull_request import PullRequestRef
 from patchfrog.executable_verification.dispatch import VerifierDispatcher
 from patchfrog.github.auth import InstallationTokenProvider
 from patchfrog.github.client import GitHubClient
+from patchfrog.merge_readiness.service import MergeReadinessService
 from patchfrog.ops import metrics
 from patchfrog.ops.errors import classify_exception
 from patchfrog.persistence.database import create_engine, create_session_factory
@@ -47,6 +48,11 @@ from patchfrog.persistence.repositories import (
     InstallationRepository,
     PullRequestRepository,
     RepositoryRepository,
+)
+from patchfrog.publishing.checks import (
+    ReviewCheckState,
+    ReviewCheckUpdate,
+    github_check_publisher,
 )
 from patchfrog.review.budget import PricingCatalog
 from patchfrog.review.config import MalformedReviewConfigError
@@ -128,7 +134,26 @@ async def _review_pull_request(
 
             ref = PullRequestRef(owner=owner, repository=name, number=pull_request_number)
             current_metadata = await github_client.get_pull_request(installation_id=installation_id, ref=ref)
+            check_publisher = github_check_publisher(
+                client=github_client,
+                installation_id=installation_id,
+            )
             if current_metadata.head_sha != head_sha:
+                try:
+                    await check_publisher.reconcile(
+                        ref=ref,
+                        head_sha=head_sha,
+                        update=ReviewCheckUpdate(
+                            state=ReviewCheckState.SKIPPED,
+                            detail="Superseded by a newer pull request head.",
+                        ),
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "review_check_superseded_publish_failed",
+                        repository=full_name,
+                        error_type=type(exc).__name__,
+                    )
                 logger.info(
                     "review_skipped_superseded",
                     repository=full_name,
@@ -138,6 +163,19 @@ async def _review_pull_request(
                 )
                 metrics.reviews_skipped_total.labels(reason="superseded").inc()
                 return None
+
+            try:
+                await check_publisher.reconcile(
+                    ref=ref,
+                    head_sha=head_sha,
+                    update=ReviewCheckUpdate(state=ReviewCheckState.RUNNING),
+                )
+            except Exception as exc:
+                logger.error(
+                    "review_check_running_publish_failed",
+                    repository=full_name,
+                    error_type=type(exc).__name__,
+                )
 
             metrics.reviews_started_total.inc()
             changed_files = await github_client.list_pull_request_files(
@@ -331,6 +369,19 @@ def review_pull_request_task(
     except Exception as exc:
         category, _retryable, _detail = classify_exception(exc)
         metrics.reviews_failed_total.labels(error_category=category.value).inc()
+        asyncio.run(
+            _publish_terminal_check(
+                owner=owner,
+                name=name,
+                github_repository_id=github_repository_id,
+                installation_id=installation_id,
+                pull_request_number=pull_request_number,
+                head_sha=head_sha,
+                state=ReviewCheckState.FAILED,
+                detail=f"Review failed ({category.value}).",
+                settings=settings,
+            )
+        )
         raise
     if summary is None:
         return "skipped: superseded by a newer commit"
@@ -344,9 +395,11 @@ def review_pull_request_task(
         reused_existing_run=summary.reused_existing_run,
     )
 
+    publication_scheduled = False
     if summary.status is not ReviewRunStatus.FAILED:
         if asyncio.run(_publication_allowed(installation_id=installation_id, settings=settings)):
             publish_review_task.delay(review_run_id=str(summary.run_id), publish=True)
+            publication_scheduled = True
             logger.info("publish_scheduled", review_run_id=str(summary.run_id), repository=full_name)
         else:
             logger.info(
@@ -355,10 +408,113 @@ def review_pull_request_task(
                 repository=full_name,
             )
 
+    if not publication_scheduled:
+        state = (
+            ReviewCheckState.FAILED
+            if summary.status is ReviewRunStatus.FAILED
+            else ReviewCheckState.PARTIAL
+            if summary.status is ReviewRunStatus.PARTIAL
+            else ReviewCheckState.COMPLETED_WITH_FINDINGS
+            if summary.accepted_count
+            else ReviewCheckState.COMPLETED_CLEAN
+        )
+        asyncio.run(
+            _publish_terminal_check(
+                owner=owner,
+                name=name,
+                github_repository_id=github_repository_id,
+                installation_id=installation_id,
+                pull_request_number=pull_request_number,
+                head_sha=head_sha,
+                state=state,
+                accepted_findings=summary.accepted_count,
+                detail=(
+                    f"Budget stopped the review: {summary.budget.termination_reason.value}."
+                    if summary.budget is not None and summary.budget.termination_reason is not None
+                    else None
+                ),
+                settings=settings,
+            )
+        )
+
     return (
         f"status={summary.status.value} accepted={summary.accepted_count} "
         f"rejected={summary.rejected_count} reviewed={summary.candidates_reviewed}"
     )
+
+
+async def _publish_terminal_check(
+    *,
+    owner: str,
+    name: str,
+    github_repository_id: int,
+    installation_id: int,
+    pull_request_number: int,
+    head_sha: str,
+    state: ReviewCheckState,
+    settings: Settings,
+    accepted_findings: int = 0,
+    detail: str | None = None,
+) -> None:
+    """Best-effort terminal UX; never masks the engine's own outcome."""
+
+    readiness = None
+    engine = create_engine(settings.database_url)
+    try:
+        session_factory = create_session_factory(engine)
+        async with session_factory() as session:
+            repository = await RepositoryRepository().get_by_github_id(
+                session,
+                github_repository_id=github_repository_id,
+            )
+            if repository is not None:
+                readiness = await MergeReadinessService().evaluate(
+                    session,
+                    repository_id=repository.id,
+                    pull_request_number=pull_request_number,
+                )
+    except Exception as exc:
+        logger.warning(
+            "review_check_merge_readiness_unavailable",
+            repository=f"{owner}/{name}",
+            error_type=type(exc).__name__,
+        )
+    finally:
+        await engine.dispose()
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.github_api_timeout_seconds) as http_client:
+            token_provider = InstallationTokenProvider(
+                http_client=http_client,
+                app_id=settings.github_app_id,
+                private_key=settings.github_private_key,
+                api_base_url=settings.github_api_base_url,
+            )
+            client = GitHubClient(
+                http_client=http_client,
+                token_provider=token_provider,
+                api_base_url=settings.github_api_base_url,
+                timeout_seconds=settings.github_api_timeout_seconds,
+            )
+            await github_check_publisher(client=client, installation_id=installation_id).reconcile(
+                ref=PullRequestRef(owner=owner, repository=name, number=pull_request_number),
+                head_sha=head_sha,
+                update=ReviewCheckUpdate(
+                    state=state,
+                    accepted_findings=accepted_findings,
+                    detail=detail,
+                    merge_readiness=readiness.decision if readiness is not None else None,
+                ),
+            )
+    except Exception as exc:
+        logger.error(
+            "review_check_terminal_publish_failed",
+            repository=f"{owner}/{name}",
+            pull_request_number=pull_request_number,
+            head_sha=head_sha,
+            state=state.value,
+            error_type=type(exc).__name__,
+        )
 
 
 async def _publication_allowed(*, installation_id: int, settings: Settings) -> bool:

@@ -36,13 +36,21 @@ from celery.exceptions import Reject
 
 from apps.worker.celery_app import celery_app
 from patchfrog.config.settings import Settings, get_settings
+from patchfrog.domain.pull_request import PullRequestRef
 from patchfrog.github.auth import InstallationTokenProvider
 from patchfrog.github.client import GitHubClient
+from patchfrog.merge_readiness.service import MergeReadinessService
 from patchfrog.ops import metrics
 from patchfrog.persistence.database import create_engine, create_session_factory
 from patchfrog.persistence.models.pull_request import PullRequestModel
 from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.persistence.models.review import ReviewRunModel
+from patchfrog.persistence.repositories.ai_finding import AIFindingRepository
+from patchfrog.publishing.checks import (
+    ReviewCheckState,
+    ReviewCheckUpdate,
+    github_check_publisher,
+)
 from patchfrog.publishing.config_resolution import resolve_repository_publication_config
 from patchfrog.publishing.domain import (
     ReviewPublicationMode,
@@ -119,7 +127,56 @@ async def _publish_review(
             # alone (see patchfrog.publishing.queries.get_current_active_findings),
             # so a publish retry/redelivery always recomputes it fresh --
             # nothing to pass through here.
-            return await service.publish(review_run_id=review_run_id, mode=mode, config=config)
+            result = await service.publish(review_run_id=review_run_id, mode=mode, config=config)
+
+            async with session_factory() as session:
+                findings = await AIFindingRepository().list_for_run(
+                    session,
+                    review_run_id=review_run_id,
+                )
+                readiness = await MergeReadinessService().evaluate(
+                    session,
+                    repository_id=repository.id,
+                    pull_request_number=pull_request.github_pr_number,
+                )
+
+            if result.status is ReviewPublicationStatus.FAILED:
+                check_state = ReviewCheckState.FAILED
+            elif result.status is ReviewPublicationStatus.STALE:
+                check_state = ReviewCheckState.SKIPPED
+            elif run.status.value == "partial":
+                check_state = ReviewCheckState.PARTIAL
+            elif findings:
+                check_state = ReviewCheckState.COMPLETED_WITH_FINDINGS
+            else:
+                check_state = ReviewCheckState.COMPLETED_CLEAN
+
+            try:
+                await github_check_publisher(
+                    client=github_client,
+                    installation_id=repository.installation_id,
+                ).reconcile(
+                    ref=PullRequestRef(
+                        owner=repository.owner,
+                        repository=repository.name,
+                        number=pull_request.github_pr_number,
+                    ),
+                    head_sha=run.commit_sha,
+                    update=ReviewCheckUpdate(
+                        state=check_state,
+                        accepted_findings=len(findings),
+                        detail=result.errors[0] if result.errors else result.status.value,
+                        merge_readiness=readiness.decision if readiness is not None else None,
+                    ),
+                )
+            except Exception as exc:
+                logger.error(
+                    "review_check_reconciliation_failed",
+                    review_run_id=str(review_run_id),
+                    publication_status=result.status.value,
+                    error_type=type(exc).__name__,
+                )
+            return result
     finally:
         await engine.dispose()
 
