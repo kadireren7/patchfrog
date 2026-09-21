@@ -60,12 +60,19 @@ from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 
 from patchfrog.review.provider import (
+    ProviderAuthenticationError,
     ProviderFatalError,
     ProviderIdentity,
+    ProviderInsufficientQuotaError,
+    ProviderInvalidModelError,
+    ProviderRateLimitError,
     ProviderRequest,
     ProviderResult,
+    ProviderServerError,
+    ProviderTimeoutError,
     ProviderTransientError,
     ProviderUsage,
+    indicates_insufficient_quota,
 )
 
 _DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -229,7 +236,7 @@ class GeminiLLMProvider:
             )
         except genai_errors.ClientError as exc:
             if exc.code in (401, 403):
-                raise ProviderFatalError(f"authentication error {exc.code}: {exc}") from exc
+                raise ProviderAuthenticationError(f"authentication error {exc.code}: {exc}") from exc
             if exc.code == 429:
                 # Gemini uses 429/RESOURCE_EXHAUSTED for both ordinary
                 # per-minute rate limiting and daily quota exhaustion --
@@ -238,10 +245,16 @@ class GeminiLLMProvider:
                 # Anthropic's own RateLimitError handling; a *persistent*
                 # 429 across retries is a session/operator-level signal
                 # to stop, not something this adapter can detect alone.
-                raise ProviderTransientError(f"rate limited or quota exhausted: {exc}") from exc
+                if indicates_insufficient_quota(exc):
+                    raise ProviderInsufficientQuotaError(f"quota exhausted: {exc}") from exc
+                raise ProviderRateLimitError(f"rate limited: {exc}") from exc
+            if exc.code == 404:
+                raise ProviderInvalidModelError(f"model not found: {exc}") from exc
             raise ProviderFatalError(f"invalid request {exc.code}: {exc}") from exc
         except genai_errors.ServerError as exc:
-            raise ProviderTransientError(f"server error {exc.code}: {exc}") from exc
+            raise ProviderServerError(f"server error {exc.code}: {exc}") from exc
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeoutError(f"timeout: {exc}") from exc
         except httpx.RequestError as exc:
             # Connection failure, DNS error, or a timeout at the
             # transport layer (the SDK is httpx-based) -- raised before

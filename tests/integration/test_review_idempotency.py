@@ -84,6 +84,11 @@ async def test_repeated_identical_review_reuses_the_run_and_never_calls_the_prov
     )
     assert second.reused_existing_run is True
     assert len(provider.calls) == calls_after_first  # no double-charge on retry
+    assert first.budget is not None
+    assert second.budget is not None
+    assert first.budget.provider_calls == calls_after_first
+    assert second.budget.provider_calls == calls_after_first
+    assert second.budget.by_model == first.budget.by_model
 
     async with session_factory() as session:
         runs = (

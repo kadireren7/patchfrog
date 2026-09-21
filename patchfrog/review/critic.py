@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 
 from patchfrog.analysis.domain import Confidence, Severity
+from patchfrog.review.budget import ReviewBudget
 from patchfrog.review.domain import (
     AIReviewFinding,
     CriticDecision,
@@ -41,6 +42,10 @@ class CriticService:
 
         return self._provider.identity
 
+    @property
+    def max_output_tokens(self) -> int:
+        return self._max_output_tokens
+
     async def critique(
         self,
         validated: ValidatedFinding,
@@ -49,6 +54,9 @@ class CriticService:
         context_text: str,
         conflicting_finding: AIReviewFinding | None = None,
         executable_verification_text: str = "",
+        budget: ReviewBudget | None = None,
+        estimated_input_tokens: int = 0,
+        is_retry: bool = False,
     ) -> CriticVerdict:
         system_prompt, user_prompt = build_critic_prompt(
             candidate=candidate,
@@ -64,7 +72,18 @@ class CriticService:
             schema_name="critic_verdict",
             max_output_tokens=self._max_output_tokens,
         )
+        reservation = None
+        if budget is not None:
+            reservation = await budget.reserve_call(
+                self._provider.identity,
+                estimated_input_tokens=estimated_input_tokens,
+                estimated_output_tokens=self._max_output_tokens,
+                is_retry=is_retry,
+            )
         result = await self._provider.generate_structured(request)
+        if reservation is not None:
+            assert budget is not None
+            await budget.reconcile(reservation, result.usage)
 
         try:
             payload = json.loads(result.raw_json)

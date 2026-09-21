@@ -19,7 +19,7 @@ from patchfrog.review.config import (
 _PRE_CI_PROMPT_VERSION = 3
 _PRE_CI_POLICY_VERSION = 4
 _PRE_CI_ENGINE_VERSION = 3
-_PRE_CI_CONFIG_SCHEMA_VERSION = 4
+_PRE_CI_CONFIG_SCHEMA_VERSION = 5
 
 
 def test_review_prompt_version_bumped_for_change_intelligence_section() -> None:

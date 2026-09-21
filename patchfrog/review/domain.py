@@ -27,6 +27,7 @@ from uuid import UUID
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.review.agents.roles import AgentRole
+from patchfrog.review.budget import ReviewBudgetSnapshot
 from patchfrog.review.effort_types import ReviewEffortTier
 
 
@@ -372,3 +373,4 @@ class ReviewRunSummary:
     #: wall-clock measurement. See :mod:`patchfrog.telemetry`'s module
     #: docstring for why the two are never conflated.
     reviewer_latency_ms: float = 0.0
+    budget: ReviewBudgetSnapshot | None = None

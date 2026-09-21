@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from patchfrog.config.settings import Settings
+from patchfrog.diff.parser import build_diff_file
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.provider_factory import MissingProviderCredentialsError
 from patchfrog.review.providers.anthropic_provider import AnthropicLLMProvider
@@ -21,7 +22,7 @@ from patchfrog.review.providers.gemini_provider import GeminiLLMProvider
 from patchfrog.review.providers.openai_provider import OpenAILLMProvider
 from patchfrog.review.runtime_config import DEFAULT_MODEL_BY_PROVIDER, ReviewRuntimeConfig
 from patchfrog.routing.domain import RouteReason
-from patchfrog.routing.router import ModelRouter, NoProviderConfiguredError
+from patchfrog.routing.router import ModelRouter, NoProviderConfiguredError, is_small_review
 
 _ADAPTER_CLASS = {
     "anthropic": AnthropicLLMProvider,
@@ -55,6 +56,55 @@ def _runtime_config(
         provider=provider, model=resolved_model, critic_model=critic_model or resolved_model,
         request_timeout_seconds=30.0,
     )
+
+
+def test_small_review_uses_explicit_operator_cheap_route() -> None:
+    router = ModelRouter(
+        settings=_settings(
+            ANTHROPIC_API_KEY="fake-not-real",
+            GEMINI_API_KEY="fake-not-real",
+            PATCHFROG_ROUTER_CHEAP_PROVIDER="gemini",
+            PATCHFROG_ROUTER_CHEAP_MODEL="gemini-cheap-test",
+        )
+    )
+
+    plan = router.route(
+        runtime_config=_runtime_config(provider="anthropic"),
+        critic_enabled=True,
+        prefer_low_cost=True,
+    )
+
+    assert plan.reviewer_provider_family == "gemini"
+    assert plan.reviewer_providers[AgentRole.CORRECTNESS].identity.model == "gemini-cheap-test"
+    assert RouteReason.CHEAP_ROUTE_USED in plan.reasons
+
+
+def test_cheap_route_cannot_bypass_allowed_provider_policy() -> None:
+    router = ModelRouter(
+        settings=_settings(
+            ANTHROPIC_API_KEY="fake-not-real",
+            GEMINI_API_KEY="fake-not-real",
+            PATCHFROG_ROUTER_CHEAP_PROVIDER="gemini",
+        ),
+        allowed_providers=frozenset({"anthropic"}),
+    )
+
+    plan = router.route(
+        runtime_config=_runtime_config(provider="anthropic"),
+        critic_enabled=False,
+        prefer_low_cost=True,
+    )
+
+    assert plan.reviewer_provider_family == "anthropic"
+    assert RouteReason.CHEAP_ROUTE_USED not in plan.reasons
+
+
+def test_small_review_signal_is_bounded_by_files_and_changed_lines() -> None:
+    tiny = build_diff_file("a.py", "@@ -1 +1 @@\n-old\n+new\n")
+    assert is_small_review([tiny]) is True
+
+    large_patch = "@@ -1,81 +1,81 @@\n" + "".join(f"-old{i}\n+new{i}\n" for i in range(41))
+    assert is_small_review([build_diff_file("a.py", large_patch)]) is False
 
 
 # -- Single-provider configurations (items 1-3 of the required matrix) --
@@ -348,7 +398,7 @@ def test_route_signature_takes_no_repository_content_parameter() -> None:
     # ReviewRuntimeConfig -- nothing shaped like diff/PR/comment content
     # can reach routing decisions, by construction of this signature.
     params = set(inspect.signature(ModelRouter.route).parameters)
-    assert params == {"self", "runtime_config", "critic_enabled"}
+    assert params == {"self", "runtime_config", "critic_enabled", "prefer_low_cost"}
 
 
 def test_reviewer_providers_mapping_covers_both_existing_roles() -> None:

@@ -90,6 +90,15 @@ provider_input_tokens_total = Counter(
 provider_output_tokens_total = Counter(
     "patchfrog_provider_output_tokens_total", "LLM provider output tokens produced", ["provider", "model"]
 )
+provider_retries_total = Counter(
+    "patchfrog_provider_retries_total", "LLM provider retry and fallback attempts", ["provider", "model"]
+)
+provider_estimated_cost_usd_total = Counter(
+    "patchfrog_provider_estimated_cost_usd_total", "Estimated LLM provider cost in USD", ["provider", "model"]
+)
+review_budget_terminations_total = Counter(
+    "patchfrog_review_budget_terminations_total", "Reviews stopped by a cost budget", ["reason"]
+)
 
 findings_generated_total = Counter(
     "patchfrog_findings_generated_total", "Findings proposed by the AI reviewer, before validation/critic"

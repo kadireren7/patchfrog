@@ -23,7 +23,17 @@ import httpx2
 import openai
 import pytest
 
-from patchfrog.review.provider import ProviderFatalError, ProviderRequest, ProviderTransientError
+from patchfrog.review.provider import (
+    ProviderAuthenticationError,
+    ProviderFatalError,
+    ProviderInsufficientQuotaError,
+    ProviderInvalidModelError,
+    ProviderRateLimitError,
+    ProviderRequest,
+    ProviderServerError,
+    ProviderTimeoutError,
+    ProviderTransientError,
+)
 from patchfrog.review.providers.openai_provider import OpenAILLMProvider, _sanitize_schema_name
 
 _MODEL = "gpt-6-astra"
@@ -128,7 +138,18 @@ async def test_rate_limit_is_transient() -> None:
     provider = _provider(
         handler=_handler_returning(429, {"error": {"message": "rate limited", "type": "rate_limit_error"}})
     )
-    with pytest.raises(ProviderTransientError):
+    with pytest.raises(ProviderRateLimitError):
+        await provider.generate_structured(_REQUEST)
+
+
+async def test_insufficient_quota_is_permanent() -> None:
+    provider = _provider(
+        handler=_handler_returning(
+            429,
+            {"error": {"message": "You exceeded your current quota", "code": "insufficient_quota"}},
+        )
+    )
+    with pytest.raises(ProviderInsufficientQuotaError):
         await provider.generate_structured(_REQUEST)
 
 
@@ -136,13 +157,13 @@ async def test_server_error_is_transient() -> None:
     provider = _provider(
         handler=_handler_returning(500, {"error": {"message": "server error", "type": "server_error"}})
     )
-    with pytest.raises(ProviderTransientError):
+    with pytest.raises(ProviderServerError):
         await provider.generate_structured(_REQUEST)
 
 
 async def test_timeout_is_transient() -> None:
     provider = _provider(handler=_handler_raising(httpx2.TimeoutException("timed out")))
-    with pytest.raises(ProviderTransientError):
+    with pytest.raises(ProviderTimeoutError):
         await provider.generate_structured(_REQUEST)
 
 
@@ -164,7 +185,7 @@ async def test_auth_failure_401_is_fatal_never_retried() -> None:
     provider = _provider(
         handler=_handler_returning(401, {"error": {"message": "unauthorized", "type": "auth_error"}})
     )
-    with pytest.raises(ProviderFatalError):
+    with pytest.raises(ProviderAuthenticationError):
         await provider.generate_structured(_REQUEST)
 
 
@@ -172,7 +193,7 @@ async def test_permission_denied_403_is_fatal_never_retried() -> None:
     provider = _provider(
         handler=_handler_returning(403, {"error": {"message": "forbidden", "type": "permission_error"}})
     )
-    with pytest.raises(ProviderFatalError):
+    with pytest.raises(ProviderAuthenticationError):
         await provider.generate_structured(_REQUEST)
 
 
@@ -180,7 +201,7 @@ async def test_unknown_model_404_is_fatal_never_retried() -> None:
     provider = _provider(
         handler=_handler_returning(404, {"error": {"message": "model not found", "type": "invalid_request_error"}})
     )
-    with pytest.raises(ProviderFatalError):
+    with pytest.raises(ProviderInvalidModelError):
         await provider.generate_structured(_REQUEST)
 
 

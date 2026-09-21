@@ -34,12 +34,19 @@ from typing import Any
 import anthropic
 
 from patchfrog.review.provider import (
+    ProviderAuthenticationError,
     ProviderFatalError,
     ProviderIdentity,
+    ProviderInsufficientQuotaError,
+    ProviderInvalidModelError,
+    ProviderRateLimitError,
     ProviderRequest,
     ProviderResult,
+    ProviderServerError,
+    ProviderTimeoutError,
     ProviderTransientError,
     ProviderUsage,
+    indicates_insufficient_quota,
 )
 
 #: Anthropic's own SDK already retries connection errors/408/409/429/5xx
@@ -90,15 +97,21 @@ class AnthropicLLMProvider:
                 },
             )
         except anthropic.RateLimitError as exc:
-            raise ProviderTransientError(f"rate limited: {exc}") from exc
+            if indicates_insufficient_quota(exc):
+                raise ProviderInsufficientQuotaError(f"quota exhausted: {exc}") from exc
+            raise ProviderRateLimitError(f"rate limited: {exc}") from exc
+        except anthropic.APITimeoutError as exc:
+            raise ProviderTimeoutError(f"timeout: {exc}") from exc
         except anthropic.APIConnectionError as exc:
             raise ProviderTransientError(f"connection error: {exc}") from exc
         except anthropic.APIStatusError as exc:
             if exc.status_code in (502, 503, 504) or exc.status_code >= 500:
-                raise ProviderTransientError(f"server error {exc.status_code}: {exc}") from exc
+                raise ProviderServerError(f"server error {exc.status_code}: {exc}") from exc
+            if exc.status_code in (401, 403):
+                raise ProviderAuthenticationError(f"authentication error {exc.status_code}: {exc}") from exc
+            if exc.status_code == 404:
+                raise ProviderInvalidModelError(f"model not found: {exc}") from exc
             raise ProviderFatalError(f"API error {exc.status_code}: {exc}") from exc
-        except anthropic.APITimeoutError as exc:
-            raise ProviderTransientError(f"timeout: {exc}") from exc
 
         latency_ms = (time.monotonic() - start) * 1000
 

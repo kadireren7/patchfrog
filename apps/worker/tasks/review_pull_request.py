@@ -48,6 +48,7 @@ from patchfrog.persistence.repositories import (
     PullRequestRepository,
     RepositoryRepository,
 )
+from patchfrog.review.budget import PricingCatalog
 from patchfrog.review.config import MalformedReviewConfigError
 from patchfrog.review.config_resolution import (
     apply_operator_hard_caps,
@@ -62,7 +63,7 @@ from patchfrog.review.service import (
 )
 from patchfrog.review_memory.config_resolution import resolve_repository_incremental_config
 from patchfrog.review_memory.service import IncrementalReviewMemoryService
-from patchfrog.routing.router import ModelRouter
+from patchfrog.routing.router import ModelRouter, is_small_review
 
 logger = structlog.get_logger(__name__)
 
@@ -176,7 +177,9 @@ async def _review_pull_request(
         # docs/governance-policy.md's "Model Router integration (Z14)".
         runtime_config = resolve_review_runtime_config(settings)
         route_plan = ModelRouter(settings=settings, allowed_providers=settings.allowed_providers).route(
-            runtime_config=runtime_config, critic_enabled=review_config.critic_enabled
+            runtime_config=runtime_config,
+            critic_enabled=review_config.critic_enabled,
+            prefer_low_cost=is_small_review(diff_files),
         )
         # Every role maps to the same provider instance in v1 (the
         # router routes once per run, not once per candidate -- see
@@ -234,6 +237,7 @@ async def _review_pull_request(
             route_plan=route_plan,
             verifier_dispatcher=verifier_dispatcher,
             verification_snapshot_root=settings.verification_snapshot_root,
+            pricing_catalog=PricingCatalog.from_config(settings.provider_pricing),
         )
         summary = await service.review_pull_request(
             repository_id=repository_id,
@@ -267,9 +271,26 @@ async def _review_pull_request(
         }
         metrics.reviews_completed_total.labels(status=summary.status.value).inc()
         metrics.review_duration_seconds.observe(summary.duration_ms / 1000)
-        metrics.provider_calls_total.labels(**provider_labels, role="reviewer").inc(summary.candidates_reviewed)
-        metrics.provider_input_tokens_total.labels(**provider_labels).inc(summary.reviewer_usage.input_tokens)
-        metrics.provider_output_tokens_total.labels(**provider_labels).inc(summary.reviewer_usage.output_tokens)
+        if summary.budget is not None and not summary.reused_existing_run:
+            for cost_metric in summary.budget.by_model:
+                cost_labels = {"provider": cost_metric.provider, "model": cost_metric.model}
+                metrics.provider_calls_total.labels(**cost_labels, role="all").inc(cost_metric.call_count)
+                metrics.provider_retries_total.labels(**cost_labels).inc(cost_metric.retry_count)
+                metrics.provider_input_tokens_total.labels(**cost_labels).inc(cost_metric.input_tokens)
+                metrics.provider_output_tokens_total.labels(**cost_labels).inc(cost_metric.output_tokens)
+                metrics.provider_estimated_cost_usd_total.labels(**cost_labels).inc(
+                    cost_metric.estimated_cost_usd
+                )
+            if summary.budget.termination_reason is not None:
+                metrics.review_budget_terminations_total.labels(
+                    reason=summary.budget.termination_reason.value
+                ).inc()
+        elif summary.budget is None and not summary.reused_existing_run:  # Historical summaries.
+            metrics.provider_calls_total.labels(**provider_labels, role="reviewer").inc(
+                summary.candidates_reviewed
+            )
+            metrics.provider_input_tokens_total.labels(**provider_labels).inc(summary.reviewer_usage.input_tokens)
+            metrics.provider_output_tokens_total.labels(**provider_labels).inc(summary.reviewer_usage.output_tokens)
         metrics.findings_generated_total.inc(summary.proposals_count)
         metrics.findings_suppressed_total.labels(reason="duplicate").inc(summary.suppressed_duplicate_count)
         for tier, count in summary.candidates_by_tier.items():

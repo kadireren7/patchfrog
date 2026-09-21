@@ -110,4 +110,23 @@ def apply_operator_hard_caps(repo_config: ReviewConfig, *, settings: Settings) -
         ),
         min_final_confidence=repo_config.min_final_confidence,
         max_retries=min(repo_config.max_retries, settings.review_max_retries),
+        max_provider_calls=min(repo_config.max_provider_calls, settings.review_max_provider_calls),
+        max_retry_attempts=min(repo_config.max_retry_attempts, settings.review_max_retry_attempts),
+        max_total_output_tokens=min(
+            repo_config.max_total_output_tokens, settings.review_max_total_output_tokens
+        ),
+        max_estimated_cost_usd=_optional_min(
+            repo_config.max_estimated_cost_usd, settings.review_max_estimated_cost_usd
+        ),
+        max_elapsed_seconds=_optional_min(
+            repo_config.max_elapsed_seconds, settings.review_max_elapsed_seconds
+        ),
     )
+
+
+def _optional_min(left: float | None, right: float | None) -> float | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return min(left, right)

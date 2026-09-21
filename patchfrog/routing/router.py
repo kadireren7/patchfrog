@@ -69,6 +69,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from patchfrog.config.settings import Settings
+from patchfrog.diff.models import DiffFile
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.provider import LLMProvider
 from patchfrog.review.provider_factory import MissingProviderCredentialsError, has_credentials
@@ -79,6 +80,7 @@ from patchfrog.review.runtime_config import (
     DEFAULT_MODEL_BY_PROVIDER,
     SUPPORTED_PROVIDERS,
     ReviewRuntimeConfig,
+    model_matches_provider_family,
 )
 from patchfrog.routing.capabilities import supports_structured_output
 from patchfrog.routing.domain import ReviewRoutePlan, RouteReason
@@ -135,7 +137,13 @@ class ModelRouter:
         self._settings = settings
         self._allowed_providers = allowed_providers
 
-    def route(self, *, runtime_config: ReviewRuntimeConfig, critic_enabled: bool) -> ReviewRoutePlan:
+    def route(
+        self,
+        *,
+        runtime_config: ReviewRuntimeConfig,
+        critic_enabled: bool,
+        prefer_low_cost: bool = False,
+    ) -> ReviewRoutePlan:
         reasons: list[RouteReason] = []
 
         configured = [
@@ -162,9 +170,15 @@ class ModelRouter:
                 "without calling a provider."
             )
 
-        reviewer_family, config_fallback_used = self._select_reviewer_family(
-            configured, preferred=runtime_config.provider, reasons=reasons
-        )
+        cheap_family = self._settings.router_cheap_provider
+        if prefer_low_cost and cheap_family is not None and cheap_family in configured:
+            reviewer_family = cheap_family
+            config_fallback_used = False
+            reasons.append(RouteReason.CHEAP_ROUTE_USED)
+        else:
+            reviewer_family, config_fallback_used = self._select_reviewer_family(
+                configured, preferred=runtime_config.provider, reasons=reasons
+            )
         diversity_available = len(configured) > 1
         critic_family, diversity_used = self._select_critic_family(
             configured, reviewer_family, critic_enabled=critic_enabled, reasons=reasons
@@ -193,9 +207,17 @@ class ModelRouter:
                 return explicit_model
             return DEFAULT_MODEL_BY_PROVIDER[family]
 
+        reviewer_model = _model_for(reviewer_family, explicit_model=runtime_config.model)
+        if prefer_low_cost and reviewer_family == cheap_family and self._settings.router_cheap_model is not None:
+            reviewer_model = self._settings.router_cheap_model
+            if not model_matches_provider_family(reviewer_family, reviewer_model):
+                raise ValueError(
+                    f"PATCHFROG_ROUTER_CHEAP_MODEL={reviewer_model!r} does not look like a "
+                    f"{reviewer_family!r} model"
+                )
         reviewer_provider = _build_provider(
             reviewer_family,
-            _model_for(reviewer_family, explicit_model=runtime_config.model),
+            reviewer_model,
             settings=self._settings,
             timeout_seconds=timeout_seconds,
         )
@@ -313,4 +335,11 @@ class ModelRouter:
         return reviewer_family, False
 
 
-__all__ = ["ModelRouter", "NoProviderConfiguredError"]
+def is_small_review(diff_files: list[DiffFile]) -> bool:
+    """Deterministic run-level cheap-route signal; no source text is inspected."""
+
+    changed_lines = sum(len(file.added_lines) + len(file.deleted_lines) for file in diff_files)
+    return len(diff_files) <= 3 and changed_lines <= 80
+
+
+__all__ = ["ModelRouter", "NoProviderConfiguredError", "is_small_review"]

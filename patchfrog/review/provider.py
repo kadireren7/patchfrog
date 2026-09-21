@@ -19,6 +19,7 @@ itself never touches GitHub, the database, or the filesystem.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Protocol
 
 
@@ -64,16 +65,72 @@ class ProviderError(Exception):
     """Base class for every provider failure."""
 
 
+class ProviderFailureKind(StrEnum):
+    INSUFFICIENT_QUOTA = "insufficient_quota"
+    AUTHENTICATION = "authentication_failure"
+    INVALID_MODEL = "invalid_model"
+    RATE_LIMIT = "rate_limit"
+    TRANSIENT_SERVER = "transient_server_error"
+    TIMEOUT = "timeout"
+    INVALID_REQUEST = "invalid_request"
+    REFUSAL = "refusal"
+    UNKNOWN = "unknown"
+
+
 class ProviderTransientError(ProviderError):
     """A failure that is safe to retry with bounded backoff: rate limits,
     server-side overload, or a dropped connection. Never raised for
     anything that would repeat identically on retry."""
+
+    kind: ProviderFailureKind = ProviderFailureKind.TRANSIENT_SERVER
 
 
 class ProviderFatalError(ProviderError):
     """A failure that must never be retried: an auth failure, a malformed
     request (HTTP 400), or a response that doesn't parse against the
     requested schema. Retrying would just repeat the same failure."""
+
+    kind: ProviderFailureKind = ProviderFailureKind.UNKNOWN
+
+
+class ProviderInsufficientQuotaError(ProviderFatalError):
+    kind = ProviderFailureKind.INSUFFICIENT_QUOTA
+
+
+class ProviderAuthenticationError(ProviderFatalError):
+    kind = ProviderFailureKind.AUTHENTICATION
+
+
+class ProviderInvalidModelError(ProviderFatalError):
+    kind = ProviderFailureKind.INVALID_MODEL
+
+
+class ProviderRateLimitError(ProviderTransientError):
+    kind = ProviderFailureKind.RATE_LIMIT
+
+
+class ProviderServerError(ProviderTransientError):
+    kind = ProviderFailureKind.TRANSIENT_SERVER
+
+
+class ProviderTimeoutError(ProviderTransientError):
+    kind = ProviderFailureKind.TIMEOUT
+
+
+def indicates_insufficient_quota(value: object) -> bool:
+    """Conservative cross-provider signal for permanent credit exhaustion."""
+
+    message = str(value).lower()
+    return any(
+        marker in message
+        for marker in (
+            "insufficient_quota",
+            "credit balance",
+            "billing quota",
+            "quota exhausted",
+            "resource_exhausted: quota",
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)

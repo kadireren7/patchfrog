@@ -132,6 +132,7 @@ from patchfrog.publishing.service import (
     ReviewRunNotAssociatedWithPullRequestError,
 )
 from patchfrog.repository.git import GitError, run_git
+from patchfrog.review.budget import PricingCatalog
 from patchfrog.review.candidates import ReviewCandidateGenerator
 from patchfrog.review.config import MalformedReviewConfigError, ReviewConfig
 from patchfrog.review.config_resolution import (
@@ -155,7 +156,7 @@ from patchfrog.review_memory.config_resolution import resolve_repository_increme
 from patchfrog.review_memory.domain import IncrementalPlan, ReviewMemoryFinding
 from patchfrog.review_memory.queries import ReviewMemoryQueryService
 from patchfrog.review_memory.service import IncrementalReviewMemoryService
-from patchfrog.routing.router import ModelRouter
+from patchfrog.routing.router import ModelRouter, is_small_review
 from patchfrog.telemetry.beta_summary import BetaSummary, compute_beta_summary, parse_since
 from patchfrog.telemetry.collector import collect_review_telemetry
 from patchfrog.telemetry.reporting import render_markdown_snapshot, snapshot_to_dict
@@ -421,12 +422,15 @@ async def _review_local(
         # patchfrog.routing.router).
         runtime_config = resolve_review_runtime_config(settings)
         route_plan = ModelRouter(settings=settings).route(
-            runtime_config=runtime_config, critic_enabled=config.critic_enabled
+            runtime_config=runtime_config,
+            critic_enabled=config.critic_enabled,
+            prefer_low_cost=is_small_review(diff_files),
         )
 
         service = PullRequestReviewService(
             session_factory=session_factory,
             route_plan=route_plan,
+            pricing_catalog=PricingCatalog.from_config(settings.provider_pricing),
         )
 
         if not incremental:

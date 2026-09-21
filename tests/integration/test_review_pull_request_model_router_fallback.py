@@ -122,13 +122,18 @@ async def _run_until_routing(
     _real_route = ModelRouter.route  # save before patching -- avoids self-recursion
 
     def _capture_and_stop_after_real_routing(
-        self: ModelRouter, *, runtime_config: Any, critic_enabled: bool
+        self: ModelRouter, *, runtime_config: Any, critic_enabled: bool, prefer_low_cost: bool = False
     ) -> Any:
         # Calls the *real* ModelRouter.route (not a stand-in) so this
         # exercises actual provider-selection/fallback/policy logic --
         # only the task's continuation past routing is short-circuited,
         # so no repository index fixture is needed to reach this point.
-        plan = _real_route(self, runtime_config=runtime_config, critic_enabled=critic_enabled)
+        plan = _real_route(
+            self,
+            runtime_config=runtime_config,
+            critic_enabled=critic_enabled,
+            prefer_low_cost=prefer_low_cost,
+        )
         captured["route_plan"] = plan
         raise _StoppedAfterRouting()
 

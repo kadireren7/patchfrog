@@ -215,6 +215,28 @@ candidate, not just the one that triggered it.
 
 ## Global run budget and reservation
 
+`patchfrog.review.budget.ReviewBudget` is the single, provider-neutral
+ledger shared by reviewer roles, critic calls, retries, and one-hop
+fallbacks. It reserves estimated input/output tokens and operator-supplied
+model pricing before every provider call, then reconciles successful
+calls to provider-reported usage. Its ceilings cover provider calls,
+retry attempts, input tokens, output tokens, estimated USD, and optional
+elapsed time. Exhaustion produces a typed terminal reason and a partial
+run; it never silently becomes a clean review. A dollar ceiling without
+a `provider/model` pricing entry fails closed as `pricing_unavailable`.
+
+Pricing is operator data, not a vendor table embedded in PatchFrog. For
+example:
+
+```text
+PATCHFROG_PROVIDER_PRICING={"openai/gpt-example":{"input_usd_per_million_tokens":1.0,"output_usd_per_million_tokens":4.0}}
+PATCHFROG_MAX_ESTIMATED_COST_USD=0.25
+```
+
+The persisted breakdown contains only provider, model, call/retry counts,
+token counts, and estimated cost. Prompts, source text, responses, keys,
+and secret values are never part of cost telemetry.
+
 `max_total_input_tokens` is a true run-level guard across **every**
 provider call that consumes input tokens: both specialist roles' input,
 *and* critic input (previously unguarded -- a real gap this milestone
@@ -287,6 +309,11 @@ controlled, exactly like provider/model credentials):
 | `PATCHFROG_MAX_OUTPUT_TOKENS_PER_CANDIDATE` | 16,000 |
 | `PATCHFROG_MAX_CONCURRENT_REVIEW_REQUESTS` | 16 |
 | `PATCHFROG_MAX_REVIEW_RETRIES` | 5 |
+| `PATCHFROG_MAX_PROVIDER_CALLS` | 500 |
+| `PATCHFROG_MAX_RETRY_ATTEMPTS` | 200 |
+| `PATCHFROG_MAX_TOTAL_OUTPUT_TOKENS` | 250,000 |
+| `PATCHFROG_MAX_ESTIMATED_COST_USD` | unset |
+| `PATCHFROG_MAX_REVIEW_ELAPSED_SECONDS` | unset |
 
 `patchfrog.review.config_resolution.apply_operator_hard_caps` computes
 `effective = min(repo_intent, operator_hard_cap)` independently per

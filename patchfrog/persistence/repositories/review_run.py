@@ -18,6 +18,7 @@ from patchfrog.intent_verification.telemetry import IntentVerificationSummary
 from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.repository_learnings.telemetry import RepositoryLearningsSummary
 from patchfrog.review.agents.roles import AgentRole
+from patchfrog.review.budget import ReviewBudgetSnapshot
 from patchfrog.review.domain import ReviewRunStatus
 from patchfrog.review.effort_types import ReviewEffortTier
 from patchfrog.review_memory.config import NO_MEMORY_CONTEXT_FINGERPRINT
@@ -225,6 +226,7 @@ class ReviewRunRepository:
         cross_pr_intelligence: CrossPRIntelligenceSummary | None = None,
         cross_repo_intelligence: CrossRepoIntelligenceSummary | None = None,
         executable_verification: ExecutableVerificationSummary | None = None,
+        budget: ReviewBudgetSnapshot | None = None,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -285,6 +287,31 @@ class ReviewRunRepository:
         model.retries_consumed = retries_consumed
         model.reviewer_latency_ms = reviewer_latency_ms
         model.calls_by_role = json.dumps({role.value: count for role, count in (calls_by_role or {}).items()})
+        if budget is not None:
+            model.provider_calls = budget.provider_calls
+            model.retry_attempts = budget.retry_attempts
+            model.budget_input_tokens = budget.input_tokens
+            model.budget_output_tokens = budget.output_tokens
+            model.estimated_cost_usd = budget.estimated_cost_usd
+            model.budget_elapsed_seconds = budget.elapsed_seconds
+            model.budget_termination_reason = (
+                budget.termination_reason.value if budget.termination_reason is not None else None
+            )
+            model.provider_cost_breakdown = json.dumps(
+                [
+                    {
+                        "provider": metric.provider,
+                        "model": metric.model,
+                        "call_count": metric.call_count,
+                        "retry_count": metric.retry_count,
+                        "input_tokens": metric.input_tokens,
+                        "output_tokens": metric.output_tokens,
+                        "estimated_cost_usd": metric.estimated_cost_usd,
+                    }
+                    for metric in budget.by_model
+                ],
+                sort_keys=True,
+            )
         model.duration_ms = duration_ms
         if change_intelligence is not None:
             model.change_unit_count = change_intelligence.change_unit_count

@@ -228,8 +228,9 @@ def test_config_schema_version_bumped_for_operator_boundary_change() -> None:
     # Milestone C bumped 2 -> 3 (provider/model fields removed from
     # repository config); Milestone F (Quality + Cost Guard) bumped
     # 3 -> 4 (max_output_tokens_per_candidate's effective repo-facing
-    # meaning changed -- see patchfrog.review.config's module comment).
-    assert CONFIG_SCHEMA_VERSION == 4
+    # meaning changed); beta cost controls bumped 4 -> 5 because the
+    # repository-visible budget contract is now first class.
+    assert CONFIG_SCHEMA_VERSION == 5
 
 
 # -- Trust boundary: provider/model/critic_model/request_timeout_seconds

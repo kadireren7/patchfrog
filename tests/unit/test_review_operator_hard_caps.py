@@ -90,7 +90,8 @@ def test_operator_caps_are_never_read_from_repo_config_fields() -> None:
     assert set(ReviewConfig.model_fields) == {
         "critic_enabled", "max_candidates", "max_input_tokens_per_candidate",
         "max_output_tokens_per_candidate", "max_total_input_tokens", "max_concurrent_requests",
-        "min_final_confidence", "max_retries",
+        "min_final_confidence", "max_retries", "max_provider_calls", "max_retry_attempts",
+        "max_total_output_tokens", "max_estimated_cost_usd", "max_elapsed_seconds",
     }
 
 

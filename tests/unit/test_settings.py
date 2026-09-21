@@ -109,3 +109,12 @@ def test_allowed_providers_blank_string_is_no_restriction(monkeypatch: pytest.Mo
     monkeypatch.setenv("PATCHFROG_ALLOWED_PROVIDERS", "  , ")
     settings = Settings(_env_file=None)
     assert settings.allowed_providers is None
+
+
+def test_provider_pricing_parses_json_without_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "PATCHFROG_PROVIDER_PRICING",
+        '{"fake/cheap":{"input_usd_per_million_tokens":1.25,"output_usd_per_million_tokens":4.5}}',
+    )
+    settings = Settings(_env_file=None)
+    assert settings.provider_pricing["fake/cheap"]["input_usd_per_million_tokens"] == 1.25
