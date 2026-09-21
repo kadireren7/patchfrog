@@ -99,6 +99,7 @@ def apply_operator_hard_caps(repo_config: ReviewConfig, *, settings: Settings) -
 
     return ReviewConfig(
         critic_enabled=repo_config.critic_enabled,
+        critic_failure_policy=settings.critic_failure_policy or repo_config.critic_failure_policy,
         max_candidates=min(repo_config.max_candidates, settings.review_max_candidates),
         max_input_tokens_per_candidate=repo_config.max_input_tokens_per_candidate,
         max_output_tokens_per_candidate=min(

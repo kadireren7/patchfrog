@@ -54,6 +54,14 @@ def test_suppressed_budget_classifies_correctly() -> None:
     assert outcome is FindingLifecycleOutcome.SUPPRESSED_BUDGET
 
 
+def test_suppressed_critic_failure_classifies_correctly() -> None:
+    outcome = classify_lifecycle_outcome(
+        status=ProposalStatus.SUPPRESSED_CRITIC_FAILURE,
+        critic_decision=None,
+    )
+    assert outcome is FindingLifecycleOutcome.SUPPRESSED_CRITIC_FAILURE
+
+
 def test_accepted_with_no_verdict_is_accepted_final() -> None:
     outcome = classify_lifecycle_outcome(status=ProposalStatus.ACCEPTED, critic_decision=None)
     assert outcome is FindingLifecycleOutcome.ACCEPTED_FINAL

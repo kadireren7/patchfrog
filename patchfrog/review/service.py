@@ -182,7 +182,11 @@ from patchfrog.review.domain import (
 )
 from patchfrog.review.effort import ReviewEffortDecision, ReviewEffortPolicy
 from patchfrog.review.effort_types import ReviewEffortTier
-from patchfrog.review.orchestration import CRITIC_BUDGET_EXHAUSTED, AgentOrchestrator
+from patchfrog.review.orchestration import (
+    CRITIC_BUDGET_EXHAUSTED,
+    CRITIC_FAILURE_HOLD,
+    AgentOrchestrator,
+)
 from patchfrog.review.provider import LLMProvider
 from patchfrog.review.redaction import redact_secrets
 from patchfrog.routing.domain import ReviewRoutePlan
@@ -1107,6 +1111,7 @@ class PullRequestReviewService:
             reviewer_fallback_providers=self._reviewer_fallback_providers,
             critic_fallback=self._critic_fallback,
             review_budget=review_budget,
+            critic_failure_policy=config.critic_failure_policy,
         )
 
         async def _process(outcome: _CandidateOutcome) -> None:
@@ -1325,6 +1330,26 @@ class PullRequestReviewService:
                         _log_finding_candidate_diagnostics(
                             log, finding_id=proposal.id, finding=validated.finding,
                             status=ProposalStatus.SUPPRESSED_BUDGET, verdict=None,
+                        )
+                        continue
+
+                    if agent_proposal.suppressed_reason == CRITIC_FAILURE_HOLD:
+                        proposal = await self._proposal_repo.create(
+                            session,
+                            review_run_id=run_id,
+                            candidate_id=candidate_model.id,
+                            finding=validated.finding,
+                            status=ProposalStatus.SUPPRESSED_CRITIC_FAILURE,
+                            validation_detail="critic verification failed under hold-for-review policy",
+                            agent_role=agent_proposal.role,
+                            validation_outcome=validated.outcome,
+                        )
+                        _log_finding_candidate_diagnostics(
+                            log,
+                            finding_id=proposal.id,
+                            finding=validated.finding,
+                            status=ProposalStatus.SUPPRESSED_CRITIC_FAILURE,
+                            verdict=None,
                         )
                         continue
 

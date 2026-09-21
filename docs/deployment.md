@@ -224,6 +224,7 @@ credentials -- **never** `.patchfrog.yml`-controlled:
 | `PATCHFROG_MAX_ESTIMATED_COST_USD` | Optional estimated-dollar ceiling; requires matching pricing entries | unset |
 | `PATCHFROG_MAX_REVIEW_ELAPSED_SECONDS` | Optional hard wall-clock ceiling for provider work | unset |
 | `PATCHFROG_PROVIDER_PRICING` | JSON object keyed by `provider/model`, with input/output USD per million tokens | `{}` |
+| `PATCHFROG_CRITIC_FAILURE_POLICY` | Optional operator override: `fail_open` or `hold_for_review` | unset (`fail_open` repository default) |
 
 `patchfrog.review.config_resolution.apply_operator_hard_caps` computes
 `effective = min(repo_intent, operator_hard_cap)` per field, applied by

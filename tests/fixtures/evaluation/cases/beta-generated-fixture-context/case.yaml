@@ -1,0 +1,10 @@
+case:
+  id: beta-generated-fixture-context
+  title: Generated fixture content is not reviewable production code
+  description: Deterministic generated data should not produce an actionable finding.
+  language: python
+  difficulty: easy
+  tags: [beta-readiness, false-positive-trap, generated, fixture]
+expected: []
+forbidden:
+  - {reason: This committed file is generated fixture data, category: maintainability}

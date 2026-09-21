@@ -34,6 +34,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from patchfrog.analysis.domain import Confidence
+from patchfrog.review.critic_policy import CriticFailurePolicy
 
 logger = structlog.get_logger(__name__)
 
@@ -215,6 +216,7 @@ class ReviewConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     critic_enabled: bool = True
+    critic_failure_policy: CriticFailurePolicy = CriticFailurePolicy.FAIL_OPEN
     max_candidates: int = DEFAULT_MAX_CANDIDATES
     max_input_tokens_per_candidate: int = DEFAULT_MAX_INPUT_TOKENS_PER_CANDIDATE
     max_output_tokens_per_candidate: int = DEFAULT_MAX_OUTPUT_TOKENS_PER_CANDIDATE
@@ -239,6 +241,7 @@ class ReviewConfig(BaseModel):
         payload = {
             "schema_version": CONFIG_SCHEMA_VERSION,
             "critic_enabled": self.critic_enabled,
+            "critic_failure_policy": self.critic_failure_policy.value,
             "max_candidates": self.max_candidates,
             "max_input_tokens_per_candidate": self.max_input_tokens_per_candidate,
             "max_output_tokens_per_candidate": self.max_output_tokens_per_candidate,

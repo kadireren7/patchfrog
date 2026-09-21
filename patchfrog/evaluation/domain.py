@@ -26,7 +26,7 @@ from patchfrog.review.effort_types import ReviewEffortTier
 
 #: Bumped whenever the benchmark corpus (fixtures/ground truth) changes
 #: materially -- a case added, removed, or re-labeled.
-EVALUATION_BENCHMARK_VERSION = 1
+EVALUATION_BENCHMARK_VERSION = 2
 
 #: Bumped whenever this package's own logic (matcher/metrics/regression)
 #: changes materially -- never for a fixture/label change alone.
@@ -39,7 +39,11 @@ EVALUATION_BENCHMARK_VERSION = 1
 #: :mod:`patchfrog.evaluation.regression`), and the evaluation cost/
 #: efficiency reporting shape changed materially enough that a v1-shaped
 #: baseline is no longer directly comparable.
-EVALUATION_ENGINE_VERSION = 2
+#:
+#: Bumped to 3 for the beta-readiness profile: case results now preserve
+#: pre-critic proposal outcomes and critic-rejection counts, enabling
+#: candidate/accepted recall and critic false-negative measurements.
+EVALUATION_ENGINE_VERSION = 3
 
 
 class EvaluationMode(StrEnum):
@@ -340,6 +344,7 @@ class CaseResult:
     #: confidence filtering -- used to compare pre- vs. post-validation
     #: hallucination rate (see :mod:`patchfrog.evaluation.metrics`).
     proposals_before_validation: tuple[PredictedFinding, ...] = field(default_factory=tuple)
+    proposal_outcomes: tuple[PredictionOutcome, ...] = field(default_factory=tuple)
     error: str | None = None
     critic_enabled: bool = True
     candidates_generated: int = 0
@@ -371,6 +376,7 @@ class CaseResult:
     reviewer_thinking_tokens: int = 0
     critic_thinking_tokens: int = 0
     retries_consumed: int = 0
+    critic_rejections: int = 0
 
     @property
     def is_error(self) -> bool:

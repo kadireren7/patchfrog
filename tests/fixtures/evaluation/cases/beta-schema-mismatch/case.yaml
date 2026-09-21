@@ -1,0 +1,18 @@
+case:
+  id: beta-schema-mismatch
+  title: Event payload uses a field outside the consumer schema
+  description: The producer emits account_id while the consumer schema requires user_id.
+  language: python
+  difficulty: medium
+  tags: [beta-readiness, contract, schema]
+expected:
+  - id: ef1
+    category: api_misuse
+    file: src/events.py
+    symbol: build_login_event
+    issue_family: schema_field_mismatch
+    severity: high
+    line: 8
+    ground_truth_source: ai_expected
+    notes: LOGIN_EVENT_SCHEMA requires user_id, but the producer emits account_id.
+forbidden: []

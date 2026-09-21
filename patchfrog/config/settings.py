@@ -12,6 +12,8 @@ from pathlib import Path
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from patchfrog.review.critic_policy import CriticFailurePolicy
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables / .env file."""
@@ -133,6 +135,9 @@ class Settings(BaseSettings):
     )
     review_max_elapsed_seconds: float | None = Field(
         default=None, alias="PATCHFROG_MAX_REVIEW_ELAPSED_SECONDS"
+    )
+    critic_failure_policy: CriticFailurePolicy | None = Field(
+        default=None, alias="PATCHFROG_CRITIC_FAILURE_POLICY"
     )
     provider_pricing: dict[str, dict[str, float]] = Field(
         default_factory=dict, alias="PATCHFROG_PROVIDER_PRICING"

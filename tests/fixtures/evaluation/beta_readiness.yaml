@@ -1,0 +1,22 @@
+version: 1
+cases:
+  - {case_id: hard-py-caller-callee-argument-swap, should_produce_candidate: true, expected_category: correctness, minimum_confidence: high, critic_expected_outcome: accept, publishability: publish}
+  - {case_id: py-off-by-one-loop, should_produce_candidate: true, expected_category: correctness, minimum_confidence: high, critic_expected_outcome: not_required, publishability: publish}
+  - {case_id: hard-py-cross-file-contract-violation, should_produce_candidate: true, expected_category: correctness, minimum_confidence: high, critic_expected_outcome: accept, publishability: publish}
+  - {case_id: py-wrong-boolean-branch, should_produce_candidate: true, expected_category: correctness, minimum_confidence: high, critic_expected_outcome: not_required, publishability: publish}
+  - {case_id: hard-py-stale-cache-invalidation, should_produce_candidate: true, expected_category: correctness, minimum_confidence: high, critic_expected_outcome: not_required, publishability: publish}
+  - {case_id: py-ignored-error-return, should_produce_candidate: true, expected_category: api_misuse, minimum_confidence: high, critic_expected_outcome: not_required, publishability: publish}
+  - {case_id: c-file-handle-leak, should_produce_candidate: true, expected_category: resource_management, minimum_confidence: high, critic_expected_outcome: not_required, publishability: publish}
+  - {case_id: py-auth-bypass, should_produce_candidate: true, expected_category: security, minimum_confidence: high, critic_expected_outcome: accept, publishability: publish}
+  - {case_id: py-path-traversal, should_produce_candidate: true, expected_category: security, minimum_confidence: high, critic_expected_outcome: accept, publishability: publish}
+  - {case_id: secq-e-command-injection, should_produce_candidate: true, expected_category: security, minimum_confidence: high, critic_expected_outcome: accept, publishability: publish}
+  - {case_id: secq-a-credential-log-exposure, should_produce_candidate: true, expected_category: security, minimum_confidence: high, critic_expected_outcome: accept, publishability: publish}
+  - {case_id: beta-api-return-shape-break, should_produce_candidate: true, expected_category: api_misuse, minimum_confidence: high, critic_expected_outcome: accept, publishability: publish}
+  - {case_id: py-wrong-argument-semantics, should_produce_candidate: true, expected_category: api_misuse, minimum_confidence: high, critic_expected_outcome: not_required, publishability: publish}
+  - {case_id: beta-schema-mismatch, should_produce_candidate: true, expected_category: api_misuse, minimum_confidence: high, critic_expected_outcome: accept, publishability: publish}
+  - {case_id: py-claimed-intentional-swapped-counts, should_produce_candidate: true, expected_category: correctness, minimum_confidence: high, critic_expected_outcome: not_required, publishability: publish}
+  - {case_id: beta-safe-refactor, should_produce_candidate: false, expected_category: null, minimum_confidence: null, critic_expected_outcome: not_run, publishability: do_not_publish}
+  - {case_id: beta-test-only-change, should_produce_candidate: false, expected_category: null, minimum_confidence: null, critic_expected_outcome: not_run, publishability: do_not_publish}
+  - {case_id: beta-comment-only-change, should_produce_candidate: false, expected_category: null, minimum_confidence: null, critic_expected_outcome: not_run, publishability: do_not_publish}
+  - {case_id: beta-behavior-preserving-rename, should_produce_candidate: false, expected_category: null, minimum_confidence: null, critic_expected_outcome: not_run, publishability: do_not_publish}
+  - {case_id: beta-generated-fixture-context, should_produce_candidate: false, expected_category: null, minimum_confidence: null, critic_expected_outcome: not_run, publishability: do_not_publish}

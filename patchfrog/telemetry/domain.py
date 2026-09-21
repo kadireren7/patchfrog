@@ -148,6 +148,7 @@ class FindingLifecycleOutcome(StrEnum):
     SUPPRESSED_DUPLICATE = "suppressed_duplicate"
     SUPPRESSED_CONTRADICTION = "suppressed_contradiction"
     SUPPRESSED_BUDGET = "suppressed_budget"
+    SUPPRESSED_CRITIC_FAILURE = "suppressed_critic_failure"
     BELOW_CONFIDENCE_THRESHOLD = "below_confidence_threshold"
     ACCEPTED_FINAL = "accepted_final"
 
@@ -159,6 +160,7 @@ _STATUS_TO_OUTCOME: dict[ProposalStatus, FindingLifecycleOutcome] = {
     ProposalStatus.SUPPRESSED_DUPLICATE: FindingLifecycleOutcome.SUPPRESSED_DUPLICATE,
     ProposalStatus.SUPPRESSED_CONTRADICTION: FindingLifecycleOutcome.SUPPRESSED_CONTRADICTION,
     ProposalStatus.SUPPRESSED_BUDGET: FindingLifecycleOutcome.SUPPRESSED_BUDGET,
+    ProposalStatus.SUPPRESSED_CRITIC_FAILURE: FindingLifecycleOutcome.SUPPRESSED_CRITIC_FAILURE,
 }
 
 

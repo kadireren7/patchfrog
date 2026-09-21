@@ -88,7 +88,7 @@ def test_operator_caps_are_never_read_from_repo_config_fields() -> None:
 
     assert not hasattr(ReviewConfig(), "operator_max_candidates")
     assert set(ReviewConfig.model_fields) == {
-        "critic_enabled", "max_candidates", "max_input_tokens_per_candidate",
+        "critic_enabled", "critic_failure_policy", "max_candidates", "max_input_tokens_per_candidate",
         "max_output_tokens_per_candidate", "max_total_input_tokens", "max_concurrent_requests",
         "min_final_confidence", "max_retries", "max_provider_calls", "max_retry_attempts",
         "max_total_output_tokens", "max_estimated_cost_usd", "max_elapsed_seconds",

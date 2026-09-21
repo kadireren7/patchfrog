@@ -50,6 +50,10 @@ from patchfrog.cross_repo_intelligence.domain import (
     RepositoryRelationKind,
     RepositoryRelationProvenance,
 )
+from patchfrog.evaluation.beta_readiness import (
+    compute_beta_readiness_metrics,
+    load_beta_profile,
+)
 from patchfrog.evaluation.domain import (
     CaseStatus,
     EvaluationCase,
@@ -1734,7 +1738,18 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
 
     all_cases = load_all_cases(DEFAULT_CASES_ROOT)
     validate_and_raise(all_cases, cases_root=DEFAULT_CASES_ROOT)
-    cases = _filter_cases(all_cases, args)
+    beta_expectations = load_beta_profile() if args.beta_readiness else ()
+    if args.repeat < 1:
+        raise ValueError("--repeat must be at least 1")
+    if not beta_expectations and args.repeat != 1:
+        raise ValueError("--repeat is only supported with --beta-readiness")
+    if beta_expectations:
+        if args.case or args.tag or args.language or args.difficulty:
+            raise ValueError("--beta-readiness cannot be combined with case/tag/language/difficulty filters")
+        beta_ids = {item.case_id for item in beta_expectations}
+        cases = [case for case in all_cases if case.id in beta_ids]
+    else:
+        cases = _filter_cases(all_cases, args)
     if not cases:
         raise ValueError("no benchmark cases matched the given --case/--tag/--language/--difficulty filters")
 
@@ -1866,6 +1881,33 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
         report = build_report(result, cases_by_id=cases_by_id, fixture_info=fixture_info)
         report["benchmark_label"] = "pipeline_correctness" if args.provider == "fake" else "ai_quality"
         report["ai_quality_measured"] = args.provider == "live"
+        if beta_expectations:
+            repeated_results = [tuple(case_results)]
+            for _ in range(1, args.repeat):
+                repeated_results.append(
+                    tuple(
+                        await runner.run_suite(
+                            cases,
+                            cases_root=DEFAULT_CASES_ROOT,
+                            mode=mode,
+                            reviewer_provider_factory=provider_factory,
+                            critic_provider_factory=provider_factory,
+                            critic_enabled=critic_enabled_flag,
+                            context_config_override=context_override,
+                            timeout_seconds=args.timeout,
+                        )
+                    )
+                )
+            report["beta_readiness"] = {
+                "profile_cases": [asdict(item) for item in beta_expectations],
+                "metrics": asdict(
+                    compute_beta_readiness_metrics(
+                        repeated_results, expectations=beta_expectations
+                    )
+                ),
+                "repeat_count": args.repeat,
+                "provider_mode": args.provider,
+            }
         if critic_comparison_report is not None:
             report["critic_comparison"] = critic_comparison_report
         if context_ablation_report is not None:
@@ -2407,6 +2449,17 @@ def main(argv: list[str] | None = None) -> int:
         help="'fake' scripts a deterministic oracle from each case's own ground truth (pipeline-correctness "
         "benchmark, never AI quality). 'live' calls the real configured provider and requires "
         "ANTHROPIC_API_KEY.",
+    )
+    eval_run_parser.add_argument(
+        "--beta-readiness",
+        action="store_true",
+        help="Run the committed 20-case beta profile with explicit candidate/critic/publishability expectations",
+    )
+    eval_run_parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Repeat a beta-readiness run to measure deterministic variance (default: 1)",
     )
     eval_run_parser.add_argument(
         "--context-ablation", action="store_true",

@@ -76,6 +76,7 @@ from patchfrog.review.agents.proposal import AgentProposal
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.budget import BudgetExceeded, ReviewBudget
 from patchfrog.review.critic import CriticService
+from patchfrog.review.critic_policy import CriticFailurePolicy
 from patchfrog.review.critic_selection import CriticSelectionInput, CriticSelectionPolicy
 from patchfrog.review.domain import (
     AIReviewFinding,
@@ -112,6 +113,7 @@ logger = structlog.get_logger(__name__)
 #: outcome, never "publish because the reviewer call was already paid
 #: for."
 CRITIC_BUDGET_EXHAUSTED = "critic_budget_exhausted"
+CRITIC_FAILURE_HOLD = "critic_failure_hold"
 
 
 @dataclass(slots=True)
@@ -262,6 +264,7 @@ class AgentOrchestrator:
         reviewer_fallback_providers: Mapping[AgentRole, LLMProvider] | None = None,
         critic_fallback: CriticService | None = None,
         review_budget: ReviewBudget | None = None,
+        critic_failure_policy: CriticFailurePolicy = CriticFailurePolicy.FAIL_OPEN,
     ) -> None:
         """``reviewer_fallback_providers``/``critic_fallback`` (Milestone U
         runtime-failover correction): an optional, distinct provider used
@@ -295,6 +298,7 @@ class AgentOrchestrator:
         #: :meth:`review_candidate`, never re-derived here.
         self._effort_policy = effort_policy or ReviewEffortPolicy()
         self._review_budget = review_budget
+        self._critic_failure_policy = critic_failure_policy
 
     async def review_candidate(
         self,
@@ -797,6 +801,8 @@ class AgentOrchestrator:
                         error_type=type(verdict_outcome).__name__,
                         provider_failure_kind=getattr(verdict_outcome, "kind", None),
                     )
+                    if self._critic_failure_policy is CriticFailurePolicy.HOLD_FOR_REVIEW:
+                        result[i] = result[i].suppressed(CRITIC_FAILURE_HOLD)
                     continue
                 raise verdict_outcome
             critic_calls += 1

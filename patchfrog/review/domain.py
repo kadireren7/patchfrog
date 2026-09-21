@@ -270,6 +270,10 @@ class ProposalStatus(StrEnum):
     #: :data:`patchfrog.review.orchestration.CRITIC_BUDGET_EXHAUSTED`.
     #: Suppressed rather than published unverified.
     SUPPRESSED_BUDGET = "suppressed_budget"
+    #: A selected critic failed and the effective
+    #: ``CriticFailurePolicy`` required holding the proposal rather than
+    #: accepting it on reviewer confidence alone.
+    SUPPRESSED_CRITIC_FAILURE = "suppressed_critic_failure"
 
 
 @dataclass(frozen=True, slots=True)

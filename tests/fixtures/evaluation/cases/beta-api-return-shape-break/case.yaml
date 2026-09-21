@@ -1,0 +1,18 @@
+case:
+  id: beta-api-return-shape-break
+  title: User serializer breaks its documented API return shape
+  description: serialize_user promises id and display_name but returns name instead.
+  language: python
+  difficulty: medium
+  tags: [beta-readiness, contract, api]
+expected:
+  - id: ef1
+    category: api_misuse
+    file: src/users.py
+    symbol: serialize_user
+    issue_family: api_return_shape_break
+    severity: high
+    line: 7
+    ground_truth_source: ai_expected
+    notes: The public response contract requires display_name, not name.
+forbidden: []

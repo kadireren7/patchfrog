@@ -167,6 +167,21 @@ def test_agreement_is_not_a_contradiction() -> None:
     assert is_contradiction(a, b) is False
 
 
+def test_identical_risk_finding_is_agreement_not_lexical_contradiction() -> None:
+    finding = _finding(
+        category=FindingCategory.SECURITY,
+        message="Input is not sanitized, enabling command injection",
+        reasoning_summary="Untrusted input reaches an unsafe shell sink",
+    )
+    correctness = _proposal(AgentRole.CORRECTNESS, finding)
+    security = _proposal(AgentRole.SECURITY, finding)
+
+    assert is_contradiction(correctness, security) is False
+    result = group_cross_role((correctness, security))
+    assert not result.contradiction_indices
+    assert sum(p.suppressed_reason == CROSS_ROLE_DUPLICATE for p in result.proposals) == 1
+
+
 def test_group_cross_role_merges_exact_duplicate_to_one_survivor() -> None:
     """Required scenario 4: exact duplicate across agents -> one result."""
 

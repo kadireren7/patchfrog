@@ -223,10 +223,19 @@ A single specialist role failing (a transient or fatal provider error)
 never fails the whole candidate if the other role's result is usable --
 the run proceeds with whatever validated, useful work exists. Only when
 **every** selected role fails for a candidate is that candidate marked
-failed. A critic failure falls back to no-critic aggregation, exactly as
-before -- except for a proposal inside an unresolved contradiction
-group, where a missing verdict is treated the same as "not confidently
-resolved" and the group is suppressed rather than defaulting to accept.
+failed. Critic failure behavior is explicit through
+`CriticFailurePolicy`: `fail_open` (the compatibility default) falls back
+to deterministic validation and reviewer-confidence aggregation;
+`hold_for_review` suppresses the affected proposal until critic
+verification succeeds. Fail-open is suitable when findings are advisory,
+the proposal has already passed deterministic evidence checks, and losing
+recall is costlier than delaying independent verification. Hold-for-review
+is safer for mandatory checks, security-sensitive repositories, or any
+workflow where an unverified finding must not publish. An operator can
+force the policy with `PATCHFROG_CRITIC_FAILURE_POLICY`; a repository may
+only choose the policy when no operator override is present. Unexpected
+programming errors still fail loudly under both policies. Unresolved
+contradiction groups and critic-budget exhaustion remain fail-closed.
 
 ## Context Engine depth (superseded)
 
