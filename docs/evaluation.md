@@ -311,9 +311,9 @@ report's "Static analyzer coverage" table), never silently treated as
 
 ## Security review quality (post-Phase-8 refinement)
 
-A separate refinement on top of Phase 8 (branch `feat/security-review-quality`)
-extended the existing AI-finding representation with explicit security-quality
-concepts, rather than building a parallel security-only reviewer stack.
+The security-quality refinement now on main extended the existing AI-finding
+representation with explicit security-quality concepts, rather than building a
+parallel security-only reviewer stack.
 
 **Analysis representation.** `AIReviewFinding` (`patchfrog/review/domain.py`)
 already distinguished `message` (identification) and severity/confidence/

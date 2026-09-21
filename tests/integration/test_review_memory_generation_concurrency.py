@@ -22,14 +22,10 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 
-import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from patchfrog.persistence.models.pull_request import PullRequestModel
@@ -41,19 +37,7 @@ from patchfrog.persistence.repositories.review_generation import ReviewGeneratio
 from patchfrog.review.domain import ReviewRunStatus
 from patchfrog.review_memory.config import NO_MEMORY_CONTEXT_FINGERPRINT
 from patchfrog.review_memory.domain import IncrementalRunMode
-
-_POSTGRES_URL = "postgresql+asyncpg://patchfrog:patchfrog@localhost:5432/patchfrog"
-
-
-async def _postgres_available() -> AsyncEngine | None:
-    engine = create_async_engine(_POSTGRES_URL)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("SELECT 1 FROM review_generations LIMIT 1"))
-    except (OperationalError, ProgrammingError):
-        await engine.dispose()
-        return None
-    return engine
+from tests.support.postgres import postgres_engine_or_skip
 
 
 async def _make_review_run(
@@ -71,9 +55,7 @@ async def _make_review_run(
 
 
 async def test_concurrent_generation_creation_never_collides_sequence_number() -> None:
-    engine = await _postgres_available()
-    if engine is None:
-        pytest.skip("real PostgreSQL not reachable at localhost:5432 (docker compose up -d postgres)")
+    engine = await postgres_engine_or_skip("review_generations")
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     full_name = f"review-memory-concurrency-test/{uuid.uuid4().hex[:8]}"

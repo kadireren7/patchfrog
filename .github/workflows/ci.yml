@@ -74,6 +74,12 @@ jobs:
         VgAFWZ9YEAZPVROqM6i76BU=
         -----END PRIVATE KEY-----
       GITHUB_WEBHOOK_SECRET: ci-placeholder-not-a-real-secret
+      # The database-specific suite must fail if the declared CI service is
+      # unavailable or unmigrated. Local runs may skip these tests when no
+      # compatible Postgres is present.
+      PATCHFROG_REQUIRE_POSTGRES: "1"
+      SEMGREP_ENABLE_VERSION_CHECK: "0"
+      SEMGREP_SEND_METRICS: "off"
 
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +93,11 @@ jobs:
 
       - name: ruff
         run: ruff check .
+
+      - name: Verify required static analyzers
+        run: |
+          ruff --version
+          semgrep --version
 
       - name: mypy --strict
         run: mypy . --strict

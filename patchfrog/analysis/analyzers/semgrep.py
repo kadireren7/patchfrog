@@ -10,11 +10,15 @@ own telemetry call for the same reason.
 from __future__ import annotations
 
 import json
-import shutil
+import tempfile
 import time
 from pathlib import Path
 
-from patchfrog.analysis.analyzers.base import AnalyzerAvailability, AnalyzerDiscoveryResult
+from patchfrog.analysis.analyzers.base import (
+    AnalyzerAvailability,
+    AnalyzerDiscoveryResult,
+    resolve_analyzer_binary,
+)
 from patchfrog.analysis.domain import (
     AnalysisContext,
     AnalyzerCapabilities,
@@ -29,6 +33,10 @@ from patchfrog.analysis.subprocess_sandbox import AnalyzerSubprocessError, run_s
 from patchfrog.domain.code import Language, SourceSpan
 
 _BINARY = "semgrep"
+_OFFLINE_ENV = {
+    "SEMGREP_ENABLE_VERSION_CHECK": "0",
+    "SEMGREP_SEND_METRICS": "off",
+}
 
 BUNDLED_RULES_PATH = Path(__file__).parent / "semgrep_rules" / "patchfrog-rules.yml"
 
@@ -55,13 +63,19 @@ class SemgrepAnalyzer:
     )
 
     async def discover(self) -> AnalyzerDiscoveryResult:
-        binary = shutil.which(_BINARY)
+        binary = resolve_analyzer_binary(_BINARY)
         if binary is None:
             return AnalyzerDiscoveryResult(
                 availability=AnalyzerAvailability.UNAVAILABLE, reason="semgrep binary not found on PATH"
             )
         try:
-            result = await run_sandboxed([binary, "--version"], cwd=Path.cwd(), timeout_seconds=15)
+            with tempfile.TemporaryDirectory(prefix="patchfrog-semgrep-") as state_dir:
+                result = await run_sandboxed(
+                    [binary, "--version"],
+                    cwd=Path.cwd(),
+                    timeout_seconds=15,
+                    extra_env={"HOME": state_dir, **_OFFLINE_ENV},
+                )
         except AnalyzerSubprocessError as exc:
             return AnalyzerDiscoveryResult(availability=AnalyzerAvailability.UNAVAILABLE, reason=str(exc))
         if result.exit_code != 0:
@@ -84,7 +98,7 @@ class SemgrepAnalyzer:
                 error=discovery.reason,
             )
         version = discovery.version
-        binary = shutil.which(_BINARY)
+        binary = resolve_analyzer_binary(_BINARY)
         assert binary is not None
 
         if not (context.languages & self.capabilities.languages):
@@ -107,9 +121,13 @@ class SemgrepAnalyzer:
             *targets,
         ]
         try:
-            result = await run_sandboxed(
-                args, cwd=context.checkout_path, timeout_seconds=context.config.timeout_seconds
-            )
+            with tempfile.TemporaryDirectory(prefix="patchfrog-semgrep-") as state_dir:
+                result = await run_sandboxed(
+                    args,
+                    cwd=context.checkout_path,
+                    timeout_seconds=context.config.timeout_seconds,
+                    extra_env={"HOME": state_dir, **_OFFLINE_ENV},
+                )
         except AnalyzerSubprocessError as exc:
             return AnalyzerResult(
                 analyzer="semgrep",

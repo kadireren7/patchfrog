@@ -25,11 +25,14 @@ Two deliberate constraints, both required by the Phase 3 spec:
 from __future__ import annotations
 
 import re
-import shutil
 import time
 from pathlib import Path
 
-from patchfrog.analysis.analyzers.base import AnalyzerAvailability, AnalyzerDiscoveryResult
+from patchfrog.analysis.analyzers.base import (
+    AnalyzerAvailability,
+    AnalyzerDiscoveryResult,
+    resolve_analyzer_binary,
+)
 from patchfrog.analysis.domain import (
     AnalysisContext,
     AnalyzerCapabilities,
@@ -121,7 +124,7 @@ class ClangTidyAnalyzer:
     )
 
     async def discover(self) -> AnalyzerDiscoveryResult:
-        binary = shutil.which(_BINARY)
+        binary = resolve_analyzer_binary(_BINARY)
         if binary is None:
             return AnalyzerDiscoveryResult(
                 availability=AnalyzerAvailability.UNAVAILABLE, reason="clang-tidy binary not found on PATH"
@@ -150,7 +153,7 @@ class ClangTidyAnalyzer:
                 error=discovery.reason,
             )
         version = discovery.version
-        binary = shutil.which(_BINARY)
+        binary = resolve_analyzer_binary(_BINARY)
         assert binary is not None
 
         compile_db_dir = find_compilation_database(context.checkout_path)

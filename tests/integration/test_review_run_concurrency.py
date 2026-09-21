@@ -24,10 +24,8 @@ import shutil
 import uuid
 from pathlib import Path
 
-import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import OperationalError, ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from patchfrog.diff.models import DiffFile, DiffHunk, DiffLine, DiffLineType
 from patchfrog.indexing.service import RepositoryIndexingService
@@ -37,8 +35,7 @@ from patchfrog.review.domain import ReviewRunStatus
 from patchfrog.review.providers.fake import FakeLLMProvider, ScriptedResponse
 from patchfrog.review.service import PullRequestReviewService
 from tests.support.git_repo import materialize_fixture_repo
-
-_POSTGRES_URL = "postgresql+asyncpg://patchfrog:patchfrog@localhost:5432/patchfrog"
+from tests.support.postgres import postgres_engine_or_skip
 
 
 def _diff_marking_lines(file_path: str, lines: list[int]) -> DiffFile:
@@ -53,21 +50,8 @@ def _diff_marking_lines(file_path: str, lines: list[int]) -> DiffFile:
     return DiffFile(path=file_path, hunks=(hunk,))
 
 
-async def _postgres_available() -> AsyncEngine | None:
-    engine = create_async_engine(_POSTGRES_URL)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("SELECT 1 FROM review_runs LIMIT 1"))
-    except (OperationalError, ProgrammingError):
-        await engine.dispose()
-        return None
-    return engine
-
-
 async def test_two_concurrent_reviews_never_produce_two_succeeded_runs(tmp_path: Path) -> None:
-    engine = await _postgres_available()
-    if engine is None:
-        pytest.skip("real PostgreSQL not reachable at localhost:5432 (docker compose up -d postgres)")
+    engine = await postgres_engine_or_skip("review_runs")
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     full_name = f"review-concurrency-test/{uuid.uuid4().hex[:8]}"

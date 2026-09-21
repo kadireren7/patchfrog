@@ -18,12 +18,9 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from patchfrog.analysis.analyzers.base import AnalyzerAvailability, AnalyzerDiscoveryResult
@@ -42,8 +39,7 @@ from patchfrog.indexing.service import RepositoryIndexingService
 from patchfrog.persistence.models.analysis import AnalysisRunModel
 from patchfrog.persistence.repositories import RepositoryRepository
 from tests.support.git_repo import materialize_fixture_repo
-
-_POSTGRES_URL = "postgresql+asyncpg://patchfrog:patchfrog@localhost:5432/patchfrog"
+from tests.support.postgres import postgres_engine_or_skip
 
 
 class _VersionedStubAnalyzer:
@@ -205,17 +201,6 @@ async def test_changing_only_semgrep_ruleset_content_creates_a_distinct_canonica
     assert len({r.toolchain_fingerprint for r in succeeded}) == 2
 
 
-async def _postgres_available() -> AsyncEngine | None:
-    engine = create_async_engine(_POSTGRES_URL)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("SELECT 1 FROM analysis_runs LIMIT 1"))
-    except (OperationalError, ProgrammingError):
-        await engine.dispose()
-        return None
-    return engine
-
-
 async def test_concurrent_identical_toolchain_identity_remains_race_safe_in_real_postgres(
     tmp_path: Path,
 ) -> None:
@@ -225,9 +210,7 @@ async def test_concurrent_identical_toolchain_identity_remains_race_safe_in_real
     the advisory lock is keyed by the combined identity now, not the old
     config-only one."""
 
-    engine = await _postgres_available()
-    if engine is None:
-        pytest.skip("real PostgreSQL not reachable at localhost:5432 (docker compose up -d postgres)")
+    engine = await postgres_engine_or_skip("analysis_runs")
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     full_name = f"toolchain-concurrency-test/{uuid.uuid4().hex[:8]}"

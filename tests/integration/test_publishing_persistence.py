@@ -17,12 +17,10 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from patchfrog.persistence.models.publishing import (
@@ -35,25 +33,14 @@ from patchfrog.publishing.domain import (
     ReviewPublicationMode,
     ReviewPublicationStatus,
 )
+from tests.support.postgres import postgres_engine_or_skip
 from tests.support.publishing import (
     finding_json,
     scripted_findings_response,
     setup_reviewed_pull_request,
 )
 
-_POSTGRES_URL = "postgresql+asyncpg://patchfrog:patchfrog@localhost:5432/patchfrog"
 _TEST_POLICY_FINGERPRINT = PublicationConfig(enabled=True).fingerprint()
-
-
-async def _postgres_available() -> AsyncEngine | None:
-    engine = create_async_engine(_POSTGRES_URL)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("SELECT 1 FROM review_publications LIMIT 1"))
-    except (OperationalError, ProgrammingError):
-        await engine.dispose()
-        return None
-    return engine
 
 
 async def _cleanup(session_factory: async_sessionmaker[AsyncSession], repository_id: uuid.UUID) -> None:
@@ -83,9 +70,7 @@ async def test_db_level_unique_constraint_rejects_second_published_row(tmp_path:
     discipline (spec section 19: "Use DB-level protection where
     appropriate")."""
 
-    engine = await _postgres_available()
-    if engine is None:
-        pytest.skip("real PostgreSQL not reachable at localhost:5432 (docker compose up -d postgres)")
+    engine = await postgres_engine_or_skip("review_publications")
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     repository_id = None
@@ -133,9 +118,7 @@ async def test_dry_run_rows_never_block_a_later_published_row(tmp_path: Path) ->
     uniqueness guarantee -- confirms the partial index correctly scopes
     on (review_run_id, mode) together, not review_run_id alone."""
 
-    engine = await _postgres_available()
-    if engine is None:
-        pytest.skip("real PostgreSQL not reachable at localhost:5432 (docker compose up -d postgres)")
+    engine = await postgres_engine_or_skip("review_publications")
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     repository_id = None
@@ -174,9 +157,7 @@ async def test_dry_run_rows_never_block_a_later_published_row(tmp_path: Path) ->
 
 
 async def test_comment_fingerprint_uniqueness_within_a_publication(tmp_path: Path) -> None:
-    engine = await _postgres_available()
-    if engine is None:
-        pytest.skip("real PostgreSQL not reachable at localhost:5432 (docker compose up -d postgres)")
+    engine = await postgres_engine_or_skip("review_publications")
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     repository_id = None
@@ -229,9 +210,7 @@ async def test_comment_fingerprint_uniqueness_within_a_publication(tmp_path: Pat
 
 
 async def test_deleting_review_run_cascades_to_publications_and_comments(tmp_path: Path) -> None:
-    engine = await _postgres_available()
-    if engine is None:
-        pytest.skip("real PostgreSQL not reachable at localhost:5432 (docker compose up -d postgres)")
+    engine = await postgres_engine_or_skip("review_publications")
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     repository_id = None

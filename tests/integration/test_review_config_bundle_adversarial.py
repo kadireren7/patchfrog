@@ -12,14 +12,10 @@ import shutil
 import uuid
 from pathlib import Path
 
-import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from patchfrog.diff.models import DiffFile, DiffHunk, DiffLine, DiffLineType
@@ -33,8 +29,7 @@ from patchfrog.review.provider import ProviderFatalError, ProviderRequest
 from patchfrog.review.providers.fake import FakeLLMProvider, ScriptedResponse
 from patchfrog.review.service import PullRequestReviewService, persist_malformed_config_failure
 from tests.support.git_repo import materialize_fixture_repo
-
-_POSTGRES_URL = "postgresql+asyncpg://patchfrog:patchfrog@localhost:5432/patchfrog"
+from tests.support.postgres import postgres_engine_or_skip
 
 
 def _diff_marking_lines(file_path: str, lines: list[int]) -> DiffFile:
@@ -49,17 +44,6 @@ def _diff_marking_lines(file_path: str, lines: list[int]) -> DiffFile:
     return DiffFile(path=file_path, hunks=(hunk,))
 
 
-async def _postgres_available() -> AsyncEngine | None:
-    engine = create_async_engine(_POSTGRES_URL)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("SELECT 1 FROM review_runs LIMIT 1"))
-    except (OperationalError, ProgrammingError):
-        await engine.dispose()
-        return None
-    return engine
-
-
 async def test_concurrent_duplicate_malformed_config_delivery_never_crashes(tmp_path: Path) -> None:
     """Two 'concurrent Celery deliveries' both hitting the exact same
     malformed .patchfrog.yml for the same commit must both resolve
@@ -67,9 +51,7 @@ async def test_concurrent_duplicate_malformed_config_delivery_never_crashes(tmp_
     pg_advisory_xact_lock every other review-run identity uses -- no
     crash, no unhandled exception, no partial/duplicate row corruption."""
 
-    engine = await _postgres_available()
-    if engine is None:
-        pytest.skip("real PostgreSQL not reachable at localhost:5432 (docker compose up -d postgres)")
+    engine = await postgres_engine_or_skip("review_runs")
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     full_name = f"malformed-concurrency-test/{uuid.uuid4().hex[:8]}"

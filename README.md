@@ -87,6 +87,14 @@ mypy . --strict
 pytest
 ```
 
+The default suite is deterministic and never requires provider credentials or
+makes paid provider calls. Real-Postgres concurrency/schema tests skip locally
+when the documented test database is unavailable; CI requires that database and
+fails if it cannot be used. Host-isolation and distributed-verifier cases are
+reported as optional skips when their explicit `bwrap`/`prlimit`/Redis
+prerequisites are absent. See [`docs/ci-health.md`](docs/ci-health.md) for the
+suite contracts and reproducible commands.
+
 ## Architecture and brand
 
 See [`docs/brand.md`](docs/brand.md) for identity/tone guidelines and asset usage, [`docs/product-boundary.md`](docs/product-boundary.md) for the self-hosted vs. PatchFrog Cloud architecture, and the `docs/` directory for phase-by-phase design notes.

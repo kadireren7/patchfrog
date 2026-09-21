@@ -22,10 +22,8 @@ import shutil
 import uuid
 from pathlib import Path
 
-import pytest
 from sqlalchemy import select, text
-from sqlalchemy.exc import OperationalError, ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from patchfrog.context.domain import ContextTargetType
 from patchfrog.context.service import ContextService
@@ -33,27 +31,13 @@ from patchfrog.indexing.service import RepositoryIndexingService
 from patchfrog.persistence.models.context import ContextBundleModel, ContextItemModel
 from patchfrog.persistence.repositories import RepositoryRepository
 from tests.support.git_repo import materialize_fixture_repo
-
-_POSTGRES_URL = "postgresql+asyncpg://patchfrog:patchfrog@localhost:5432/patchfrog"
-
-
-async def _postgres_available() -> AsyncEngine | None:
-    engine = create_async_engine(_POSTGRES_URL)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("SELECT 1 FROM context_bundles LIMIT 1"))
-    except (OperationalError, ProgrammingError):
-        await engine.dispose()
-        return None
-    return engine
+from tests.support.postgres import postgres_engine_or_skip
 
 
 async def test_two_concurrent_context_generations_never_produce_two_succeeded_bundles(
     tmp_path: Path,
 ) -> None:
-    engine = await _postgres_available()
-    if engine is None:
-        pytest.skip("real PostgreSQL not reachable at localhost:5432 (docker compose up -d postgres)")
+    engine = await postgres_engine_or_skip("context_bundles")
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     full_name = f"context-concurrency-test/{uuid.uuid4().hex[:8]}"

@@ -79,6 +79,39 @@ async def test_dry_run_plans_but_never_writes_to_github(
         assert comments[0].github_comment_id is None
 
 
+async def test_dry_run_high_confidence_low_severity_correctness_finding_is_published_not_omitted(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Regression: PR #57 production evidence showed a real, critic-
+    verified, high-confidence correctness finding (severity=low) being
+    discarded outright by the default min_severity=MEDIUM floor before
+    ever being considered for inline/summary placement -- GitHub received
+    nothing despite the review run itself reporting accepted_count=1. See
+    patchfrog.publishing.planner._bypasses_severity_floor."""
+
+    reviewed = await setup_reviewed_pull_request(
+        session_factory,
+        full_name="test/pr-57-severity-floor",
+        changed_lines=[14],
+        response_factory=lambda req: scripted_findings_response(
+            [finding_json(severity="low", confidence="high", category="correctness")]
+        ),
+        tmp_root=tmp_path,
+    )
+    assert len(reviewed.findings) == 1
+
+    publisher = FakeReviewPublisher(
+        pull_request=_pr_metadata(number=reviewed.pull_request_number, head_sha=reviewed.commit_sha),
+        changed_files=reviewed.changed_files,
+    )
+    service = ReviewPublicationService(session_factory=session_factory, publisher=publisher)
+    result = await service.publish(review_run_id=reviewed.review_run_id, mode=ReviewPublicationMode.DRY_RUN)
+
+    assert result.status is ReviewPublicationStatus.DRY_RUN
+    assert result.omitted == 0
+    assert result.planned_inline + result.summary_only == 1
+
+
 async def test_dry_run_with_no_findings_is_skipped(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
