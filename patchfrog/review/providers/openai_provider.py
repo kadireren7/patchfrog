@@ -62,6 +62,7 @@ from patchfrog.review.provider import (
     ProviderTransientError,
     ProviderUsage,
     indicates_insufficient_quota,
+    retry_after_seconds_from_http_response,
 )
 
 _DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -148,7 +149,9 @@ class OpenAILLMProvider:
         except openai.RateLimitError as exc:
             if indicates_insufficient_quota(exc):
                 raise ProviderInsufficientQuotaError(f"quota exhausted: {exc}") from exc
-            raise ProviderRateLimitError(f"rate limited: {exc}") from exc
+            raise ProviderRateLimitError(
+                f"rate limited: {exc}", retry_after_seconds=retry_after_seconds_from_http_response(exc)
+            ) from exc
         except openai.APITimeoutError as exc:
             raise ProviderTimeoutError(f"timeout: {exc}") from exc
         except openai.APIConnectionError as exc:

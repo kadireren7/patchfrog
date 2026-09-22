@@ -142,6 +142,20 @@ class Settings(BaseSettings):
     provider_pricing: dict[str, dict[str, float]] = Field(
         default_factory=dict, alias="PATCHFROG_PROVIDER_PRICING"
     )
+    #: Operator-configured requests-per-minute ceiling, keyed the same
+    #: way as provider_pricing above (``"provider/model"``, falling back
+    #: to a bare ``"provider"`` entry -- see
+    #: :func:`patchfrog.review.rate_limiter.resolve_rate_limit_rpm`).
+    #: Unset (the default) means unthrottled -- exactly today's
+    #: behavior. A free-tier deployment sets e.g.
+    #: ``PATCHFROG_PROVIDER_RATE_LIMIT_RPM={"gemini":5}`` to keep every
+    #: reviewer/critic/retry call for that provider under its quota; see
+    #: :mod:`patchfrog.review.rate_limiter` for why this lives here
+    #: (operator/deployment concern) rather than in a repository's
+    #: ``.patchfrog.yml``.
+    provider_rate_limit_rpm: dict[str, int] = Field(
+        default_factory=dict, alias="PATCHFROG_PROVIDER_RATE_LIMIT_RPM"
+    )
 
     # -- Public beta operational limits (patchfrog.ops) --
     # All optional with conservative defaults; never required for

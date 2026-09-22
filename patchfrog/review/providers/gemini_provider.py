@@ -75,6 +75,36 @@ from patchfrog.review.provider import (
     indicates_insufficient_quota,
 )
 
+
+def _parse_retry_delay_seconds(details: object) -> float | None:
+    """Extract ``google.rpc.RetryInfo.retryDelay`` (e.g. ``"34s"``) from a
+    Gemini ``ClientError``'s parsed error body, when the API included one
+    -- Gemini's 429 responses for a per-minute rate limit typically do.
+    Defensive by construction: any unexpected shape (missing/malformed
+    ``details``, a non-string delay) simply yields ``None``, so the
+    caller falls back to exponential backoff rather than raising here."""
+
+    if not isinstance(details, dict):
+        return None
+    error_body = details.get("error", details)
+    if not isinstance(error_body, dict):
+        return None
+    for item in error_body.get("details") or []:
+        if not isinstance(item, dict):
+            continue
+        type_url = item.get("@type")
+        if not isinstance(type_url, str) or not type_url.endswith("RetryInfo"):
+            continue
+        raw_delay = item.get("retryDelay")
+        if not isinstance(raw_delay, str) or not raw_delay.endswith("s"):
+            continue
+        try:
+            return float(raw_delay[:-1])
+        except ValueError:
+            continue
+    return None
+
+
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 
 #: Disables the SDK's own built-in retries (default 5 attempts with
@@ -247,7 +277,8 @@ class GeminiLLMProvider:
                 # to stop, not something this adapter can detect alone.
                 if indicates_insufficient_quota(exc):
                     raise ProviderInsufficientQuotaError(f"quota exhausted: {exc}") from exc
-                raise ProviderRateLimitError(f"rate limited: {exc}") from exc
+                retry_after = _parse_retry_delay_seconds(getattr(exc, "details", None))
+                raise ProviderRateLimitError(f"rate limited: {exc}", retry_after_seconds=retry_after) from exc
             if exc.code == 404:
                 raise ProviderInvalidModelError(f"model not found: {exc}") from exc
             raise ProviderFatalError(f"invalid request {exc.code}: {exc}") from exc

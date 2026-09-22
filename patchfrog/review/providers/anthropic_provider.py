@@ -47,6 +47,7 @@ from patchfrog.review.provider import (
     ProviderTransientError,
     ProviderUsage,
     indicates_insufficient_quota,
+    retry_after_seconds_from_http_response,
 )
 
 #: Anthropic's own SDK already retries connection errors/408/409/429/5xx
@@ -99,7 +100,9 @@ class AnthropicLLMProvider:
         except anthropic.RateLimitError as exc:
             if indicates_insufficient_quota(exc):
                 raise ProviderInsufficientQuotaError(f"quota exhausted: {exc}") from exc
-            raise ProviderRateLimitError(f"rate limited: {exc}") from exc
+            raise ProviderRateLimitError(
+                f"rate limited: {exc}", retry_after_seconds=retry_after_seconds_from_http_response(exc)
+            ) from exc
         except anthropic.APITimeoutError as exc:
             raise ProviderTimeoutError(f"timeout: {exc}") from exc
         except anthropic.APIConnectionError as exc:

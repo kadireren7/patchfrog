@@ -76,6 +76,11 @@ from patchfrog.review.provider_factory import MissingProviderCredentialsError, h
 from patchfrog.review.providers.anthropic_provider import AnthropicLLMProvider
 from patchfrog.review.providers.gemini_provider import GeminiLLMProvider
 from patchfrog.review.providers.openai_provider import OpenAILLMProvider
+from patchfrog.review.rate_limiter import (
+    RateLimitedProvider,
+    default_rate_limiter_registry,
+    resolve_rate_limit_rpm,
+)
 from patchfrog.review.runtime_config import (
     DEFAULT_MODEL_BY_PROVIDER,
     SUPPORTED_PROVIDERS,
@@ -97,12 +102,32 @@ class NoProviderConfiguredError(MissingProviderCredentialsError):
 
 def _build_provider(provider: str, model: str, *, settings: Settings, timeout_seconds: float) -> LLMProvider:
     if provider == "anthropic":
-        return AnthropicLLMProvider(api_key=settings.anthropic_api_key, model=model, timeout_seconds=timeout_seconds)
-    if provider == "gemini":
-        return GeminiLLMProvider(api_key=settings.gemini_api_key, model=model, timeout_seconds=timeout_seconds)
-    if provider == "openai":
-        return OpenAILLMProvider(api_key=settings.openai_api_key, model=model, timeout_seconds=timeout_seconds)
-    raise ValueError(f"unsupported provider: {provider!r}")  # pragma: no cover -- filtered out upstream
+        client: LLMProvider = AnthropicLLMProvider(
+            api_key=settings.anthropic_api_key, model=model, timeout_seconds=timeout_seconds
+        )
+    elif provider == "gemini":
+        client = GeminiLLMProvider(api_key=settings.gemini_api_key, model=model, timeout_seconds=timeout_seconds)
+    elif provider == "openai":
+        client = OpenAILLMProvider(api_key=settings.openai_api_key, model=model, timeout_seconds=timeout_seconds)
+    else:
+        raise ValueError(f"unsupported provider: {provider!r}")  # pragma: no cover -- filtered out upstream
+    return _apply_rate_limit(client, provider=provider, model=model, settings=settings)
+
+
+def _apply_rate_limit(client: LLMProvider, *, provider: str, model: str, settings: Settings) -> LLMProvider:
+    """Wrap ``client`` in :class:`~patchfrog.review.rate_limiter.RateLimitedProvider`
+    when the operator configured an RPM ceiling for this provider/model
+    (``PATCHFROG_PROVIDER_RATE_LIMIT_RPM`` -- see
+    :mod:`patchfrog.review.rate_limiter`'s module docstring for why this
+    exists). Unset means unthrottled, unchanged from before this wrap
+    existed -- this function is a no-op for every deployment that hasn't
+    opted in."""
+
+    rpm = resolve_rate_limit_rpm(settings.provider_rate_limit_rpm, provider=provider, model=model)
+    if rpm is None:
+        return client
+    limiter = default_rate_limiter_registry().get(provider=provider, model=model, requests_per_minute=rpm)
+    return RateLimitedProvider(client, limiter)
 
 
 class ProviderNotAllowedByPolicyError(NoProviderConfiguredError):

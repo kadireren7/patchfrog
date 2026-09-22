@@ -103,9 +103,11 @@ def _multi_message_body(
     }
 
 
-def _handler_returning(status_code: int, json_body: dict[str, object]) -> _Handler:
+def _handler_returning(
+    status_code: int, json_body: dict[str, object], *, headers: dict[str, str] | None = None
+) -> _Handler:
     def handler(request: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(status_code, json=json_body)
+        return httpx2.Response(status_code, json=json_body, headers=headers)
 
     return handler
 
@@ -140,6 +142,19 @@ async def test_rate_limit_is_transient() -> None:
     )
     with pytest.raises(ProviderRateLimitError):
         await provider.generate_structured(_REQUEST)
+
+
+async def test_rate_limit_captures_retry_after_header() -> None:
+    provider = _provider(
+        handler=_handler_returning(
+            429,
+            {"error": {"message": "rate limited", "type": "rate_limit_error"}},
+            headers={"retry-after": "3"},
+        )
+    )
+    with pytest.raises(ProviderRateLimitError) as excinfo:
+        await provider.generate_structured(_REQUEST)
+    assert excinfo.value.retry_after_seconds == 3.0
 
 
 async def test_insufficient_quota_is_permanent() -> None:

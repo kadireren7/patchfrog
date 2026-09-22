@@ -62,7 +62,22 @@ class ProviderResult:
 
 
 class ProviderError(Exception):
-    """Base class for every provider failure."""
+    """Base class for every provider failure.
+
+    ``retry_after_seconds`` (default ``None``) is an optional, provider-
+    reported hint for how long to wait before trying again -- Gemini's
+    ``google.rpc.RetryInfo.retryDelay`` or an HTTP ``Retry-After`` header
+    (Anthropic/OpenAI). When present, :func:`patchfrog.review.retry.call_with_retry`
+    honors it instead of its own exponential backoff, since the provider
+    itself is the authority on how long its rate limit lasts. Always
+    ``None`` for a fatal error (never retried, so irrelevant) and for a
+    transient error whose provider didn't report a delay -- exponential
+    backoff remains the fallback in that case.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 class ProviderFailureKind(StrEnum):
@@ -131,6 +146,28 @@ def indicates_insufficient_quota(value: object) -> bool:
             "resource_exhausted: quota",
         )
     )
+
+
+def retry_after_seconds_from_http_response(value: object) -> float | None:
+    """Extract a ``Retry-After`` header (seconds) from an SDK exception
+    that carries an ``httpx.Response`` on ``.response`` -- Anthropic's
+    and OpenAI's ``RateLimitError`` both do. Defensive by construction
+    (only ``getattr``, never an attribute-error): a provider SDK that
+    doesn't expose ``.response``/``.headers`` this way, or a response
+    without the header, simply yields ``None`` -- the caller then falls
+    back to exponential backoff, never a crash."""
+
+    headers = getattr(getattr(value, "response", None), "headers", None)
+    if headers is None:
+        return None
+    raw = headers.get("retry-after")
+    if raw is None:
+        return None
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
 
 
 @dataclass(frozen=True, slots=True)

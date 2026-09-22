@@ -133,6 +133,51 @@ def test_only_one_provider_configured_routes_reviewer_and_critic_to_it(provider:
     assert plan.critic_provider.identity.model == DEFAULT_MODEL_BY_PROVIDER[provider]
 
 
+def test_no_rate_limit_configured_leaves_provider_unwrapped() -> None:
+    router = ModelRouter(settings=_settings(GEMINI_API_KEY="fake-not-real"))
+    plan = router.route(runtime_config=_runtime_config(provider="gemini"), critic_enabled=False)
+
+    # Unset PATCHFROG_PROVIDER_RATE_LIMIT_RPM must be a true no-op --
+    # every pre-existing router test above already asserts isinstance
+    # against the real adapter class without configuring a rate limit,
+    # so this only makes the invariant explicit.
+    assert isinstance(plan.reviewer_providers[AgentRole.CORRECTNESS], GeminiLLMProvider)
+
+
+def test_configured_rate_limit_wraps_reviewer_and_critic_providers() -> None:
+    from patchfrog.review.rate_limiter import RateLimitedProvider
+
+    router = ModelRouter(
+        settings=_settings(
+            GEMINI_API_KEY="fake-not-real",
+            PATCHFROG_PROVIDER_RATE_LIMIT_RPM={"gemini": 5},
+        )
+    )
+    plan = router.route(runtime_config=_runtime_config(provider="gemini"), critic_enabled=True)
+
+    reviewer = plan.reviewer_providers[AgentRole.CORRECTNESS]
+    assert isinstance(reviewer, RateLimitedProvider)
+    assert isinstance(reviewer._inner, GeminiLLMProvider)
+    # identity still reports the real underlying model -- the wrap must
+    # be transparent to every caller that only ever reads .identity.
+    assert reviewer.identity.model == DEFAULT_MODEL_BY_PROVIDER["gemini"]
+    assert isinstance(plan.critic_provider, RateLimitedProvider)
+
+
+def test_rate_limit_keyed_by_model_does_not_apply_to_a_different_model() -> None:
+    from patchfrog.review.rate_limiter import RateLimitedProvider
+
+    router = ModelRouter(
+        settings=_settings(
+            GEMINI_API_KEY="fake-not-real",
+            PATCHFROG_PROVIDER_RATE_LIMIT_RPM={"gemini/some-other-model": 5},
+        )
+    )
+    plan = router.route(runtime_config=_runtime_config(provider="gemini"), critic_enabled=False)
+
+    assert not isinstance(plan.reviewer_providers[AgentRole.CORRECTNESS], RateLimitedProvider)
+
+
 # -- Multi-provider combinations (items 4-7 of the required matrix) --
 
 
