@@ -64,6 +64,47 @@ async def test_real_publish_writes_exactly_one_github_review(
     assert find_marker(call.body) == result.publication_id
 
 
+async def test_publish_mode_with_publication_disabled_by_config_is_explicitly_skipped(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """Production evidence (PR #57/beta-readiness): a repository whose
+    ``.patchfrog.yml`` ``publish.enabled`` is ``false`` (or unset -- see
+    :data:`patchfrog.publishing.config.DEFAULT_ENABLED`) must never
+    silently succeed or silently do nothing indistinguishable from
+    success when ``PUBLISH`` mode is requested -- it gets an explicit
+    ``SKIPPED_DISABLED`` status and the fake GitHub publisher is never
+    called at all."""
+
+    reviewed = await setup_reviewed_pull_request(
+        session_factory,
+        full_name="test/publish-disabled-by-config",
+        changed_lines=[14],
+        response_factory=lambda req: scripted_findings_response([finding_json()]),
+        tmp_root=tmp_path,
+    )
+    assert len(reviewed.findings) >= 1
+
+    publisher = FakeReviewPublisher(
+        pull_request=_pr_metadata(number=reviewed.pull_request_number, head_sha=reviewed.commit_sha),
+        changed_files=reviewed.changed_files,
+    )
+    service = ReviewPublicationService(session_factory=session_factory, publisher=publisher)
+
+    result = await service.publish(
+        review_run_id=reviewed.review_run_id,
+        mode=ReviewPublicationMode.PUBLISH,
+        # enabled defaults to False (patchfrog.publishing.config.DEFAULT_ENABLED)
+        # -- deliberately not overridden here, exercising the exact
+        # production default an operator sees before opting a repository in.
+        config=PublicationConfig(min_severity=Severity.INFO),
+    )
+
+    assert result.status is ReviewPublicationStatus.SKIPPED_DISABLED
+    assert result.github_review_id is None
+    assert result.published_inline == 0
+    assert publisher.publish_calls == []  # never wrote to GitHub
+
+
 async def test_retrying_the_same_review_run_after_success_is_idempotent(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
