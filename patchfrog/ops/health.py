@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol, cast
 
 import redis.asyncio as redis
 from alembic.config import Config
@@ -26,6 +27,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 _ALEMBIC_INI_PATH = Path(__file__).resolve().parents[2] / "alembic.ini"
+
+
+class _AsyncClosable(Protocol):
+    async def aclose(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +85,9 @@ async def check_redis(redis_url: str) -> ReadinessCheck:
     except Exception as exc:
         return ReadinessCheck(name="redis", healthy=False, detail=str(exc))
     finally:
-        await client.close()
+        # ``types-redis`` still exposes the deprecated ``close`` surface;
+        # runtime redis-py 5+ provides the warning-free async API.
+        await cast(_AsyncClosable, client).aclose()
 
 
 async def check_readiness(*, engine: AsyncEngine, redis_url: str) -> ReadinessReport:

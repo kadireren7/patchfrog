@@ -14,9 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patchfrog.diff.models import DiffFile, DiffHunk, DiffLine, DiffLineType
 from patchfrog.indexing.service import RepositoryIndexingService
-from patchfrog.persistence.repositories import RepositoryRepository
+from patchfrog.persistence.repositories import AIFindingProposalRepository, RepositoryRepository
 from patchfrog.review.config import ReviewConfig
-from patchfrog.review.domain import ReviewRunStatus
+from patchfrog.review.critic_policy import CriticFailurePolicy
+from patchfrog.review.domain import ProposalStatus, ReviewRunStatus
 from patchfrog.review.provider import ProviderFatalError, ProviderRequest
 from patchfrog.review.providers.fake import FakeLLMProvider, ScriptedResponse
 from patchfrog.review.service import PullRequestReviewService
@@ -166,6 +167,41 @@ async def test_critic_schema_failure_falls_back_to_no_critic_aggregation(
 
     assert summary.status == ReviewRunStatus.SUCCEEDED
     assert summary.accepted_count == 1  # survived on reviewer confidence alone, no critic ceiling applied
+
+
+async def test_critic_schema_failure_can_hold_finding_for_review(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    repository_id, commit_sha, root_path = await _setup(
+        session_factory, full_name="test/review-fail-hold"
+    )
+    diff_files = [_diff_marking_lines("src/billing.py", [14])]
+    reviewer = FakeLLMProvider(
+        response_factory=lambda req: ScriptedResponse(
+            raw_json=json.dumps({"findings": [_backwards_comparison_finding()]})
+        )
+    )
+    critic = FakeLLMProvider([ScriptedResponse(raw_json="not valid json")])
+    service = PullRequestReviewService(
+        session_factory=session_factory, reviewer_provider=reviewer, critic_provider=critic
+    )
+
+    summary = await service.review_local(
+        repository_id=repository_id,
+        root_path=root_path,
+        repository_full_name="test/review-fail-hold",
+        commit_sha=commit_sha,
+        diff_files=diff_files,
+        config=ReviewConfig(critic_failure_policy=CriticFailurePolicy.HOLD_FOR_REVIEW),
+    )
+
+    assert summary.status is ReviewRunStatus.SUCCEEDED
+    assert summary.accepted_count == 0
+    async with session_factory() as session:
+        proposals = await AIFindingProposalRepository().list_for_run(
+            session, review_run_id=summary.run_id
+        )
+    assert [p.status for p in proposals] == [ProposalStatus.SUPPRESSED_CRITIC_FAILURE]
 
 
 async def test_untyped_critic_exception_is_not_gracefully_degraded(

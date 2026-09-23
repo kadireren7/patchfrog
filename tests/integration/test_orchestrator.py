@@ -8,7 +8,7 @@ Never touches Redis/Celery directly -- `.delay` is stubbed, matching
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -19,6 +19,7 @@ from patchfrog.domain.github import InstallationRef, RepositoryRef
 from patchfrog.ops.orchestrator import schedule_pipeline_if_eligible
 from patchfrog.persistence.models.installation import InstallationModel
 from patchfrog.persistence.models.repository import RepositoryModel
+from patchfrog.publishing.checks import ReviewCheckPublisher, ReviewCheckState, ReviewCheckUpdate
 
 _GITHUB_INSTALLATION_ID = 55667788
 _GITHUB_REPOSITORY_ID = 998877
@@ -57,6 +58,14 @@ def _repository_ref() -> RepositoryRef:
     )
 
 
+class _RecordingCheckPublisher:
+    def __init__(self) -> None:
+        self.updates: list[ReviewCheckUpdate] = []
+
+    async def reconcile(self, **kwargs: Any) -> None:
+        self.updates.append(cast(ReviewCheckUpdate, kwargs["update"]))
+
+
 async def test_ineligible_repository_never_enqueues(
     session_factory: async_sessionmaker[AsyncSession],
     _stub_celery_delay: list[dict[str, Any]],
@@ -69,16 +78,19 @@ async def test_ineligible_repository_never_enqueues(
         session.add(repo)
         await session.commit()
 
+    checks = _RecordingCheckPublisher()
     decision = await schedule_pipeline_if_eligible(
         session_factory,
         settings=_settings(),
         repository_ref=_repository_ref(),
         commit_sha="a" * 40,
         pull_request_number=1,
+        check_publisher=cast(ReviewCheckPublisher, checks),
     )
 
     assert decision.eligible is False
     assert _stub_celery_delay == []
+    assert checks.updates[0].state is ReviewCheckState.SKIPPED
 
 
 async def test_unknown_repository_never_enqueues(
@@ -115,12 +127,14 @@ async def test_eligible_repository_enqueues_with_correct_arguments(
         )
         await session.commit()
 
+    checks = _RecordingCheckPublisher()
     decision = await schedule_pipeline_if_eligible(
         session_factory,
         settings=_settings(),
         repository_ref=_repository_ref(),
         commit_sha="b" * 40,
         pull_request_number=2,
+        check_publisher=cast(ReviewCheckPublisher, checks),
     )
 
     assert decision.eligible is True
@@ -130,3 +144,4 @@ async def test_eligible_repository_enqueues_with_correct_arguments(
     assert call["installation_id"] == _GITHUB_INSTALLATION_ID
     assert call["commit_sha"] == "b" * 40
     assert call["pull_request_number"] == 2
+    assert checks.updates[0].state is ReviewCheckState.QUEUED

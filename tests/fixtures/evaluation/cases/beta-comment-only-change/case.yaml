@@ -1,0 +1,10 @@
+case:
+  id: beta-comment-only-change
+  title: Comment-only clarification must not create a finding
+  description: The code is correct and the comment only explains an inclusive bound.
+  language: python
+  difficulty: easy
+  tags: [beta-readiness, false-positive-trap, comment-only]
+expected: []
+forbidden:
+  - {reason: The inclusive comparison matches the documented behavior, category: correctness}

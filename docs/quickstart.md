@@ -55,7 +55,8 @@ below produce real values for them.
 - **Webhook secret**: generate a real random value (e.g. `openssl rand
   -hex 32`) and save it -- this becomes `GITHUB_WEBHOOK_SECRET`.
 - **Permissions** (repository): `Contents: Read-only`, `Metadata:
-  Read-only`, `Pull requests: Read and write`. Nothing else.
+  Read-only`, `Pull requests: Read and write`, `Checks: Read and write`.
+  Nothing else.
 - **Subscribe to events**: `Pull request` only.
 - **Where can this GitHub App be installed?**: "Only on this account"
   is simplest for a first self-hosted instance.

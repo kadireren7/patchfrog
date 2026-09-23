@@ -60,13 +60,50 @@ from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 
 from patchfrog.review.provider import (
+    ProviderAuthenticationError,
     ProviderFatalError,
     ProviderIdentity,
+    ProviderInsufficientQuotaError,
+    ProviderInvalidModelError,
+    ProviderRateLimitError,
     ProviderRequest,
     ProviderResult,
+    ProviderServerError,
+    ProviderTimeoutError,
     ProviderTransientError,
     ProviderUsage,
+    indicates_insufficient_quota,
 )
+
+
+def _parse_retry_delay_seconds(details: object) -> float | None:
+    """Extract ``google.rpc.RetryInfo.retryDelay`` (e.g. ``"34s"``) from a
+    Gemini ``ClientError``'s parsed error body, when the API included one
+    -- Gemini's 429 responses for a per-minute rate limit typically do.
+    Defensive by construction: any unexpected shape (missing/malformed
+    ``details``, a non-string delay) simply yields ``None``, so the
+    caller falls back to exponential backoff rather than raising here."""
+
+    if not isinstance(details, dict):
+        return None
+    error_body = details.get("error", details)
+    if not isinstance(error_body, dict):
+        return None
+    for item in error_body.get("details") or []:
+        if not isinstance(item, dict):
+            continue
+        type_url = item.get("@type")
+        if not isinstance(type_url, str) or not type_url.endswith("RetryInfo"):
+            continue
+        raw_delay = item.get("retryDelay")
+        if not isinstance(raw_delay, str) or not raw_delay.endswith("s"):
+            continue
+        try:
+            return float(raw_delay[:-1])
+        except ValueError:
+            continue
+    return None
+
 
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 
@@ -229,7 +266,7 @@ class GeminiLLMProvider:
             )
         except genai_errors.ClientError as exc:
             if exc.code in (401, 403):
-                raise ProviderFatalError(f"authentication error {exc.code}: {exc}") from exc
+                raise ProviderAuthenticationError(f"authentication error {exc.code}: {exc}") from exc
             if exc.code == 429:
                 # Gemini uses 429/RESOURCE_EXHAUSTED for both ordinary
                 # per-minute rate limiting and daily quota exhaustion --
@@ -238,10 +275,17 @@ class GeminiLLMProvider:
                 # Anthropic's own RateLimitError handling; a *persistent*
                 # 429 across retries is a session/operator-level signal
                 # to stop, not something this adapter can detect alone.
-                raise ProviderTransientError(f"rate limited or quota exhausted: {exc}") from exc
+                if indicates_insufficient_quota(exc):
+                    raise ProviderInsufficientQuotaError(f"quota exhausted: {exc}") from exc
+                retry_after = _parse_retry_delay_seconds(getattr(exc, "details", None))
+                raise ProviderRateLimitError(f"rate limited: {exc}", retry_after_seconds=retry_after) from exc
+            if exc.code == 404:
+                raise ProviderInvalidModelError(f"model not found: {exc}") from exc
             raise ProviderFatalError(f"invalid request {exc.code}: {exc}") from exc
         except genai_errors.ServerError as exc:
-            raise ProviderTransientError(f"server error {exc.code}: {exc}") from exc
+            raise ProviderServerError(f"server error {exc.code}: {exc}") from exc
+        except httpx.TimeoutException as exc:
+            raise ProviderTimeoutError(f"timeout: {exc}") from exc
         except httpx.RequestError as exc:
             # Connection failure, DNS error, or a timeout at the
             # transport layer (the SDK is httpx-based) -- raised before

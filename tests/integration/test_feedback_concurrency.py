@@ -20,10 +20,8 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 
-import pytest
-from sqlalchemy import select, text
-from sqlalchemy.exc import OperationalError, ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from patchfrog.feedback.domain import (
     ActorIdentity,
@@ -36,25 +34,11 @@ from patchfrog.feedback.domain import (
 from patchfrog.persistence.models.feedback import FeedbackEventModel
 from patchfrog.persistence.repositories import RepositoryRepository
 from patchfrog.persistence.repositories.feedback import FeedbackEventRepository
-
-_POSTGRES_URL = "postgresql+asyncpg://patchfrog:patchfrog@localhost:5432/patchfrog"
-
-
-async def _postgres_available() -> AsyncEngine | None:
-    engine = create_async_engine(_POSTGRES_URL)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("SELECT 1 FROM feedback_events LIMIT 1"))
-    except (OperationalError, ProgrammingError):
-        await engine.dispose()
-        return None
-    return engine
+from tests.support.postgres import postgres_engine_or_skip
 
 
 async def test_two_concurrent_ingestions_of_the_same_raw_event_never_duplicate() -> None:
-    engine = await _postgres_available()
-    if engine is None:
-        pytest.skip("real PostgreSQL not reachable at localhost:5432 (docker compose up -d postgres)")
+    engine = await postgres_engine_or_skip("feedback_events")
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     full_name = f"feedback-concurrency-test/{uuid.uuid4().hex[:8]}"

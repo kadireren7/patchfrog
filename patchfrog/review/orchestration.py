@@ -74,7 +74,9 @@ from patchfrog.review.agents.cross_role import (
 from patchfrog.review.agents.evidence import CandidateEvidencePackage
 from patchfrog.review.agents.proposal import AgentProposal
 from patchfrog.review.agents.roles import AgentRole
+from patchfrog.review.budget import BudgetExceeded, ReviewBudget
 from patchfrog.review.critic import CriticService
+from patchfrog.review.critic_policy import CriticFailurePolicy
 from patchfrog.review.critic_selection import CriticSelectionInput, CriticSelectionPolicy
 from patchfrog.review.domain import (
     AIReviewFinding,
@@ -111,6 +113,7 @@ logger = structlog.get_logger(__name__)
 #: outcome, never "publish because the reviewer call was already paid
 #: for."
 CRITIC_BUDGET_EXHAUSTED = "critic_budget_exhausted"
+CRITIC_FAILURE_HOLD = "critic_failure_hold"
 
 
 @dataclass(slots=True)
@@ -260,6 +263,8 @@ class AgentOrchestrator:
         effort_policy: ReviewEffortPolicy | None = None,
         reviewer_fallback_providers: Mapping[AgentRole, LLMProvider] | None = None,
         critic_fallback: CriticService | None = None,
+        review_budget: ReviewBudget | None = None,
+        critic_failure_policy: CriticFailurePolicy = CriticFailurePolicy.FAIL_OPEN,
     ) -> None:
         """``reviewer_fallback_providers``/``critic_fallback`` (Milestone U
         runtime-failover correction): an optional, distinct provider used
@@ -292,6 +297,8 @@ class AgentOrchestrator:
         #: entirely from the ``effort_decision`` the caller passes into
         #: :meth:`review_candidate`, never re-derived here.
         self._effort_policy = effort_policy or ReviewEffortPolicy()
+        self._review_budget = review_budget
+        self._critic_failure_policy = critic_failure_policy
 
     async def review_candidate(
         self,
@@ -386,21 +393,35 @@ class AgentOrchestrator:
 
         usage_by_role: dict[AgentRole, TokenUsage] = {}
         failed_roles: list[AgentRole] = []
+        budget_exhausted = False
         fallback_used_roles: list[AgentRole] = []
         executed_provider_by_role: dict[AgentRole, str] = {}
         proposals: list[AgentProposal] = []
         retries_consumed = 0
         actual_input_total = 0
         reviewer_latency_ms = 0.0
+        calls_by_role: dict[AgentRole, int] = {}
 
         for role, outcome in zip(selected_roles, results, strict=True):
             if isinstance(outcome, BaseException):
+                if isinstance(outcome, BudgetExceeded):
+                    budget_exhausted = True
+                    failed_roles.append(role)
+                    log.warning("review_budget_exhausted", stage="provider_call", reason=outcome.reason.value)
+                    continue
+                calls_by_role[role] = 1
                 if isinstance(outcome, (ProviderFatalError, ProviderTransientError, ResponseSchemaError)):
                     failed_roles.append(role)
-                    log.warning("agent_role_call_failed", role=role.value, error=str(outcome))
+                    log.warning(
+                        "agent_role_call_failed",
+                        role=role.value,
+                        error_type=type(outcome).__name__,
+                        provider_failure_kind=getattr(outcome, "kind", None),
+                    )
                     continue
                 raise outcome
 
+            calls_by_role[role] = 1
             validated, usage, retries_used, latency_ms, used_fallback, served_by = outcome
             usage_by_role[role] = usage
             executed_provider_by_role[role] = served_by
@@ -423,11 +444,10 @@ class AgentOrchestrator:
                 0, budget_state["used_input_tokens"] - combined_estimate + actual_input_total
             )
 
-        calls_by_role = dict.fromkeys(selected_roles, 1)
-
         if selected_roles and len(failed_roles) == len(selected_roles):
             return CandidateOrchestrationResult(
-                failed=True,
+                failed=not budget_exhausted,
+                skipped_budget=budget_exhausted,
                 error=f"all selected agent roles failed: {[r.value for r in failed_roles]}",
                 failed_roles=tuple(failed_roles),
                 calls_by_role=calls_by_role,
@@ -566,8 +586,23 @@ class AgentOrchestrator:
             max_output_tokens=max_output_tokens,
         )
 
+        attempt_number = 0
+
         async def _attempt(provider: LLMProvider) -> tuple[list[ValidatedFinding], TokenUsage, float, str]:
+            nonlocal attempt_number
+            reservation = None
+            if self._review_budget is not None:
+                reservation = await self._review_budget.reserve_call(
+                    provider.identity,
+                    estimated_input_tokens=role_estimate,
+                    estimated_output_tokens=max_output_tokens,
+                    is_retry=attempt_number > 0,
+                )
+            attempt_number += 1
             result = await provider.generate_structured(request)
+            if reservation is not None:
+                assert self._review_budget is not None
+                await self._review_budget.reconcile(reservation, result.usage)
             validated = parse_and_validate_response(result.raw_json, context=validation_context)
             usage = TokenUsage(
                 input_tokens=result.usage.input_tokens,
@@ -747,18 +782,30 @@ class AgentOrchestrator:
         critic_fallback_used = False
         critic_executed_provider: str | None = None
         for i, verdict_outcome in zip(reserved, verdicts, strict=True):
-            critic_calls += 1
             if isinstance(verdict_outcome, BaseException):
+                if isinstance(verdict_outcome, BudgetExceeded):
+                    result[i] = result[i].suppressed(CRITIC_BUDGET_EXHAUSTED)
+                    logger.warning(
+                        "review_budget_exhausted",
+                        stage="critic_call",
+                        reason=verdict_outcome.reason.value,
+                    )
+                    continue
+                critic_calls += 1
                 if isinstance(verdict_outcome, (ProviderFatalError, ProviderTransientError, ResponseSchemaError)):
                     # Safe fallback -- no verdict, deterministic validation
                     # already ran. See module docstring / spec section 20.
                     logger.warning(
                         "agent_critic_failed",
                         role=proposals[i].role.value,
-                        error=str(verdict_outcome),
+                        error_type=type(verdict_outcome).__name__,
+                        provider_failure_kind=getattr(verdict_outcome, "kind", None),
                     )
+                    if self._critic_failure_policy is CriticFailurePolicy.HOLD_FOR_REVIEW:
+                        result[i] = result[i].suppressed(CRITIC_FAILURE_HOLD)
                     continue
                 raise verdict_outcome
+            critic_calls += 1
             verdict, usage, retries_used, used_fallback, served_by = verdict_outcome
             retries_consumed += retries_used
             actual_total += usage.input_tokens
@@ -822,13 +869,21 @@ class AgentOrchestrator:
             proposal, all_proposals=all_proposals, contradiction_indices=contradiction_indices
         )
 
+        attempt_number = 0
+
         async def _attempt(service: CriticService) -> tuple[CriticVerdict, TokenUsage, str]:
+            nonlocal attempt_number
+            is_retry = attempt_number > 0
+            attempt_number += 1
             verdict = await service.critique(
                 proposal.validated,
                 candidate=candidate_evidence.candidate,
                 context_text=candidate_evidence.context_text,
                 conflicting_finding=conflicting,
                 executable_verification_text=executable_verification_text,
+                budget=self._review_budget,
+                estimated_input_tokens=fallback_estimate,
+                is_retry=is_retry,
             )
             usage = TokenUsage(
                 input_tokens=verdict.input_tokens,

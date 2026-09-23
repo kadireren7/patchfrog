@@ -23,6 +23,7 @@ from patchfrog.indexing.service import RepositoryIndexingService
 from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.persistence.repositories import AIFindingProposalRepository, RepositoryRepository
 from patchfrog.review.agents.roles import AgentRole
+from patchfrog.review.budget import BudgetTerminationReason, ModelPricing, PricingCatalog
 from patchfrog.review.config import ReviewConfig
 from patchfrog.review.domain import ProposalStatus, ReviewRunStatus
 from patchfrog.review.provider import ProviderFatalError, ProviderTransientError
@@ -483,6 +484,39 @@ async def test_global_token_budget_cannot_be_exceeded_by_two_agents(
     assert summary.candidates_skipped_budget == 1
     assert summary.candidates_reviewed == 0
     assert len(reviewer.calls) == 0
+
+
+async def test_monetary_ceiling_stops_gracefully_before_provider_work(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    repository_id, commit_sha, root_path = await _setup(
+        session_factory, full_name="test/orch-monetary-budget"
+    )
+    diff_files = [_diff_marking_lines("src/billing.py", [14])]
+    reviewer = FakeLLMProvider(response_factory=lambda req: _NO_FINDINGS)
+    service = PullRequestReviewService(
+        session_factory=session_factory,
+        reviewer_provider=reviewer,
+        pricing_catalog=PricingCatalog(
+            {"fake/fake-model-1": ModelPricing(1_000_000.0, 1_000_000.0)}
+        ),
+    )
+
+    summary = await service.review_local(
+        repository_id=repository_id,
+        root_path=root_path,
+        repository_full_name="test/orch-monetary-budget",
+        commit_sha=commit_sha,
+        diff_files=diff_files,
+        config=ReviewConfig(max_estimated_cost_usd=0.01),
+    )
+
+    assert summary.status is ReviewRunStatus.PARTIAL
+    assert summary.candidates_skipped_budget == 1
+    assert reviewer.calls == []
+    assert summary.budget is not None
+    assert summary.budget.termination_reason is BudgetTerminationReason.ESTIMATED_COST
+    assert summary.budget.provider_calls == 0
 
 
 async def test_contradictory_proposals_are_suppressed_when_critic_cannot_resolve(

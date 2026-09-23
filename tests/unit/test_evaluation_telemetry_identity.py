@@ -26,8 +26,8 @@ def _identity(**kwargs: object) -> dict[str, object]:
     return asdict(identity)
 
 
-def test_evaluation_engine_version_is_2() -> None:
-    assert EVALUATION_ENGINE_VERSION == 2
+def test_evaluation_engine_version_is_3() -> None:
+    assert EVALUATION_ENGINE_VERSION == 3
 
 
 def test_quality_cost_policy_version_participates_in_identity() -> None:

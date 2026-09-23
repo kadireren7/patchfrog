@@ -18,34 +18,20 @@ import shutil
 import uuid
 from pathlib import Path
 
-import pytest
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError, ProgrammingError
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from patchfrog.domain.pull_request import PullRequestMetadata
 from patchfrog.publishing.config import PublicationConfig
 from patchfrog.publishing.domain import ReviewPublicationMode, ReviewPublicationStatus
 from patchfrog.publishing.fake_publisher import FakeReviewPublisher
 from patchfrog.publishing.service import ReviewPublicationService
+from tests.support.postgres import postgres_engine_or_skip
 from tests.support.publishing import (
     finding_json,
     scripted_findings_response,
     setup_reviewed_pull_request,
 )
-
-_POSTGRES_URL = "postgresql+asyncpg://patchfrog:patchfrog@localhost:5432/patchfrog"
-
-
-async def _postgres_available() -> AsyncEngine | None:
-    engine = create_async_engine(_POSTGRES_URL)
-    try:
-        async with engine.begin() as conn:
-            await conn.execute(text("SELECT 1 FROM review_publications LIMIT 1"))
-    except (OperationalError, ProgrammingError):
-        await engine.dispose()
-        return None
-    return engine
 
 
 def _pr_metadata(*, number: int, head_sha: str) -> PullRequestMetadata:
@@ -56,9 +42,7 @@ def _pr_metadata(*, number: int, head_sha: str) -> PullRequestMetadata:
 
 
 async def test_two_concurrent_publish_attempts_write_exactly_one_github_review(tmp_path: Path) -> None:
-    engine = await _postgres_available()
-    if engine is None:
-        pytest.skip("real PostgreSQL not reachable at localhost:5432 (docker compose up -d postgres)")
+    engine = await postgres_engine_or_skip("review_publications")
 
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     repository_id = None

@@ -235,6 +235,101 @@ def test_max_summary_findings_cap_produces_omitted() -> None:
     assert all("cap" in c.reason for c in plan.omitted)
 
 
+def test_high_confidence_correctness_finding_below_severity_floor_is_not_silently_omitted() -> None:
+    """A finding that already survived reviewer proposal + critic
+    verification + dedup with Confidence.HIGH in a specialist category
+    (correctness/security) must not be discarded by config.min_severity
+    alone -- see patchfrog.publishing.planner's module docstring, funnel
+    step 1, and _bypasses_severity_floor."""
+
+    finding = _finding(line=5, severity=Severity.LOW, confidence=Confidence.HIGH)
+    plan = _build([finding], config=PublicationConfig())  # production default: min_severity=MEDIUM
+
+    assert plan.omitted == ()
+    assert len(plan.inline_comments) + len(plan.summary_only) == 1
+
+
+def test_medium_confidence_finding_below_severity_floor_is_still_omitted() -> None:
+    """The severity-floor bypass is scoped to Confidence.HIGH only --
+    noise controls for lower-confidence findings are unaffected."""
+
+    finding = _finding(line=5, severity=Severity.LOW, confidence=Confidence.MEDIUM)
+    plan = _build([finding], config=PublicationConfig())
+
+    assert len(plan.omitted) == 1
+    assert plan.omitted[0].reason == "below minimum severity threshold"
+
+
+def test_high_confidence_non_specialist_category_below_severity_floor_is_still_omitted() -> None:
+    """The bypass only applies to the two specialist roles (correctness,
+    security) -- a high-confidence style/maintainability nit is still
+    governed by config.min_severity exactly as before."""
+
+    finding = PublishableFinding(
+        finding_id=uuid.uuid4(),
+        title="nit",
+        message="nit message",
+        category=FindingCategory.STYLE,
+        severity=Severity.LOW,
+        confidence=Confidence.HIGH,
+        file_path="src/billing.py",
+        start_line=5,
+        end_line=5,
+        reasoning_summary="because",
+    )
+    plan = _build([finding], config=PublicationConfig())
+
+    assert len(plan.omitted) == 1
+
+
+def test_pr_57_swapped_counts_finding_is_not_silently_omitted() -> None:
+    """Regression fixture: production evidence for PR #57 head
+    44b9ec0a0c68c1073f62e92b4369619bc84e46e7 showed the reviewer accepting
+    a real, critic-verified finding (category=correctness, confidence=high,
+    severity=low) for the intentional swapped inline/summary-only counts in
+    format_summary_body -- but the default min_severity=MEDIUM floor
+    discarded it outright before it was ever considered for inline/summary
+    placement, so GitHub received nothing despite review_run_completed
+    reporting accepted_count=1 (status=skipped_no_findings, omitted=1).
+    An accepted, high-confidence correctness finding must land inline or
+    summary-only, never omitted by severity alone."""
+
+    changed_files, diff_files = _whole_file_changed_files(path="patchfrog/publishing/body.py")
+    finding = PublishableFinding(
+        finding_id=uuid.uuid4(),
+        title="Inline/summary-only finding counts are swapped in the review summary body",
+        message=(
+            "format_summary_body labels len(summary_only_findings) as "
+            "'Published inline' and len(inline_findings) as 'Summary-only' -- the two are transposed."
+        ),
+        category=FindingCategory.CORRECTNESS,
+        severity=Severity.LOW,
+        confidence=Confidence.HIGH,
+        file_path="patchfrog/publishing/body.py",
+        start_line=9,
+        end_line=9,
+        reasoning_summary="the two len() calls are swapped relative to their labels",
+        suggested_fix=None,
+    )
+
+    plan = PublicationPlanner().build_plan(
+        publication_id=uuid.uuid4(),
+        snapshot=_snapshot(),
+        findings=[finding],
+        changed_files=changed_files,
+        diff_files=diff_files,
+        config=PublicationConfig(),  # production defaults, including min_severity=MEDIUM
+        mode=ReviewPublicationMode.DRY_RUN,
+        current_head_sha=_HEAD_SHA,
+    )
+
+    assert plan.omitted == ()
+    assert plan.status in (ReviewPublicationStatus.DRY_RUN, ReviewPublicationStatus.PLANNED)
+    assert len(plan.inline_comments) + len(plan.summary_only) == 1
+    placed = plan.inline_comments[0] if plan.inline_comments else plan.summary_only[0]
+    assert placed.finding_id == finding.finding_id
+
+
 def test_selection_prefers_higher_severity_under_inline_cap() -> None:
     low = _finding(line=2, severity=Severity.LOW, title="low")
     critical = _finding(line=3, severity=Severity.CRITICAL, title="critical")

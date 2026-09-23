@@ -9,7 +9,12 @@ import httpx
 import pytest
 import respx
 
-from patchfrog.review.provider import ProviderFatalError, ProviderRequest, ProviderTransientError
+from patchfrog.review.provider import (
+    ProviderFatalError,
+    ProviderRateLimitError,
+    ProviderRequest,
+    ProviderTransientError,
+)
 from patchfrog.review.providers.anthropic_provider import AnthropicLLMProvider
 
 _MESSAGES_URL = "https://api.anthropic.com/v1/messages"
@@ -58,6 +63,20 @@ async def test_rate_limit_is_transient() -> None:
     )
     with pytest.raises(ProviderTransientError):
         await _provider().generate_structured(_REQUEST)
+
+
+@respx.mock
+async def test_rate_limit_captures_retry_after_header() -> None:
+    respx.post(_MESSAGES_URL).mock(
+        return_value=httpx.Response(
+            429,
+            json={"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}},
+            headers={"retry-after": "7"},
+        )
+    )
+    with pytest.raises(ProviderRateLimitError) as excinfo:
+        await _provider().generate_structured(_REQUEST)
+    assert excinfo.value.retry_after_seconds == 7.0
 
 
 @respx.mock

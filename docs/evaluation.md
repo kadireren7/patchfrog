@@ -88,6 +88,12 @@ run can measure, and every report labels which one it is
 was used. Never read a `pipeline_correctness` precision/recall number as
 "how good is the AI reviewer" — it isn't measuring that.
 
+The beta-readiness profile additionally reports candidate recall,
+accepted-finding recall, false-positive and false-negative rates, critic
+rejection and critic false-negative rates, and repeated-run variance.
+The default oracle remains a plumbing/guardrail benchmark, not a claim
+about a live model's reasoning quality.
+
 If `ANTHROPIC_API_KEY` is not set in the environment, `--provider live`
 fails fast with a clear `MissingProviderCredentialsError` message. This
 is expected in most dev/CI environments; the fake-provider path is not
@@ -103,6 +109,10 @@ python -m patchfrog.cli eval run
 # Filtered subset:
 python -m patchfrog.cli eval run --tag security --language python --difficulty hard
 python -m patchfrog.cli eval run --case py-inverted-boundary --case c-memory-leak
+
+# Explicit 20-case beta profile, repeated deterministically with fake
+# providers. This consumes no provider credits:
+python -m patchfrog.cli eval run --beta-readiness --repeat 2
 
 # Static analyzers only, no LLM at all:
 python -m patchfrog.cli eval run --mode static_only
@@ -311,9 +321,9 @@ report's "Static analyzer coverage" table), never silently treated as
 
 ## Security review quality (post-Phase-8 refinement)
 
-A separate refinement on top of Phase 8 (branch `feat/security-review-quality`)
-extended the existing AI-finding representation with explicit security-quality
-concepts, rather than building a parallel security-only reviewer stack.
+The security-quality refinement now on main extended the existing AI-finding
+representation with explicit security-quality concepts, rather than building a
+parallel security-only reviewer stack.
 
 **Analysis representation.** `AIReviewFinding` (`patchfrog/review/domain.py`)
 already distinguished `message` (identification) and severity/confidence/

@@ -1,0 +1,15 @@
+# PatchFrog repository review configuration.
+#
+# Controls review *behavior* only (candidate/token/confidence budgets,
+# publication policy) -- never provider, model, credentials, or Cloud
+# routing, which stay operator/deployment-controlled (see
+# patchfrog/review/runtime_config.py, patchfrog/config/settings.py, and
+# CLAUDE.md's "Source-available / Cloud boundary" section).
+#
+# publish.enabled defaults to false (patchfrog/publishing/config.py) --
+# a repository can opt itself OUT of publication even when an operator
+# requests it, but can never opt itself IN just by content in this
+# file; that decision is always made by the operator running PatchFrog.
+# This repo is the operator's own dogfooding target, so it opts in here.
+publish:
+  enabled: true

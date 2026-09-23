@@ -1,0 +1,10 @@
+case:
+  id: beta-safe-refactor
+  title: Equivalent helper extraction is not a defect
+  description: A direct arithmetic expression is extracted without changing behavior.
+  language: python
+  difficulty: easy
+  tags: [beta-readiness, false-positive-trap, safe-refactor]
+expected: []
+forbidden:
+  - {reason: The helper extraction preserves the exact calculation, category: correctness}

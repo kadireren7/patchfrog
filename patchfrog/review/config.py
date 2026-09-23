@@ -34,6 +34,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from patchfrog.analysis.domain import Confidence
+from patchfrog.review.critic_policy import CriticFailurePolicy
 
 logger = structlog.get_logger(__name__)
 
@@ -54,7 +55,7 @@ _CONFIG_FILENAMES = (".patchfrog.yml", ".patchfrog.yaml")
 #: boundary. (Previously bumped to 3 because `provider`/`model`/
 #: `critic_model`/`request_timeout_seconds` were removed from
 #: repository-controlled config entirely -- see module docstring.)
-CONFIG_SCHEMA_VERSION = 4
+CONFIG_SCHEMA_VERSION = 5
 
 #: Bumped whenever patchfrog.review.prompt's system/user prompt templates
 #: change materially enough that a prior run's proposals can no longer be
@@ -186,6 +187,9 @@ DEFAULT_MAX_TOTAL_INPUT_TOKENS = 400_000
 DEFAULT_MAX_CONCURRENT_REQUESTS = 4
 DEFAULT_MIN_FINAL_CONFIDENCE: Confidence = Confidence.MEDIUM
 DEFAULT_MAX_RETRIES = 2
+DEFAULT_MAX_PROVIDER_CALLS = 200
+DEFAULT_MAX_RETRY_ATTEMPTS = 100
+DEFAULT_MAX_TOTAL_OUTPUT_TOKENS = 100_000
 
 #: Fields that select PatchFrog's AI provider/model/timeout -- an
 #: operator/deployment concern, never a repository one (see
@@ -212,6 +216,7 @@ class ReviewConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     critic_enabled: bool = True
+    critic_failure_policy: CriticFailurePolicy = CriticFailurePolicy.FAIL_OPEN
     max_candidates: int = DEFAULT_MAX_CANDIDATES
     max_input_tokens_per_candidate: int = DEFAULT_MAX_INPUT_TOKENS_PER_CANDIDATE
     max_output_tokens_per_candidate: int = DEFAULT_MAX_OUTPUT_TOKENS_PER_CANDIDATE
@@ -219,6 +224,11 @@ class ReviewConfig(BaseModel):
     max_concurrent_requests: int = DEFAULT_MAX_CONCURRENT_REQUESTS
     min_final_confidence: Confidence = DEFAULT_MIN_FINAL_CONFIDENCE
     max_retries: int = DEFAULT_MAX_RETRIES
+    max_provider_calls: int = DEFAULT_MAX_PROVIDER_CALLS
+    max_retry_attempts: int = DEFAULT_MAX_RETRY_ATTEMPTS
+    max_total_output_tokens: int = DEFAULT_MAX_TOTAL_OUTPUT_TOKENS
+    max_estimated_cost_usd: float | None = None
+    max_elapsed_seconds: float | None = None
 
     def fingerprint(self) -> str:
         """A deterministic fingerprint of repository-controlled review
@@ -231,10 +241,18 @@ class ReviewConfig(BaseModel):
         payload = {
             "schema_version": CONFIG_SCHEMA_VERSION,
             "critic_enabled": self.critic_enabled,
+            "critic_failure_policy": self.critic_failure_policy.value,
             "max_candidates": self.max_candidates,
             "max_input_tokens_per_candidate": self.max_input_tokens_per_candidate,
             "max_output_tokens_per_candidate": self.max_output_tokens_per_candidate,
             "max_total_input_tokens": self.max_total_input_tokens,
+            "max_total_output_tokens": self.max_total_output_tokens,
+            "max_provider_calls": self.max_provider_calls,
+            "max_retry_attempts": self.max_retry_attempts,
+            "max_estimated_cost_usd": self.max_estimated_cost_usd,
+            "max_elapsed_seconds": self.max_elapsed_seconds,
+            "max_concurrent_requests": self.max_concurrent_requests,
+            "max_retries": self.max_retries,
             "min_final_confidence": self.min_final_confidence.value,
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))

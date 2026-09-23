@@ -172,6 +172,15 @@ class ReviewRunModel(Base):
     #: which never captured per-role latency at all -- never fabricated.
     reviewer_latency_ms: Mapped[float] = mapped_column(Float, default=0.0)
 
+    provider_calls: Mapped[int] = mapped_column(Integer, default=0)
+    retry_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    budget_input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    budget_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    budget_elapsed_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    budget_termination_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    provider_cost_breakdown: Mapped[str] = mapped_column(Text, default="[]")
+
     duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

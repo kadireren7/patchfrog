@@ -81,6 +81,13 @@ def is_contradiction(a: AgentProposal, b: AgentProposal) -> bool:
     if a.role == b.role:
         return False
     fa, fb = a.validated.finding, b.validated.finding
+    # Two agents can emit the exact same finding text.  Security wording
+    # commonly contains both a negated protection ("not sanitized") and a
+    # risk term ("injection"), so running identical text through the lexical
+    # opposition heuristic would otherwise manufacture a contradiction with
+    # itself.  Exact agreement always wins over heuristic classification.
+    if fa == fb:
+        return False
     if not _overlaps_location(fa, fb) or not _shared_verbatim_evidence(fa, fb):
         return False
 

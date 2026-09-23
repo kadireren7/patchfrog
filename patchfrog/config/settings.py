@@ -12,6 +12,8 @@ from pathlib import Path
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from patchfrog.review.critic_policy import CriticFailurePolicy
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables / .env file."""
@@ -87,6 +89,12 @@ class Settings(BaseSettings):
     router_critic_provider: str | None = Field(
         default=None, alias="PATCHFROG_ROUTER_CRITIC_PROVIDER"
     )
+    router_cheap_provider: str | None = Field(
+        default=None, alias="PATCHFROG_ROUTER_CHEAP_PROVIDER"
+    )
+    router_cheap_model: str | None = Field(
+        default=None, alias="PATCHFROG_ROUTER_CHEAP_MODEL"
+    )
     #: Milestone Z14 (governance): deployment-wide provider allowlist fed
     #: straight into ModelRouter's own `allowed_providers` parameter --
     #: `None` (default, unset) means no restriction. A comma-separated
@@ -117,6 +125,37 @@ class Settings(BaseSettings):
     )
     review_max_concurrent_requests: int = Field(default=16, alias="PATCHFROG_MAX_CONCURRENT_REVIEW_REQUESTS")
     review_max_retries: int = Field(default=5, alias="PATCHFROG_MAX_REVIEW_RETRIES")
+    review_max_provider_calls: int = Field(default=500, alias="PATCHFROG_MAX_PROVIDER_CALLS")
+    review_max_retry_attempts: int = Field(default=200, alias="PATCHFROG_MAX_RETRY_ATTEMPTS")
+    review_max_total_output_tokens: int = Field(
+        default=250_000, alias="PATCHFROG_MAX_TOTAL_OUTPUT_TOKENS"
+    )
+    review_max_estimated_cost_usd: float | None = Field(
+        default=None, alias="PATCHFROG_MAX_ESTIMATED_COST_USD"
+    )
+    review_max_elapsed_seconds: float | None = Field(
+        default=None, alias="PATCHFROG_MAX_REVIEW_ELAPSED_SECONDS"
+    )
+    critic_failure_policy: CriticFailurePolicy | None = Field(
+        default=None, alias="PATCHFROG_CRITIC_FAILURE_POLICY"
+    )
+    provider_pricing: dict[str, dict[str, float]] = Field(
+        default_factory=dict, alias="PATCHFROG_PROVIDER_PRICING"
+    )
+    #: Operator-configured requests-per-minute ceiling, keyed the same
+    #: way as provider_pricing above (``"provider/model"``, falling back
+    #: to a bare ``"provider"`` entry -- see
+    #: :func:`patchfrog.review.rate_limiter.resolve_rate_limit_rpm`).
+    #: Unset (the default) means unthrottled -- exactly today's
+    #: behavior. A free-tier deployment sets e.g.
+    #: ``PATCHFROG_PROVIDER_RATE_LIMIT_RPM={"gemini":5}`` to keep every
+    #: reviewer/critic/retry call for that provider under its quota; see
+    #: :mod:`patchfrog.review.rate_limiter` for why this lives here
+    #: (operator/deployment concern) rather than in a repository's
+    #: ``.patchfrog.yml``.
+    provider_rate_limit_rpm: dict[str, int] = Field(
+        default_factory=dict, alias="PATCHFROG_PROVIDER_RATE_LIMIT_RPM"
+    )
 
     # -- Public beta operational limits (patchfrog.ops) --
     # All optional with conservative defaults; never required for
@@ -236,10 +275,22 @@ class Settings(BaseSettings):
         "review_max_output_tokens_per_candidate",
         "review_max_concurrent_requests",
         "review_max_retries",
+        "review_max_provider_calls",
+        "review_max_retry_attempts",
+        "review_max_total_output_tokens",
     )
     @classmethod
     def _validate_review_hard_caps_positive(cls, value: int, info: ValidationInfo) -> int:
         if value <= 0:
+            raise ValueError(f"{info.field_name} must be positive, got {value!r}")
+        return value
+
+    @field_validator("review_max_estimated_cost_usd", "review_max_elapsed_seconds")
+    @classmethod
+    def _validate_optional_review_hard_caps_positive(
+        cls, value: float | None, info: ValidationInfo
+    ) -> float | None:
+        if value is not None and value <= 0:
             raise ValueError(f"{info.field_name} must be positive, got {value!r}")
         return value
 

@@ -155,6 +155,14 @@ from patchfrog.review.agents.cross_role import CROSS_ROLE_DUPLICATE, UNRESOLVED_
 from patchfrog.review.agents.evidence import CandidateEvidencePackage
 from patchfrog.review.agents.proposal import AgentProposal
 from patchfrog.review.agents.roles import AgentRole
+from patchfrog.review.budget import (
+    BudgetTerminationReason,
+    CostBudget,
+    PricingCatalog,
+    ProviderCostMetric,
+    ReviewBudget,
+    ReviewBudgetSnapshot,
+)
 from patchfrog.review.candidates import ReviewCandidateGenerator, summarize_static_finding
 from patchfrog.review.confidence import aggregate, meets_minimum
 from patchfrog.review.config import MalformedReviewConfigError, ReviewConfig, ReviewModelIdentity
@@ -174,7 +182,11 @@ from patchfrog.review.domain import (
 )
 from patchfrog.review.effort import ReviewEffortDecision, ReviewEffortPolicy
 from patchfrog.review.effort_types import ReviewEffortTier
-from patchfrog.review.orchestration import CRITIC_BUDGET_EXHAUSTED, AgentOrchestrator
+from patchfrog.review.orchestration import (
+    CRITIC_BUDGET_EXHAUSTED,
+    CRITIC_FAILURE_HOLD,
+    AgentOrchestrator,
+)
 from patchfrog.review.provider import LLMProvider
 from patchfrog.review.redaction import redact_secrets
 from patchfrog.routing.domain import ReviewRoutePlan
@@ -366,6 +378,7 @@ class _CandidateOutcome:
     __slots__ = (
         "calls_by_role",
         "candidate",
+        "completed",
         "context_bundle_id",
         "context_text",
         "critic_calls",
@@ -386,6 +399,7 @@ class _CandidateOutcome:
 
     def __init__(self, candidate: ReviewCandidate) -> None:
         self.candidate = candidate
+        self.completed = False
         self.context_text = ""
         self.context_bundle_id: uuid.UUID | None = None
         self.diff_excerpt = ""
@@ -426,6 +440,7 @@ class PullRequestReviewService:
         effort_decision_override: ReviewEffortDecision | None = None,
         verifier_dispatcher: VerifierDispatcher | None = None,
         verification_snapshot_root: str | None = None,
+        pricing_catalog: PricingCatalog | None = None,
     ) -> None:
         """``route_plan`` (Milestone U, Model Router): when given, its own
         ``reviewer_providers``/``critic_provider`` govern every provider
@@ -485,6 +500,7 @@ class PullRequestReviewService:
         self._effort_decision_override = effort_decision_override
         self._verifier_dispatcher = verifier_dispatcher
         self._verification_snapshot_root = verification_snapshot_root
+        self._pricing_catalog = pricing_catalog or PricingCatalog()
         self._queries = query_service or RepositoryQueryService()
         self._candidates = candidate_generator or ReviewCandidateGenerator(query_service=self._queries)
         self._context_service = context_service or ContextService(session_factory=session_factory)
@@ -1040,6 +1056,17 @@ class PullRequestReviewService:
 
         budget_lock = asyncio.Lock()
         budget_state = {"used_input_tokens": 0}
+        review_budget = ReviewBudget(
+            CostBudget(
+                max_provider_calls=config.max_provider_calls,
+                max_retry_attempts=config.max_retry_attempts,
+                max_input_tokens=config.max_total_input_tokens,
+                max_output_tokens=config.max_total_output_tokens,
+                max_estimated_cost_usd=config.max_estimated_cost_usd,
+                max_elapsed_seconds=config.max_elapsed_seconds,
+            ),
+            pricing=self._pricing_catalog,
+        )
         semaphore = asyncio.Semaphore(max(1, config.max_concurrent_requests))
         verification_budget = VerificationBudget()
 
@@ -1083,6 +1110,8 @@ class PullRequestReviewService:
             max_retries=config.max_retries,
             reviewer_fallback_providers=self._reviewer_fallback_providers,
             critic_fallback=self._critic_fallback,
+            review_budget=review_budget,
+            critic_failure_policy=config.critic_failure_policy,
         )
 
         async def _process(outcome: _CandidateOutcome) -> None:
@@ -1116,12 +1145,28 @@ class PullRequestReviewService:
                     verification_budget=verification_budget,
                     staged_artifact=staged_artifact,
                 )
+                outcome.completed = True
 
         try:
-            await asyncio.gather(*(_process(o) for o in outcomes))
+            work = asyncio.gather(*(_process(o) for o in outcomes))
+            try:
+                if config.max_elapsed_seconds is None:
+                    await work
+                else:
+                    async with asyncio.timeout(config.max_elapsed_seconds):
+                        await work
+            except TimeoutError:
+                await review_budget.terminate(BudgetTerminationReason.ELAPSED_TIME)
+                for outcome in outcomes:
+                    if not outcome.completed:
+                        outcome.skipped_budget = True
+                        outcome.error = "review elapsed-time budget exhausted"
+                log.warning("review_budget_exhausted", stage="review", reason="max_elapsed_time")
         finally:
             if staged_artifact is not None:
                 shutil.rmtree(staged_artifact.path, ignore_errors=True)
+
+        budget_snapshot = await review_budget.snapshot()
 
         all_final: list[FinalAIFinding] = [f for o in outcomes for f in o.final]
         dedup_result = deduplicate(tuple(all_final))
@@ -1288,6 +1333,26 @@ class PullRequestReviewService:
                         )
                         continue
 
+                    if agent_proposal.suppressed_reason == CRITIC_FAILURE_HOLD:
+                        proposal = await self._proposal_repo.create(
+                            session,
+                            review_run_id=run_id,
+                            candidate_id=candidate_model.id,
+                            finding=validated.finding,
+                            status=ProposalStatus.SUPPRESSED_CRITIC_FAILURE,
+                            validation_detail="critic verification failed under hold-for-review policy",
+                            agent_role=agent_proposal.role,
+                            validation_outcome=validated.outcome,
+                        )
+                        _log_finding_candidate_diagnostics(
+                            log,
+                            finding_id=proposal.id,
+                            finding=validated.finding,
+                            status=ProposalStatus.SUPPRESSED_CRITIC_FAILURE,
+                            verdict=None,
+                        )
+                        continue
+
                     final = next(
                         (f for f in outcome.final if f.finding is validated.finding), None
                     )
@@ -1358,7 +1423,7 @@ class PullRequestReviewService:
 
             if candidates_reviewed == 0 and candidates_failed > 0:
                 run_status = ReviewRunStatus.FAILED
-            elif candidates_failed > 0:
+            elif candidates_failed > 0 or budget_snapshot.termination_reason is not None:
                 run_status = ReviewRunStatus.PARTIAL
             else:
                 run_status = ReviewRunStatus.SUCCEEDED
@@ -1408,6 +1473,7 @@ class PullRequestReviewService:
                 executable_verification=summarize_executable_verification(
                     executable_verification_reports, version=EXECUTABLE_VERIFICATION_VERSION
                 ),
+                budget=budget_snapshot,
             )
             await session.commit()
 
@@ -1420,6 +1486,14 @@ class PullRequestReviewService:
             rejected_count=rejected_count,
             suppressed_duplicate_count=suppressed_duplicate_count,
             duration_ms=duration_ms,
+            provider_calls=budget_snapshot.provider_calls,
+            retry_attempts=budget_snapshot.retry_attempts,
+            estimated_input_tokens=budget_snapshot.input_tokens,
+            estimated_output_tokens=budget_snapshot.output_tokens,
+            estimated_cost_usd=budget_snapshot.estimated_cost_usd,
+            budget_termination_reason=(
+                budget_snapshot.termination_reason.value if budget_snapshot.termination_reason else None
+            ),
         )
 
         return ReviewRunSummary(
@@ -1444,6 +1518,7 @@ class PullRequestReviewService:
             critic_calls=critic_calls_total,
             retries_consumed=retries_total,
             reviewer_latency_ms=reviewer_latency_ms_total,
+            budget=budget_snapshot,
         )
 
     async def _review_candidate(
@@ -1839,6 +1914,40 @@ def _summary_from_model(run: ReviewRunModel, *, reused: bool) -> ReviewRunSummar
         role_call_counts = {AgentRole(k): v for k, v in json.loads(run.calls_by_role).items()}
     except (json.JSONDecodeError, ValueError):
         role_call_counts = {}
+    try:
+        raw_costs = json.loads(run.provider_cost_breakdown)
+        by_model = tuple(
+            ProviderCostMetric(
+                provider=str(item["provider"]),
+                model=str(item["model"]),
+                call_count=int(item["call_count"]),
+                retry_count=int(item["retry_count"]),
+                input_tokens=int(item["input_tokens"]),
+                output_tokens=int(item["output_tokens"]),
+                estimated_cost_usd=float(item["estimated_cost_usd"]),
+            )
+            for item in raw_costs
+        )
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        by_model = ()
+    try:
+        termination_reason = (
+            BudgetTerminationReason(run.budget_termination_reason)
+            if run.budget_termination_reason is not None
+            else None
+        )
+    except ValueError:
+        termination_reason = None
+    budget = ReviewBudgetSnapshot(
+        provider_calls=run.provider_calls,
+        retry_attempts=run.retry_attempts,
+        input_tokens=run.budget_input_tokens,
+        output_tokens=run.budget_output_tokens,
+        estimated_cost_usd=run.estimated_cost_usd,
+        elapsed_seconds=run.budget_elapsed_seconds,
+        termination_reason=termination_reason,
+        by_model=by_model,
+    )
 
     return ReviewRunSummary(
         run_id=run.id,
@@ -1881,4 +1990,5 @@ def _summary_from_model(run: ReviewRunModel, *, reused: bool) -> ReviewRunSummar
         critic_calls=run.critic_calls,
         retries_consumed=run.retries_consumed,
         reviewer_latency_ms=run.reviewer_latency_ms,
+        budget=budget,
     )

@@ -19,6 +19,7 @@ itself never touches GitHub, the database, or the filesystem.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Protocol
 
 
@@ -61,7 +62,34 @@ class ProviderResult:
 
 
 class ProviderError(Exception):
-    """Base class for every provider failure."""
+    """Base class for every provider failure.
+
+    ``retry_after_seconds`` (default ``None``) is an optional, provider-
+    reported hint for how long to wait before trying again -- Gemini's
+    ``google.rpc.RetryInfo.retryDelay`` or an HTTP ``Retry-After`` header
+    (Anthropic/OpenAI). When present, :func:`patchfrog.review.retry.call_with_retry`
+    honors it instead of its own exponential backoff, since the provider
+    itself is the authority on how long its rate limit lasts. Always
+    ``None`` for a fatal error (never retried, so irrelevant) and for a
+    transient error whose provider didn't report a delay -- exponential
+    backoff remains the fallback in that case.
+    """
+
+    def __init__(self, message: str, *, retry_after_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+
+
+class ProviderFailureKind(StrEnum):
+    INSUFFICIENT_QUOTA = "insufficient_quota"
+    AUTHENTICATION = "authentication_failure"
+    INVALID_MODEL = "invalid_model"
+    RATE_LIMIT = "rate_limit"
+    TRANSIENT_SERVER = "transient_server_error"
+    TIMEOUT = "timeout"
+    INVALID_REQUEST = "invalid_request"
+    REFUSAL = "refusal"
+    UNKNOWN = "unknown"
 
 
 class ProviderTransientError(ProviderError):
@@ -69,11 +97,77 @@ class ProviderTransientError(ProviderError):
     server-side overload, or a dropped connection. Never raised for
     anything that would repeat identically on retry."""
 
+    kind: ProviderFailureKind = ProviderFailureKind.TRANSIENT_SERVER
+
 
 class ProviderFatalError(ProviderError):
     """A failure that must never be retried: an auth failure, a malformed
     request (HTTP 400), or a response that doesn't parse against the
     requested schema. Retrying would just repeat the same failure."""
+
+    kind: ProviderFailureKind = ProviderFailureKind.UNKNOWN
+
+
+class ProviderInsufficientQuotaError(ProviderFatalError):
+    kind = ProviderFailureKind.INSUFFICIENT_QUOTA
+
+
+class ProviderAuthenticationError(ProviderFatalError):
+    kind = ProviderFailureKind.AUTHENTICATION
+
+
+class ProviderInvalidModelError(ProviderFatalError):
+    kind = ProviderFailureKind.INVALID_MODEL
+
+
+class ProviderRateLimitError(ProviderTransientError):
+    kind = ProviderFailureKind.RATE_LIMIT
+
+
+class ProviderServerError(ProviderTransientError):
+    kind = ProviderFailureKind.TRANSIENT_SERVER
+
+
+class ProviderTimeoutError(ProviderTransientError):
+    kind = ProviderFailureKind.TIMEOUT
+
+
+def indicates_insufficient_quota(value: object) -> bool:
+    """Conservative cross-provider signal for permanent credit exhaustion."""
+
+    message = str(value).lower()
+    return any(
+        marker in message
+        for marker in (
+            "insufficient_quota",
+            "credit balance",
+            "billing quota",
+            "quota exhausted",
+            "resource_exhausted: quota",
+        )
+    )
+
+
+def retry_after_seconds_from_http_response(value: object) -> float | None:
+    """Extract a ``Retry-After`` header (seconds) from an SDK exception
+    that carries an ``httpx.Response`` on ``.response`` -- Anthropic's
+    and OpenAI's ``RateLimitError`` both do. Defensive by construction
+    (only ``getattr``, never an attribute-error): a provider SDK that
+    doesn't expose ``.response``/``.headers`` this way, or a response
+    without the header, simply yields ``None`` -- the caller then falls
+    back to exponential backoff, never a crash."""
+
+    headers = getattr(getattr(value, "response", None), "headers", None)
+    if headers is None:
+        return None
+    raw = headers.get("retry-after")
+    if raw is None:
+        return None
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
 
 
 @dataclass(frozen=True, slots=True)

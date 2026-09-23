@@ -67,6 +67,10 @@ class RouteReason(StrEnum):
     #: ``allowed_providers`` -- having a credential is never itself
     #: permission to use a provider.
     PROVIDER_EXCLUDED_BY_POLICY = "provider_excluded_by_policy"
+    #: A small, bounded diff used the operator's explicitly configured
+    #: low-cost provider/model route. Repository content cannot nominate
+    #: the provider; it only supplies the deterministic size signal.
+    CHEAP_ROUTE_USED = "cheap_route_used"
 
 
 @dataclass(frozen=True, slots=True)

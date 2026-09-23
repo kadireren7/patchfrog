@@ -202,8 +202,11 @@ async def test_repo_config_without_operator_fields_reaches_provider_construction
 
     captured: dict[str, Any] = {}
 
-    def _capture_route(self: Any, *, runtime_config: Any, critic_enabled: bool) -> Any:
+    def _capture_route(
+        self: Any, *, runtime_config: Any, critic_enabled: bool, prefer_low_cost: bool = False
+    ) -> Any:
         captured["runtime_config"] = runtime_config
+        captured["prefer_low_cost"] = prefer_low_cost
         raise _StopAfterProviderResolution()
 
     monkeypatch.setattr(ModelRouter, "route", _capture_route)

@@ -1,0 +1,10 @@
+case:
+  id: beta-test-only-change
+  title: Test-only coverage addition is not a production defect
+  description: A focused unit test documents already-correct behavior.
+  language: python
+  difficulty: easy
+  tags: [beta-readiness, false-positive-trap, test-only]
+expected: []
+forbidden:
+  - {reason: The assertion correctly describes the tested contract, category: correctness}

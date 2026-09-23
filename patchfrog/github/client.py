@@ -14,6 +14,12 @@ from typing import Any
 import httpx
 
 from patchfrog.domain.github import InstallationRepositoryStub
+from patchfrog.domain.github_check import (
+    GitHubCheckConclusion,
+    GitHubCheckRun,
+    GitHubCheckRunInput,
+    GitHubCheckStatus,
+)
 from patchfrog.domain.github_feedback import (
     GitHubActor,
     GitHubActorType,
@@ -210,6 +216,46 @@ class GitHubClient:
         }
         data = await self._post_json(installation_id=installation_id, path=path, json_body=payload)
         return _parse_submitted_review(data)
+
+    async def list_check_runs(
+        self, *, installation_id: int, ref: PullRequestRef, head_sha: str
+    ) -> list[GitHubCheckRun]:
+        path = f"/repos/{ref.owner}/{ref.repository}/commits/{head_sha}/check-runs"
+        data = await self._get_json(
+            installation_id=installation_id,
+            path=path,
+            params={"check_name": "PatchFrog review", "filter": "all", "per_page": 100},
+        )
+        if not isinstance(data, dict) or not isinstance(data.get("check_runs"), list):
+            raise GitHubResponseError("Malformed check-runs response from GitHub")
+        return [_parse_check_run(item) for item in data["check_runs"]]
+
+    async def create_check_run(
+        self, *, installation_id: int, ref: PullRequestRef, check: GitHubCheckRunInput
+    ) -> GitHubCheckRun:
+        path = f"/repos/{ref.owner}/{ref.repository}/check-runs"
+        data = await self._post_json(
+            installation_id=installation_id,
+            path=path,
+            json_body=_serialize_check_run(check, include_head_sha=True),
+        )
+        return _parse_check_run(data)
+
+    async def update_check_run(
+        self,
+        *,
+        installation_id: int,
+        ref: PullRequestRef,
+        check_run_id: int,
+        check: GitHubCheckRunInput,
+    ) -> GitHubCheckRun:
+        path = f"/repos/{ref.owner}/{ref.repository}/check-runs/{check_run_id}"
+        data = await self._patch_json(
+            installation_id=installation_id,
+            path=path,
+            json_body=_serialize_check_run(check, include_head_sha=False),
+        )
+        return _parse_check_run(data)
 
     async def list_pull_request_review_comments(
         self, *, installation_id: int, ref: PullRequestRef
@@ -408,6 +454,32 @@ class GitHubClient:
         except ValueError as exc:
             raise GitHubResponseError(f"GitHub returned malformed JSON for {path}") from exc
 
+    async def _patch_json(
+        self, *, installation_id: int, path: str, json_body: dict[str, Any]
+    ) -> Any:
+        token = await self._token_provider.get_token(installation_id)
+        url = f"{self._api_base_url}{path}"
+        try:
+            response = await self._http_client.patch(
+                url,
+                json=json_body,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                timeout=self._timeout,
+            )
+        except httpx.TimeoutException as exc:
+            raise GitHubTimeoutError(f"Timed out calling GitHub API: {path}") from exc
+        except httpx.HTTPError as exc:
+            raise GitHubTimeoutError(f"Network error calling GitHub API: {path}") from exc
+        _raise_for_status(response)
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise GitHubResponseError(f"GitHub returned malformed JSON for {path}") from exc
+
 
 def _raise_for_status(response: httpx.Response) -> None:
     status = response.status_code
@@ -499,6 +571,37 @@ def _parse_submitted_review(data: dict[str, Any]) -> GitHubSubmittedReview:
         )
     except (KeyError, TypeError) as exc:
         raise GitHubResponseError("Malformed review response from GitHub") from exc
+
+
+def _parse_check_run(data: dict[str, Any]) -> GitHubCheckRun:
+    try:
+        conclusion = data.get("conclusion")
+        return GitHubCheckRun(
+            id=data["id"],
+            name=data["name"],
+            head_sha=data["head_sha"],
+            external_id=data.get("external_id") or "",
+            status=GitHubCheckStatus(data["status"]),
+            conclusion=GitHubCheckConclusion(conclusion) if conclusion is not None else None,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise GitHubResponseError("Malformed check-run response from GitHub") from exc
+
+
+def _serialize_check_run(check: GitHubCheckRunInput, *, include_head_sha: bool) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "name": check.name,
+        "external_id": check.external_id,
+        "status": check.status.value,
+        "output": {"title": check.output.title, "summary": check.output.summary},
+    }
+    if include_head_sha:
+        payload["head_sha"] = check.head_sha
+    if check.conclusion is not None:
+        payload["conclusion"] = check.conclusion.value
+    if check.details_url is not None:
+        payload["details_url"] = check.details_url
+    return payload
 
 
 def _parse_actor(data: dict[str, Any] | None) -> GitHubActor:

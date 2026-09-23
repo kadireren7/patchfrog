@@ -13,7 +13,12 @@ import httpx
 import pytest
 import respx
 
-from patchfrog.review.provider import ProviderFatalError, ProviderRequest, ProviderTransientError
+from patchfrog.review.provider import (
+    ProviderFatalError,
+    ProviderRateLimitError,
+    ProviderRequest,
+    ProviderTransientError,
+)
 from patchfrog.review.providers.gemini_provider import GeminiLLMProvider
 
 _MODEL = "gemini-3.6-flash"
@@ -63,8 +68,13 @@ def _success_body(
     }
 
 
-def _error_body(*, code: int, status: str, message: str = "error") -> dict[str, object]:
-    return {"error": {"code": code, "message": message, "status": status}}
+def _error_body(
+    *, code: int, status: str, message: str = "error", details: list[dict[str, object]] | None = None
+) -> dict[str, object]:
+    error: dict[str, object] = {"code": code, "message": message, "status": status}
+    if details is not None:
+        error["details"] = details
+    return {"error": error}
 
 
 async def test_success_returns_text_and_usage() -> None:
@@ -95,6 +105,36 @@ async def test_rate_limit_or_quota_is_transient() -> None:
         )
         with pytest.raises(ProviderTransientError):
             await _provider().generate_structured(_REQUEST)
+
+
+async def test_rate_limit_captures_google_rpc_retry_delay_when_provided() -> None:
+    with respx.mock:
+        respx.post(_GENERATE_URL).mock(
+            return_value=httpx.Response(
+                429,
+                json=_error_body(
+                    code=429,
+                    status="RESOURCE_EXHAUSTED",
+                    message="Resource has been exhausted (e.g. check quota).",
+                    details=[
+                        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "34s"},
+                    ],
+                ),
+            )
+        )
+        with pytest.raises(ProviderRateLimitError) as excinfo:
+            await _provider().generate_structured(_REQUEST)
+    assert excinfo.value.retry_after_seconds == 34.0
+
+
+async def test_rate_limit_without_retry_info_has_no_retry_after() -> None:
+    with respx.mock:
+        respx.post(_GENERATE_URL).mock(
+            return_value=httpx.Response(429, json=_error_body(code=429, status="RESOURCE_EXHAUSTED"))
+        )
+        with pytest.raises(ProviderRateLimitError) as excinfo:
+            await _provider().generate_structured(_REQUEST)
+    assert excinfo.value.retry_after_seconds is None
 
 
 async def test_server_error_is_transient() -> None:

@@ -12,7 +12,24 @@ write afterwards.
 
 Selection funnel, most to least preferred:
 
-1. Findings below ``config.min_severity`` are omitted outright.
+1. Findings below ``config.min_severity`` are omitted outright --
+   *unless* the finding is high-confidence evidence from one of the two
+   specialist roles (:class:`~patchfrog.analysis.domain.FindingCategory.CORRECTNESS`
+   or ``SECURITY``) with :class:`~patchfrog.analysis.domain.Confidence.HIGH`.
+   Severity and confidence are orthogonal (see
+   :class:`patchfrog.analysis.domain.Confidence`'s own docstring): severity
+   is how *bad* an issue is, confidence is how *sure* the detection is.
+   ``min_severity`` exists to cut low-priority noise, never to discard a
+   proposal that has already survived reviewer proposal, deterministic
+   validation, confidence aggregation (:mod:`patchfrog.review.confidence`
+   -- critic-downgraded when a critic verdict exists, reviewer-reported
+   otherwise, e.g. when the critic call itself failed and fell back per
+   :mod:`patchfrog.review.orchestration`'s documented fail-open policy)
+   and dedup as a proven defect (see
+   :meth:`~patchfrog.publishing.planner.PublicationPlanner.build_plan`'s
+   ``_bypasses_severity_floor`` use below) -- such a finding still goes
+   through steps 2-4 exactly like any other eligible finding, so it can
+   still end up ``OMITTED`` by a cap, just never by severity alone.
 2. Findings that map to a real diff line (see
    :mod:`patchfrog.publishing.diff_mapper`) are ranked (severity desc,
    confidence desc, then stable path/line) and the top
@@ -34,7 +51,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from uuid import UUID
 
-from patchfrog.analysis.domain import Confidence, Severity
+from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.diff.models import DiffFile
 from patchfrog.domain.pull_request import ChangedFile
 from patchfrog.publishing.body import (
@@ -72,6 +89,28 @@ _CONFIDENCE_RANK: dict[Confidence, int] = {
 
 def _meets_min_severity(severity: Severity, *, minimum: Severity) -> bool:
     return _SEVERITY_RANK[severity] >= _SEVERITY_RANK[minimum]
+
+
+#: The two specialist roles (:mod:`patchfrog.review.agents.roles`) whose
+#: findings represent hard, reviewer-proposed-then-critic-verified
+#: evidence of an actual defect rather than a style/maintainability
+#: opinion -- see the module docstring's funnel step 1.
+_HARD_EVIDENCE_CATEGORIES = frozenset({FindingCategory.CORRECTNESS, FindingCategory.SECURITY})
+
+
+def _bypasses_severity_floor(finding: PublishableFinding) -> bool:
+    """A finding that survived reviewer proposal, validation, confidence
+    aggregation, and dedup with :class:`Confidence.HIGH` in one of the two
+    specialist categories is proven evidence of a real defect, not noise --
+    ``config.min_severity`` must never be the sole reason it is discarded
+    with zero visibility (see the funnel docstring above). This is a
+    narrow, category+confidence-scoped carve-out, not a change to the
+    configured threshold itself: everything else is still governed by
+    ``config.min_severity`` exactly as before, and a bypassing finding is
+    still fully subject to steps 2-4 (mapping, caps) below -- it can still
+    end up ``OMITTED`` by a cap, just never by severity alone."""
+
+    return finding.confidence is Confidence.HIGH and finding.category in _HARD_EVIDENCE_CATEGORIES
 
 
 class PublicationPlanner:
@@ -176,7 +215,7 @@ class PublicationPlanner:
                     )
                 )
                 continue
-            if not _meets_min_severity(finding.severity, minimum=config.min_severity):
+            if not _meets_min_severity(finding.severity, minimum=config.min_severity) and not _bypasses_severity_floor(finding):
                 omitted.append(self._to_comment(finding, snapshot, PublicationDisposition.OMITTED, position=None, reason="below minimum severity threshold"))
                 continue
             eligible.append(finding)

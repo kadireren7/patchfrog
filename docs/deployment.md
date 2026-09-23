@@ -178,6 +178,8 @@ Two further environment variables, both optional, both never
 |---|---|
 | `PATCHFROG_ROUTER_FALLBACK_PROVIDER` | A single provider to fall back to if `PATCHFROG_REVIEW_PROVIDER` has no credential configured. Bounded to exactly one hop -- no chain to a further fallback. |
 | `PATCHFROG_ROUTER_CRITIC_PROVIDER` | Explicitly pin the critic role to a specific provider family (must also have its own credential set). If unset and more than one provider is configured, the router auto-selects a different family than the reviewer for family diversity; with only one provider configured, the critic always uses that same family. |
+| `PATCHFROG_ROUTER_CHEAP_PROVIDER` | Optional provider used for small reviews (at most 3 files and 80 changed lines), but only when credentialed and allowed by governance policy. |
+| `PATCHFROG_ROUTER_CHEAP_MODEL` | Optional model for the cheap provider; must match that provider family. |
 
 ```
 PATCHFROG_REVIEW_PROVIDER=anthropic
@@ -216,6 +218,13 @@ credentials -- **never** `.patchfrog.yml`-controlled:
 | `PATCHFROG_MAX_OUTPUT_TOKENS_PER_CANDIDATE` | Hard ceiling on `ReviewConfig.max_output_tokens_per_candidate` | `16000` |
 | `PATCHFROG_MAX_CONCURRENT_REVIEW_REQUESTS` | Hard ceiling on `ReviewConfig.max_concurrent_requests` | `16` |
 | `PATCHFROG_MAX_REVIEW_RETRIES` | Hard ceiling on `ReviewConfig.max_retries` | `5` |
+| `PATCHFROG_MAX_PROVIDER_CALLS` | Hard ceiling on all reviewer, critic, retry, and fallback calls | `500` |
+| `PATCHFROG_MAX_RETRY_ATTEMPTS` | Review-wide retry/fallback ceiling | `200` |
+| `PATCHFROG_MAX_TOTAL_OUTPUT_TOKENS` | Review-wide estimated/reported output-token ceiling | `250000` |
+| `PATCHFROG_MAX_ESTIMATED_COST_USD` | Optional estimated-dollar ceiling; requires matching pricing entries | unset |
+| `PATCHFROG_MAX_REVIEW_ELAPSED_SECONDS` | Optional hard wall-clock ceiling for provider work | unset |
+| `PATCHFROG_PROVIDER_PRICING` | JSON object keyed by `provider/model`, with input/output USD per million tokens | `{}` |
+| `PATCHFROG_CRITIC_FAILURE_POLICY` | Optional operator override: `fail_open` or `hold_for_review` | unset (`fail_open` repository default) |
 
 `patchfrog.review.config_resolution.apply_operator_hard_caps` computes
 `effective = min(repo_intent, operator_hard_cap)` per field, applied by

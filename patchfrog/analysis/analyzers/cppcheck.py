@@ -8,12 +8,15 @@ structured output cppcheck offers.
 
 from __future__ import annotations
 
-import shutil
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from patchfrog.analysis.analyzers.base import AnalyzerAvailability, AnalyzerDiscoveryResult
+from patchfrog.analysis.analyzers.base import (
+    AnalyzerAvailability,
+    AnalyzerDiscoveryResult,
+    resolve_analyzer_binary,
+)
 from patchfrog.analysis.domain import (
     AnalysisContext,
     AnalyzerCapabilities,
@@ -92,7 +95,7 @@ class CppcheckAnalyzer:
     )
 
     async def discover(self) -> AnalyzerDiscoveryResult:
-        binary = shutil.which(_BINARY)
+        binary = resolve_analyzer_binary(_BINARY)
         if binary is None:
             return AnalyzerDiscoveryResult(
                 availability=AnalyzerAvailability.UNAVAILABLE, reason="cppcheck binary not found on PATH"
@@ -121,7 +124,7 @@ class CppcheckAnalyzer:
                 error=discovery.reason,
             )
         version = discovery.version
-        binary = shutil.which(_BINARY)
+        binary = resolve_analyzer_binary(_BINARY)
         assert binary is not None
 
         targets = _target_paths(context)

@@ -181,5 +181,5 @@ and the current free-tier data-policy/quota caveats.
 Every event PatchFrog reacts to during onboarding
 (`installation`/`installation_repositories`/`pull_request`) and every
 GitHub API call during processing works with the App's existing
-`contents:read`/`metadata:read`/`pull_requests:write` grant. No new
+`contents:read`/`metadata:read`/`pull_requests:write`/`checks:write` grant. No new
 permission was requested for public-beta readiness.

@@ -11,11 +11,14 @@ derives its own severity/category from the rule code's family instead
 from __future__ import annotations
 
 import json
-import shutil
 import time
 from pathlib import Path
 
-from patchfrog.analysis.analyzers.base import AnalyzerAvailability, AnalyzerDiscoveryResult
+from patchfrog.analysis.analyzers.base import (
+    AnalyzerAvailability,
+    AnalyzerDiscoveryResult,
+    resolve_analyzer_binary,
+)
 from patchfrog.analysis.domain import (
     AnalysisContext,
     AnalyzerCapabilities,
@@ -82,7 +85,7 @@ class RuffAnalyzer:
     )
 
     async def discover(self) -> AnalyzerDiscoveryResult:
-        binary = shutil.which(_BINARY)
+        binary = resolve_analyzer_binary(_BINARY)
         if binary is None:
             return AnalyzerDiscoveryResult(
                 availability=AnalyzerAvailability.UNAVAILABLE, reason="ruff binary not found on PATH"
@@ -110,7 +113,7 @@ class RuffAnalyzer:
                 error=discovery.reason,
             )
         version = discovery.version
-        binary = shutil.which(_BINARY)
+        binary = resolve_analyzer_binary(_BINARY)
         assert binary is not None  # discover() already confirmed this
 
         targets = _target_paths(context)

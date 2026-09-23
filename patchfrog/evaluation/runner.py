@@ -82,7 +82,7 @@ from patchfrog.review.config import (
     REVIEW_PROMPT_VERSION,
     ReviewConfig,
 )
-from patchfrog.review.domain import ReviewRunSummary
+from patchfrog.review.domain import ProposalStatus, ReviewRunSummary
 from patchfrog.review.effort import uniform_baseline_decision
 from patchfrog.review.effort_types import ReviewEffortTier
 from patchfrog.review.provider import LLMProvider, ProviderError
@@ -395,6 +395,7 @@ class EvaluationRunner:
             reviewer_output_tokens_by_role: dict[AgentRole, int] = {}
             candidates_by_tier: dict[ReviewEffortTier, int] = {}
             candidates_escalated = critic_calls = retries_consumed = 0
+            critic_rejections = 0
             reviewer_thinking_tokens = critic_thinking_tokens = 0
 
             if mode in (EvaluationMode.AI_ONLY, EvaluationMode.FULL_PIPELINE):
@@ -455,11 +456,19 @@ class EvaluationRunner:
                 proposals_predicted = [
                     _ai_to_predicted(p, candidate_by_id.get(p.candidate_id)) for p in proposals
                 ]
+                critic_rejections = sum(p.status is ProposalStatus.REJECTED_CRITIC for p in proposals)
 
             all_predictions = static_predictions + ai_predictions
             prediction_outcomes, expected_outcomes = match_case(
                 case=case, mode=mode, predictions=all_predictions,
                 valid_file_paths=fixture_info.valid_file_paths, file_line_counts=fixture_info.file_line_counts,
+            )
+            proposal_outcomes, _ = match_case(
+                case=case,
+                mode=mode,
+                predictions=proposals_predicted,
+                valid_file_paths=fixture_info.valid_file_paths,
+                file_line_counts=fixture_info.file_line_counts,
             )
 
             status = CaseStatus.PASSED if not prediction_outcomes else CaseStatus.COMPLETED_WITH_FINDINGS
@@ -467,6 +476,7 @@ class EvaluationRunner:
                 case_id=case.id, mode=mode, status=status, duration_ms=(time.monotonic() - start) * 1000,
                 predictions=prediction_outcomes, expected_outcomes=expected_outcomes,
                 proposals_before_validation=tuple(proposals_predicted), critic_enabled=critic_enabled,
+                proposal_outcomes=proposal_outcomes,
                 candidates_generated=candidates_generated, candidates_reviewed=candidates_reviewed,
                 candidates_skipped=candidates_skipped, provider_calls=provider_calls,
                 reviewer_input_tokens=reviewer_input_tokens, reviewer_output_tokens=reviewer_output_tokens,
@@ -480,6 +490,7 @@ class EvaluationRunner:
                 reviewer_thinking_tokens=reviewer_thinking_tokens,
                 critic_thinking_tokens=critic_thinking_tokens,
                 retries_consumed=retries_consumed,
+                critic_rejections=critic_rejections,
             )
         finally:
             shutil.rmtree(repo_root, ignore_errors=True)
@@ -542,4 +553,3 @@ def oracle_reviewer_provider_factory(*, cases_root: Path) -> Callable[[Evaluatio
         )
 
     return factory
-

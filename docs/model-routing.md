@@ -251,6 +251,8 @@ this explicitly.
 | `PATCHFROG_REVIEW_PROVIDER` | Preferred/primary provider family (unchanged from before this milestone; now also accepts `openai`) |
 | `PATCHFROG_ROUTER_FALLBACK_PROVIDER` | Optional, single fallback family if the preferred one has no credential |
 | `PATCHFROG_ROUTER_CRITIC_PROVIDER` | Optional, explicit critic family (overrides auto-diversity) |
+| `PATCHFROG_ROUTER_CHEAP_PROVIDER` | Optional low-cost family for deterministically small reviews; governance and credential checks still apply |
+| `PATCHFROG_ROUTER_CHEAP_MODEL` | Optional operator-selected model for the low-cost family |
 
 Self-host: the operator controls which providers are available and how
 routing behaves. Future PatchFrog Cloud: production model-routing

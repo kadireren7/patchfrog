@@ -27,6 +27,7 @@ from uuid import UUID
 
 from patchfrog.analysis.domain import Confidence, FindingCategory, Severity
 from patchfrog.review.agents.roles import AgentRole
+from patchfrog.review.budget import ReviewBudgetSnapshot
 from patchfrog.review.effort_types import ReviewEffortTier
 
 
@@ -269,6 +270,10 @@ class ProposalStatus(StrEnum):
     #: :data:`patchfrog.review.orchestration.CRITIC_BUDGET_EXHAUSTED`.
     #: Suppressed rather than published unverified.
     SUPPRESSED_BUDGET = "suppressed_budget"
+    #: A selected critic failed and the effective
+    #: ``CriticFailurePolicy`` required holding the proposal rather than
+    #: accepting it on reviewer confidence alone.
+    SUPPRESSED_CRITIC_FAILURE = "suppressed_critic_failure"
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,3 +377,4 @@ class ReviewRunSummary:
     #: wall-clock measurement. See :mod:`patchfrog.telemetry`'s module
     #: docstring for why the two are never conflated.
     reviewer_latency_ms: float = 0.0
+    budget: ReviewBudgetSnapshot | None = None

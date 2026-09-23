@@ -54,7 +54,8 @@ pull_request event
 Deliberately minimal -- confirmed live via `GET /app` against the real
 configured App:
 
-- Permissions: `contents: read`, `metadata: read`, `pull_requests: write`
+- Permissions: `contents: read`, `metadata: read`, `pull_requests: write`,
+  `checks: write`
 - Subscribed events: `pull_request` only
 
 No `issues`, `pull_request_review_comment`, or

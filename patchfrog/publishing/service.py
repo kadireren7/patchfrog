@@ -61,6 +61,7 @@ from patchfrog.persistence.repositories.review_publication_comment import (
 from patchfrog.publishing.config import PublicationConfig
 from patchfrog.publishing.domain import (
     DiffSide,
+    PublishableFinding,
     ReviewInputSnapshot,
     ReviewPublicationComment,
     ReviewPublicationMode,
@@ -235,6 +236,7 @@ class ReviewPublicationService:
             ),
         )
 
+        self._log_omitted_findings(publication_id, findings, plan)
         await self._persist_plan_comments(publication_id, plan)
 
         if plan.status is ReviewPublicationStatus.STALE:
@@ -324,6 +326,31 @@ class ReviewPublicationService:
             inline=len(plan.inline_comments),
         )
         return self._result_from_model(model, reconciled=False, errors=())
+
+    @staticmethod
+    def _log_omitted_findings(
+        publication_id: uuid.UUID, findings: list[PublishableFinding], plan: ReviewPublicationPlan
+    ) -> None:
+        """One structured log line per finding the planner discarded to
+        ``OMITTED`` -- finding id, severity/category, and the planner's own
+        fixed-vocabulary omission reason only (e.g. "below minimum
+        severity threshold", "exceeded max_summary_findings cap"). Never
+        the finding's title/message/reasoning_summary/suggested_fix
+        (repository/provider-derived free text) -- see
+        :class:`patchfrog.publishing.domain.PublishableFinding`."""
+
+        if not plan.omitted:
+            return
+        category_by_id = {f.finding_id: f.category.value for f in findings}
+        for comment in plan.omitted:
+            logger.info(
+                "review_publish_finding_omitted",
+                publication_id=str(publication_id),
+                finding_id=str(comment.finding_id),
+                severity=comment.severity.value,
+                category=category_by_id.get(comment.finding_id, "unknown"),
+                omission_reason=comment.reason,
+            )
 
     async def _persist_plan_comments(self, publication_id: uuid.UUID, plan: ReviewPublicationPlan) -> None:
         all_comments: list[ReviewPublicationComment] = [

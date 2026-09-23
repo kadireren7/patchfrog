@@ -1,0 +1,10 @@
+case:
+  id: beta-behavior-preserving-rename
+  title: Local rename preserves behavior
+  description: A clearer local variable name does not alter the result.
+  language: python
+  difficulty: easy
+  tags: [beta-readiness, false-positive-trap, rename]
+expected: []
+forbidden:
+  - {reason: Renaming a local leaves the calculation unchanged, category: correctness}

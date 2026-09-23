@@ -9,11 +9,37 @@ know a given analyzer's command-line shape or native output format —
 
 from __future__ import annotations
 
+import os
+import shutil
+import sys
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Protocol
 
 from patchfrog.analysis.domain import AnalysisContext, AnalyzerCapabilities, AnalyzerResult
+
+
+def resolve_analyzer_binary(name: str) -> str | None:
+    """Resolve an analyzer from ``PATH`` or the active Python environment.
+
+    Invoking ``.venv/bin/pytest`` does not itself prepend ``.venv/bin`` to
+    ``PATH``.  Runtime analyzer dependencies installed into that same
+    environment must nevertheless be discoverable without requiring a
+    shell-activation side effect.  System analyzers continue to resolve
+    through ``PATH`` first.
+    """
+
+    binary = shutil.which(name)
+    if binary is not None:
+        return binary
+    # Do not resolve the interpreter symlink: ``.venv/bin/python`` commonly
+    # points at ``/usr/bin/python``, while its sibling console scripts live
+    # in the venv directory named by ``sys.executable`` itself.
+    environment_binary = Path(sys.executable).parent / name
+    if environment_binary.is_file() and os.access(environment_binary, os.X_OK):
+        return str(environment_binary)
+    return None
 
 
 class AnalyzerAvailability(StrEnum):

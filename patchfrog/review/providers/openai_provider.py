@@ -49,12 +49,20 @@ import httpx2
 import openai
 
 from patchfrog.review.provider import (
+    ProviderAuthenticationError,
     ProviderFatalError,
     ProviderIdentity,
+    ProviderInsufficientQuotaError,
+    ProviderInvalidModelError,
+    ProviderRateLimitError,
     ProviderRequest,
     ProviderResult,
+    ProviderServerError,
+    ProviderTimeoutError,
     ProviderTransientError,
     ProviderUsage,
+    indicates_insufficient_quota,
+    retry_after_seconds_from_http_response,
 )
 
 _DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -139,16 +147,22 @@ class OpenAILLMProvider:
                 },
             )
         except openai.RateLimitError as exc:
-            raise ProviderTransientError(f"rate limited: {exc}") from exc
+            if indicates_insufficient_quota(exc):
+                raise ProviderInsufficientQuotaError(f"quota exhausted: {exc}") from exc
+            raise ProviderRateLimitError(
+                f"rate limited: {exc}", retry_after_seconds=retry_after_seconds_from_http_response(exc)
+            ) from exc
+        except openai.APITimeoutError as exc:
+            raise ProviderTimeoutError(f"timeout: {exc}") from exc
         except openai.APIConnectionError as exc:
-            # Covers openai.APITimeoutError too -- APITimeoutError is a
-            # subclass of APIConnectionError in this SDK, so catching the
-            # parent alone is sufficient and avoids an unreachable
-            # duplicate except clause.
-            raise ProviderTransientError(f"connection/timeout error: {exc}") from exc
+            raise ProviderTransientError(f"connection error: {exc}") from exc
         except openai.InternalServerError as exc:
-            raise ProviderTransientError(f"server error: {exc}") from exc
+            raise ProviderServerError(f"server error: {exc}") from exc
         except openai.APIStatusError as exc:
+            if exc.status_code in (401, 403):
+                raise ProviderAuthenticationError(f"authentication error {exc.status_code}: {exc}") from exc
+            if exc.status_code == 404:
+                raise ProviderInvalidModelError(f"model not found: {exc}") from exc
             raise ProviderFatalError(f"API error {exc.status_code}: {exc}") from exc
 
         latency_ms = (time.monotonic() - start) * 1000

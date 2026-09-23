@@ -29,7 +29,13 @@ dependencies = [
     # discover() (see patchfrog.analysis.analyzers.cppcheck/clang_tidy)
     # rather than declared here.
     "ruff>=0.7,<1.0",
-    "semgrep>=1.100,<2.0",
+    # Floor is load-bearing: newer semgrep pins mcp exactly (e.g.
+    # mcp==1.29.0), so when a newer mcp is released pip otherwise
+    # backtracks semgrep to a pre-mcp release (<=1.136) whose
+    # opentelemetry-instrumentation 0.46b0 imports pkg_resources --
+    # removed in setuptools>=82 -- and `semgrep` crashes at import.
+    # 1.173 is the validated line using opentelemetry 0.58b0.
+    "semgrep>=1.173,<2.0",
     "PyYAML>=6.0,<7.0",
     # Executable Verification (Milestone S): pytest is invoked as the
     # existing-targeted-test verification adapter's own subprocess at
