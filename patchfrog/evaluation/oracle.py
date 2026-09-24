@@ -61,10 +61,13 @@ def build_oracle_response_factory(
     def factory(request: ProviderRequest) -> ScriptedResponse:
         if request.schema_name == "critic_verdict":
             return _ACCEPT_VERDICT
-        target = _review_target(request.user_prompt)
-        if target is None:
+        # A single-pass (M4) prompt lists several targets; a specialist
+        # prompt lists exactly one. Either way, answer for every target
+        # shown -- each expected finding at most once.
+        targets = _review_targets(request.user_prompt)
+        if not targets:
             return _NO_FINDINGS
-        matches = [e for e in ai_expected if _symbol_matches(e.symbol, target)]
+        matches = [e for e in ai_expected if any(_symbol_matches(e.symbol, t) for t in targets)]
         if not matches:
             return _NO_FINDINGS
         findings = [_oracle_finding(e, repo_root=repo_root) for e in matches]
@@ -73,11 +76,10 @@ def build_oracle_response_factory(
     return factory
 
 
-def _review_target(user_prompt: str) -> str | None:
-    for line in user_prompt.splitlines():
-        if line.startswith("Review target: `"):
-            return line.split("`")[1]
-    return None
+def _review_targets(user_prompt: str) -> list[str]:
+    return [
+        line.split("`")[1] for line in user_prompt.splitlines() if line.startswith("Review target: `")
+    ]
 
 
 def _symbol_matches(expected_symbol: str | None, candidate_target: str) -> bool:

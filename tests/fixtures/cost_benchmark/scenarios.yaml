@@ -1,0 +1,153 @@
+# M4.10 deterministic cost benchmark scenarios.
+#
+# Each scenario applies `edits` to base_repo/ as one commit and reviews
+# that commit's diff. `finding` (optional) is what the deterministic fake
+# reviewer reports when a reviewer prompt targets the file and shows the
+# quoted text -- identical for every strategy, so "before" (pre-M4
+# specialist fan-out) and "after" (cost-aware) review the same evidence.
+# `max_provider_calls` is the M4 acceptance target for the cost-aware
+# strategy. Never a live provider; token counts are deterministic
+# estimates of the exact prompts/responses; prices are synthetic.
+version: 1
+scenarios:
+  - id: comment_only
+    description: comment wording change in a code file
+    max_provider_calls: 0
+    edits:
+      - path: app/billing/calc.py
+        find: "    # Prices are integers in cents."
+        replace: "    # Prices are integer cents; never floats."
+
+  - id: docs_only
+    description: README edit
+    max_provider_calls: 0
+    edits:
+      - path: README.md
+        find: "A tiny billing service"
+        replace: "A deliberately tiny billing service"
+
+  - id: tiny_code
+    description: one-line behavior change, nothing wrong
+    max_provider_calls: 1
+    edits:
+      - path: app/billing/calc.py
+        find: "TAX_RATE = 0.2"
+        replace: "TAX_RATE = 0.21"
+
+  - id: normal_correctness_bug
+    description: single-module change introducing an off-by-one
+    max_provider_calls: 2
+    edits:
+      - path: app/billing/invoice.py
+        find: "    for index in range(len(items)):"
+        replace: "    for index in range(len(items) - 1):"
+      - path: app/billing/invoice.py
+        find: "def build_invoice(customer, items):"
+        replace: |-
+          def summarize(items):
+              """Human-readable summary of an order."""
+              count = 0
+              names = []
+              for item in items:
+                  count += item["qty"]
+                  names.append(item["name"])
+              unique = sorted(set(names))
+              first = unique[0] if unique else ""
+              last = unique[-1] if unique else ""
+              heading = f"{count} item(s)"
+              if first and last and first != last:
+                  heading += f" from {first} to {last}"
+              elif first:
+                  heading += f": {first}"
+              return heading
+
+
+          def total_quantity(items):
+              """Total number of units across all lines."""
+              total = 0
+              for item in items:
+                  total += item["qty"]
+              return total
+
+
+          def build_invoice(customer, items):
+    finding:
+      path: app/billing/invoice.py
+      quote: "for index in range(len(items) - 1):"
+      category: correctness
+      severity: medium
+      confidence: high
+
+  - id: medium_cross_module
+    description: body-only edits across three modules
+    max_provider_calls: 3
+    edits:
+      - path: app/billing/calc.py
+        find: "    return round(amount * (1 + TAX_RATE))"
+        replace: "    return int(round(amount * (1 + TAX_RATE)))"
+      - path: app/api/handlers.py
+        find: '    return {"status": 200, "body": "ok"}'
+        replace: '    return {"status": 200, "body": "ok", "version": 2}'
+      - path: app/notifications/email.py
+        find: '    return f"Total due: {invoice[''gross'']}"'
+        replace: '    return f"Total due: {invoice[''gross''] / 100:.2f}"'
+
+  - id: auth_sensitive
+    description: session signature change in the auth module
+    max_provider_calls: 5
+    edits:
+      - path: app/auth/session.py
+        find: "def issue_session(user_id, ttl_seconds):"
+        replace: "def issue_session(user_id, ttl_seconds, scope=None):"
+      - path: app/auth/session.py
+        find: '    return {"user": user_id, "expires_at": time.time() + ttl_seconds}'
+        replace: '    return {"user": user_id, "scope": scope, "expires_at": time.time() + ttl_seconds}'
+    finding:
+      path: app/auth/session.py
+      quote: 'return {"user": user_id, "scope": scope, "expires_at": time.time() + ttl_seconds}'
+      category: security
+      severity: high
+      confidence: medium
+
+  - id: schema_migration
+    description: new migration plus model field
+    max_provider_calls: 5
+    edits:
+      - path: migrations/versions/0002_add_email.py
+        write: |
+          """Add customer email."""
+
+
+          def upgrade(op):
+              op.add_column("customers", "email")
+
+
+          def downgrade(op):
+              op.drop_column("customers", "email")
+      - path: app/models.py
+        find: "    name: str"
+        replace: "    name: str\n    email: str"
+
+  - id: public_api_change
+    description: public handler signature change
+    max_provider_calls: 3
+    edits:
+      - path: app/api/handlers.py
+        find: "def get_invoice(request, store):"
+        replace: "def get_invoice(request, store, currency=\"EUR\"):"
+      - path: app/api/handlers.py
+        find: '    return {"status": 200, "body": build_invoice(customer, items)}'
+        replace: '    return {"status": 200, "currency": currency, "body": build_invoice(customer, items)}'
+
+  - id: test_only
+    description: new unit test
+    max_provider_calls: 1
+    edits:
+      - path: tests/test_calc.py
+        find: "def test_with_tax():"
+        replace: "def test_subtotal_empty():\n    assert subtotal([]) == 0\n\n\ndef test_with_tax():"
+
+  - id: exact_head_repeat
+    description: identical re-review of the tiny_code head
+    repeat_of: tiny_code
+    max_provider_calls: 0
