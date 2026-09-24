@@ -26,6 +26,11 @@ from patchfrog.persistence.models.cross_repo import (
     RepositoryContractKeyModel,
     RepositoryRelationModel,
 )
+from patchfrog.persistence.models.dependency import (
+    ExternalContractSnapshotModel,
+    ExternalDependencyModel,
+    ExternalDependencyUsageSiteModel,
+)
 from patchfrog.persistence.models.feedback import FeedbackAssessmentModel, FeedbackEventModel
 from patchfrog.persistence.models.fix_attempt import FixAttemptModel
 from patchfrog.persistence.models.installation import (
@@ -73,6 +78,9 @@ __all__ = [
     "ContextBundleStatus",
     "ContextItemModel",
     "CriticVerdictModel",
+    "ExternalContractSnapshotModel",
+    "ExternalDependencyModel",
+    "ExternalDependencyUsageSiteModel",
     "FeedbackAssessmentModel",
     "FeedbackEventModel",
     "FileIndexStatus",

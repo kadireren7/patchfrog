@@ -159,6 +159,38 @@ untouched). Cloud owns policy definition, assignment, audit, and UI; the
 public engine owns evaluation only. RBAC/SSO/SAML/retention controls
 remain out of scope for this round -- see `docs/governance-policy.md`.
 
+## Product transition — API/SDK compatibility (M4+)
+
+PatchFrog's product direction is now: **keep software compatible with the
+APIs and SDKs it depends on** -- detect upstream changes, map their
+impact, generate migrations, verify them, open evidence-backed PRs.
+Invariant: change -> impact -> evidence -> verification -> decision. Full
+picture: `docs/architecture.md`. Generic PR review becomes a secondary
+safety/verification capability (kept, not removed).
+
+Under development on `feat/m4-m5-cost-engine-dependency-discovery`, open
+for review, not yet merged to `main`.
+
+**M4 — Ultra-Low-Cost Review Engine.** Implemented: deterministic PR-level
+change/risk tiers (`patchfrog.change_risk`), zero-call NO_AI path,
+single-pass review, sequential reason-carrying escalation, per-tier
+budgets with a critic verification reserve, context minimization,
+exact-head reuse + force, cost telemetry, and a deterministic cost
+benchmark. See `docs/cost-aware-review.md`.
+
+**M5 — External Dependency Discovery + Contract Registry.** Implemented:
+provider-agnostic dependency domain, safe discovery (never reads secret
+values), OpenAI/Stripe/GitHub/generic-OpenAPI/generic-package adapters,
+OpenAPI normalization + stable fingerprints, a persistent idempotent
+registry with contract history, usage sites mapped to symbols, a
+dependency graph on the existing graph primitives, and a CLI. See
+`docs/dependency-discovery.md`.
+
+**M6 — Upstream change detection + consumer impact / blast radius.**
+Next; **not started.** Diff new upstream SDK versions/spec revisions
+against the registry's contract snapshots and walk usage sites into the
+existing code graph.
+
 ## Then — Advanced Verification
 
 **AA — Multi-Repository System Intelligence**

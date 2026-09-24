@@ -1,7 +1,7 @@
 # M4 (Ultra-Low-Cost Review Engine) + M5 (External Dependency Discovery + Contract Registry)
 
-Status: **plan written before code** (workflow step 2). Sections marked
-"RESULT" are filled in after implementation and validation.
+Status: plan written before code (workflow step 2); implementation and
+validation results are in the RESULT section below.
 
 Baseline: `main` @ `989567c` (Final beta-readiness pass). Branch:
 `feat/m4-m5-cost-engine-dependency-discovery`.
@@ -158,4 +158,83 @@ working review capabilities.
 
 ## RESULT
 
-(filled in after implementation)
+### R1. Deliberate deviation from the brief: TINY total = 2
+
+The suggested TINY ceiling of 1 total call would make a tiny PR's
+HIGH/security finding impossible to critic-verify, and the existing
+safety rule would then suppress it: cost saved by dropping a useful
+finding. Budgets are therefore split into a review-phase ceiling (TINY =
+**1 reviewer call**, as specified) plus a verification reserve only the
+critic can use. A clean tiny PR costs exactly 1 call. `{"tiny":1}`
+restores the strict policy (tested: finding suppressed, never published
+unverified). Totals: no_ai 0, tiny 2 (1+1), normal 2 (1+1), elevated 3
+(2+1), high_risk 5 (3+2).
+
+### R2. M4 cost benchmark (`evaluation_baselines/m4_cost_benchmark.*`)
+
+Fake reviewer, deterministic token estimates of the exact prompts,
+synthetic prices ($1/$4 per M tokens). Measures call shape/cost only.
+
+| scenario | tier | calls before -> after | critic | input tokens | findings |
+|---|---|---|---|---|---|
+| comment_only | no_ai | 1 -> 0 | 0 -> 0 | 2023 -> 0 | 0/0 |
+| docs_only | no_ai | 1 -> 0 | 0 -> 0 | 1742 -> 0 | 0/0 |
+| tiny_code | tiny | 1 -> 1 | 0 -> 0 | 1787 -> 1822 | 0/0 |
+| normal_correctness_bug | normal | 6 -> 1 | 1 -> 0 | 12064 -> 2906 | 1/1 |
+| medium_cross_module | elevated | 4 -> 1 | 0 -> 0 | 7537 -> 2478 | 0/0 |
+| auth_sensitive | high_risk | 3 -> 3 | 1 -> 1 | 5197 -> 5245 | 1/1 |
+| schema_migration | high_risk | 4 -> 2 | 0 -> 0 | 6969 -> 3938 | 0/0 |
+| public_api_change | elevated | 1 -> 1 | 0 -> 0 | 2032 -> 2067 | 0/0 |
+| test_only | tiny | 2 -> 1 | 0 -> 0 | 3579 -> 1927 | 0/0 |
+| exact_head_repeat | tiny | 0 -> 0 | 0 -> 0 | 0 -> 0 | 0/0 |
+
+Totals: 23 -> 10 provider calls, 42,930 -> 20,383 input tokens,
+$0.046 -> $0.022 (synthetic). Every target met, no finding lost.
+Exact-head reuse already existed pre-M4 (the "before" repeat is 0 too).
+`auth_sensitive` is cost-neutral, not cheaper: single pass + one security
+escalation + critic = the legacy two specialists + critic. An earlier
+draft also escalated Correctness on the same candidate (3 -> 4); it was
+removed because the single pass already covers correctness there.
+
+### R3. Deterministic beta-readiness quality guard (20-case profile, `--repeat 2`)
+
+| metric | before (main) | after (cost-aware) |
+|---|---|---|
+| expectation pass rate | 1.0 | 1.0 |
+| candidate recall | 1.0 | 1.0 |
+| accepted-finding recall | 1.0 | 1.0 |
+| false-positive rate | 0.0 | 0.0 |
+| false-negative rate | 0.0 | 0.0 |
+| critic rejection / false-negative rate | 0.0 / 0.0 | 0.0 / 0.0 |
+| repeated-run variance | 0.0 | 0.0 |
+| reviewer calls (sum over cases) | 84 | 22 |
+| critic calls (sum over cases) | 10 | 10 |
+
+The `specialist_fanout` arm run through the new code reproduces main's
+per-case call shape exactly. **This suite is an oracle-scripted
+pipeline-correctness benchmark: it proves plumbing, not real-model review
+quality.** The eval harness diffs whole fixture files as additions, so
+`beta-comment-only-change` still makes one call there; the true
+comment-only path is proven by the cost benchmark and integration tests.
+
+### R4. M5
+
+Detection: OpenAI, Stripe, GitHub (SDK + REST), generic OpenAPI (3.x and
+Swagger 2.0, local specs, path literals, server hosts, generated-client
+markers), generic declared packages (PyPI/npm/Go manifests; npm/yarn/
+pnpm/poetry/uv/Pipfile lockfiles). Registry migration
+`0034_external_dep_registry`. The mixed fixture yields openai:pypi (8
+sites, ==1.40.0, high), stripe:npm (6 sites, ^12.0.0 resolved 12.3.0,
+high), github:http (4 sites, medium), openapi:openapi.yaml (2 ops, 3
+sites), package:pypi:requests. The false-positive fixture yields nothing.
+Revision-id length (33 > alembic's 32) was caught on real Postgres and
+the id shortened.
+
+### R5. Validation
+
+ruff clean; `mypy . --strict` clean (692 files); single Alembic head;
+34/34 migrations on a brand-new Postgres; 0032<->0034 down/up round
+trip; full pytest with `PATCHFROG_REQUIRE_POSTGRES=1`: 2652 passed, 0 failed;
+both Docker images built, worker image registers 9/9 Celery tasks; regex secret scan over the full
+branch diff: 0 hits (tracked diff only -- it proves nothing about
+terminal/local exposure). No live provider call was made anywhere.

@@ -52,6 +52,9 @@ from patchfrog.cross_repo_intelligence.domain import (
     RepositoryRelationKind,
     RepositoryRelationProvenance,
 )
+from patchfrog.dependencies import DependencyInventory, discover_dependencies
+from patchfrog.dependencies.registry import DependencyRegistry, RegistryWriteResult
+from patchfrog.dependencies.report import inventory_to_dict, render_inventory_text
 from patchfrog.evaluation.beta_readiness import (
     compute_beta_readiness_metrics,
     load_beta_profile,
@@ -1950,6 +1953,54 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
         await engine.dispose()
 
 
+async def _persist_dependency_inventory(inventory: DependencyInventory, *, full_name: str) -> RegistryWriteResult:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        repository_id = await _upsert_cli_repository(session_factory, full_name=full_name)
+        async with session_factory() as session:
+            result = await DependencyRegistry().record_inventory(
+                session, repository_id=repository_id, inventory=inventory
+            )
+            await session.commit()
+        return result
+    finally:
+        await engine.dispose()
+
+
+def _run_dependencies_discover(args: argparse.Namespace) -> int:
+    """M5.8: offline and read-only unless ``--persist``. Never opens
+    secret-store-like files, never prints a value, makes no network or
+    provider call."""
+
+    root: Path = args.repository
+    if not root.is_dir():
+        print(f"error: not a directory: {root}", file=sys.stderr)
+        return 1
+    commit_sha: str | None = None
+    if (root / ".git").exists():
+        try:
+            commit_sha = run_git(["-C", str(root), "rev-parse", "HEAD"]).strip()
+        except GitError:
+            commit_sha = None
+    full_name = args.full_name or _default_full_name(root)
+    inventory = discover_dependencies(root, repository=full_name, commit_sha=commit_sha)
+    payload = inventory_to_dict(inventory)
+    if args.persist:
+        result = asyncio.run(_persist_dependency_inventory(inventory, full_name=full_name))
+        payload["registry"] = asdict(result)
+    if args.output:
+        Path(args.output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(render_inventory_text(inventory, show_all_packages=args.all), end="")
+        if args.persist:
+            print(f"registry: {payload['registry']}")
+    return 0
+
+
 def _run_eval_cost_benchmark(args: argparse.Namespace) -> int:
     """M4.10: never touches the configured database or any provider --
     every scenario runs on its own private in-memory SQLite database with
@@ -2416,6 +2467,27 @@ def main(argv: list[str] | None = None) -> int:
         help="Disallow real GitHub writes for --installation",
     )
 
+    dependencies_parser = subparsers.add_parser(
+        "dependencies",
+        help="M5: external API/SDK dependency discovery + contract registry (offline, never reads secret values)",
+    )
+    dependencies_sub = dependencies_parser.add_subparsers(dest="dependencies_command", required=True)
+    discover_parser = dependencies_sub.add_parser(
+        "discover", help="Discover external dependencies, usage sites and contract fingerprints in a repository"
+    )
+    discover_parser.add_argument("repository", type=Path, help="Path to a local repository checkout")
+    discover_parser.add_argument("--json", action="store_true", help="Print the machine-readable JSON inventory")
+    discover_parser.add_argument("--all", action="store_true", help="List every declared package, not only the first 10")
+    discover_parser.add_argument("--output", default=None, help="Also write the JSON inventory to this path")
+    discover_parser.add_argument(
+        "--persist",
+        action="store_true",
+        help="Record the inventory in the dependency/contract registry (requires DATABASE_URL)",
+    )
+    discover_parser.add_argument(
+        "--full-name", default=None, help="Repository identity for --persist, e.g. 'owner/repo' (default: directory name)"
+    )
+
     cross_repo_parser = subparsers.add_parser(
         "cross-repo",
         help=(
@@ -2605,6 +2677,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_telemetry_beta_summary(args)
     if args.command == "ops":
         return _run_ops(args)
+    if args.command == "dependencies" and args.dependencies_command == "discover":
+        return _run_dependencies_discover(args)
     if args.command == "cross-repo":
         return _run_cross_repo(args)
     if args.command == "eval":
