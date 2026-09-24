@@ -12,6 +12,7 @@ from pathlib import Path
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from patchfrog.review.cost_policy import ReviewStrategy, parse_tier_budgets
 from patchfrog.review.critic_policy import CriticFailurePolicy
 
 
@@ -157,6 +158,28 @@ class Settings(BaseSettings):
         default_factory=dict, alias="PATCHFROG_PROVIDER_RATE_LIMIT_RPM"
     )
 
+    # -- M4 Ultra-Low-Cost Review Engine (patchfrog.review.cost_policy) --
+    # Operator/deployment policy, never .patchfrog.yml: a repository can
+    # never buy itself a larger per-tier provider-call budget.
+
+    #: ``cost_aware`` (default): PR-level risk tier, zero-call NO_AI
+    #: path, one single-pass reviewer call, sequential reason-carrying
+    #: escalation. ``specialist_fanout``: the pre-M4 per-candidate
+    #: Correctness+Security fan-out.
+    review_strategy: str = Field(default="cost_aware", alias="PATCHFROG_REVIEW_STRATEGY")
+    #: Per-risk-tier provider-call ceilings merged over the defaults
+    #: (no_ai=0, tiny=1, normal=2, elevated=3, high_risk=5), e.g.
+    #: ``PATCHFROG_RISK_TIER_MAX_PROVIDER_CALLS={"normal":3}``. Always
+    #: additionally capped by PATCHFROG_MAX_PROVIDER_CALLS.
+    risk_tier_max_provider_calls: dict[str, int] = Field(
+        default_factory=dict, alias="PATCHFROG_RISK_TIER_MAX_PROVIDER_CALLS"
+    )
+    #: When true (default), a PR touching only generated/vendored paths
+    #: takes the zero-call path; when false those paths are reviewed.
+    review_exclude_generated_and_vendor: bool = Field(
+        default=True, alias="PATCHFROG_REVIEW_EXCLUDE_GENERATED_AND_VENDOR"
+    )
+
     # -- Public beta operational limits (patchfrog.ops) --
     # All optional with conservative defaults; never required for
     # startup, never a source of secrets. See docs/operations.md.
@@ -283,6 +306,17 @@ class Settings(BaseSettings):
     def _validate_review_hard_caps_positive(cls, value: int, info: ValidationInfo) -> int:
         if value <= 0:
             raise ValueError(f"{info.field_name} must be positive, got {value!r}")
+        return value
+
+    @field_validator("review_strategy")
+    @classmethod
+    def _validate_review_strategy(cls, value: str) -> str:
+        return ReviewStrategy(value.strip().lower()).value
+
+    @field_validator("risk_tier_max_provider_calls")
+    @classmethod
+    def _validate_risk_tier_budgets(cls, value: dict[str, int]) -> dict[str, int]:
+        parse_tier_budgets(value)
         return value
 
     @field_validator("review_max_estimated_cost_usd", "review_max_elapsed_seconds")

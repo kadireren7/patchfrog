@@ -50,6 +50,7 @@ from patchfrog.publishing.checks import (
     ReviewCheckState,
     ReviewCheckUpdate,
     github_check_publisher,
+    no_ai_check_detail,
 )
 from patchfrog.publishing.config_resolution import resolve_repository_publication_config
 from patchfrog.publishing.domain import (
@@ -165,7 +166,13 @@ async def _publish_review(
                     update=ReviewCheckUpdate(
                         state=check_state,
                         accepted_findings=len(findings),
-                        detail=result.errors[0] if result.errors else result.status.value,
+                        detail=(
+                            result.errors[0]
+                            if result.errors
+                            else no_ai_check_detail(run.no_ai_reason)
+                            if run.no_ai_reason
+                            else result.status.value
+                        ),
                         merge_readiness=readiness.decision if readiness is not None else None,
                     ),
                 )

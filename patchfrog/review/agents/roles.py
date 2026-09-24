@@ -26,3 +26,10 @@ class AgentRole(StrEnum):
 
     CORRECTNESS = "correctness"
     SECURITY = "security"
+    #: M4 single-pass reviewer (:mod:`patchfrog.review.single_pass`): one
+    #: structured call covering correctness, security, contracts,
+    #: regression risk and test implications for a whole batch of
+    #: candidates. Correctness/Security remain the *escalation*
+    #: specialists; a UNIFIED proposal goes through the identical
+    #: validation/critic/confidence pipeline as theirs.
+    UNIFIED = "unified"

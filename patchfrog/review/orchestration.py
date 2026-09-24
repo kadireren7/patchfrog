@@ -58,7 +58,7 @@ reserved never publishes anyway -- see :data:`CRITIC_BUDGET_EXHAUSTED`.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 import structlog
@@ -87,7 +87,12 @@ from patchfrog.review.domain import (
 )
 from patchfrog.review.effort import ReviewEffortDecision, ReviewEffortPolicy
 from patchfrog.review.effort_types import CriticExpectation
-from patchfrog.review.prompt import build_agent_prompt, build_critic_prompt
+from patchfrog.review.prompt import (
+    SinglePassTarget,
+    build_agent_prompt,
+    build_critic_prompt,
+    build_single_pass_prompt,
+)
 from patchfrog.review.provider import (
     LLMProvider,
     ProviderFatalError,
@@ -96,10 +101,18 @@ from patchfrog.review.provider import (
 )
 from patchfrog.review.retry import call_with_retry
 from patchfrog.review.schemas import REVIEW_RESPONSE_SCHEMA
+from patchfrog.review.single_pass import (
+    BatchCallResult,
+    BatchTarget,
+    attribute_finding,
+    dedupe_context_blocks,
+)
 from patchfrog.review.validation import (
     ResponseSchemaError,
     ValidationContext,
     parse_and_validate_response,
+    parse_findings,
+    validate_finding,
 )
 
 logger = structlog.get_logger(__name__)
@@ -300,6 +313,19 @@ class AgentOrchestrator:
         self._review_budget = review_budget
         self._critic_failure_policy = critic_failure_policy
 
+    @staticmethod
+    def _provider_for(role: AgentRole, providers: Mapping[AgentRole, LLMProvider]) -> LLMProvider | None:
+        """The single-pass UNIFIED role is served by the operator's
+        reviewer provider (the Correctness mapping) -- the router still
+        routes once per run; no role ever gets a provider the operator
+        did not configure."""
+
+        if role in providers:
+            return providers[role]
+        if role is AgentRole.UNIFIED:
+            return providers.get(AgentRole.CORRECTNESS) or next(iter(providers.values()), None)
+        return None
+
     async def review_candidate(
         self,
         evidence: CandidateEvidencePackage,
@@ -456,7 +482,56 @@ class AgentOrchestrator:
                 executed_provider_by_role=executed_provider_by_role,
             )
 
-        proposals_t = tuple(proposals)
+        return await self.verify_proposals(
+            evidence,
+            proposals=tuple(proposals),
+            effort_decision=effort_decision,
+            usage_by_role=usage_by_role,
+            failed_roles=tuple(failed_roles),
+            calls_by_role=calls_by_role,
+            retries_consumed=retries_consumed,
+            reviewer_latency_ms=reviewer_latency_ms,
+            fallback_used_roles=tuple(fallback_used_roles),
+            executed_provider_by_role=executed_provider_by_role,
+            min_final_confidence=min_final_confidence,
+            max_total_input_tokens=max_total_input_tokens,
+            budget_lock=budget_lock,
+            budget_state=budget_state,
+            log=log,
+            allow_post_proposal_escalation=allow_post_proposal_escalation,
+            executable_verifier=executable_verifier,
+        )
+
+    async def verify_proposals(
+        self,
+        evidence: CandidateEvidencePackage,
+        *,
+        proposals: tuple[AgentProposal, ...],
+        effort_decision: ReviewEffortDecision,
+        usage_by_role: dict[AgentRole, TokenUsage],
+        failed_roles: tuple[AgentRole, ...],
+        calls_by_role: dict[AgentRole, int],
+        retries_consumed: int,
+        reviewer_latency_ms: float,
+        fallback_used_roles: tuple[AgentRole, ...],
+        executed_provider_by_role: dict[AgentRole, str],
+        min_final_confidence: Confidence,
+        max_total_input_tokens: int,
+        budget_lock: asyncio.Lock,
+        budget_state: dict[str, int],
+        log: structlog.stdlib.BoundLogger,
+        allow_post_proposal_escalation: bool = True,
+        executable_verifier: Callable[[], Awaitable[ExecutableVerificationReport]] | None = None,
+    ) -> CandidateOrchestrationResult:
+        """Everything that happens to one candidate's proposals *after*
+        the reviewer call(s): cross-role grouping, post-proposal
+        escalation, tier-aware critic verification and contradiction
+        resolution. Shared, unchanged, by the per-candidate specialist
+        fan-out (:meth:`review_candidate`) and by the M4 single-pass path
+        (:mod:`patchfrog.review.single_pass`) -- a single-pass proposal
+        is never verified by a weaker path than a specialist one."""
+
+        proposals_t = proposals
         grouping = group_cross_role(proposals_t)
         proposals_t = grouping.proposals
 
@@ -509,18 +584,125 @@ class AgentOrchestrator:
             reviewer_usage=reviewer_usage,
             critic_usage=critic_usage,
             usage_by_role=usage_by_role,
-            failed_roles=tuple(failed_roles),
+            failed_roles=failed_roles,
             calls_by_role=calls_by_role,
             critic_calls=critic_calls,
             retries_consumed=retries_consumed,
             effort_decision=effort_decision,
             reviewer_latency_ms=reviewer_latency_ms,
             executable_verification_report=verification_report,
-            fallback_used_roles=tuple(fallback_used_roles),
+            fallback_used_roles=fallback_used_roles,
             executed_provider_by_role=executed_provider_by_role,
             critic_fallback_used=critic_fallback_used,
             critic_executed_provider=critic_executed_provider,
         )
+
+    async def review_batch(
+        self,
+        role: AgentRole,
+        targets: Sequence[BatchTarget],
+        *,
+        max_output_tokens: int,
+        max_retries: int,
+        max_total_input_tokens: int,
+        budget_lock: asyncio.Lock,
+        budget_state: dict[str, int],
+        log: structlog.stdlib.BoundLogger,
+    ) -> BatchCallResult:
+        """M4: ONE structured provider call for a batch of candidates
+        (the single pass, or a batched specialist escalation). Uses the
+        same bounded retry, one-hop fallback and atomic budget
+        reservation as :meth:`_call_role` -- only the prompt (shared,
+        de-duplicated context) and the validation context (the union of
+        exactly what this one call was shown) differ. Every returned
+        finding is then attributed to exactly one target
+        (:func:`patchfrog.review.single_pass.attribute_finding`)."""
+
+        result = BatchCallResult(role=role)
+        if not targets:
+            return result
+        context_blocks = dedupe_context_blocks(targets)
+        prompt = build_single_pass_prompt(
+            role,
+            targets=[
+                SinglePassTarget(
+                    candidate=t.evidence.candidate,
+                    diff_excerpt=t.evidence.diff_excerpt,
+                    static_findings=t.evidence.static_findings,
+                    intelligence_sections=t.evidence.intelligence_sections(),
+                )
+                for t in targets
+            ],
+            context_blocks=context_blocks,
+        )
+        estimate = estimate_tokens(prompt[0]) + estimate_tokens(prompt[1])
+        result.estimated_input_tokens = estimate
+        async with budget_lock:
+            if budget_state["used_input_tokens"] + estimate > max_total_input_tokens:
+                log.warning("review_budget_exhausted", stage="single_pass", role=role.value)
+                result.budget_exhausted = True
+                return result
+            budget_state["used_input_tokens"] += estimate
+
+        union = ValidationContext(
+            allowed_file_paths=frozenset().union(*(t.evidence.allowed_file_paths for t in targets)),
+            context_text="\n\n".join(context_blocks),
+            diff_excerpt="\n".join(t.evidence.diff_excerpt for t in targets),
+        )
+
+        def _parse(raw_json: str) -> list[ValidatedFinding]:
+            return [validate_finding(f, context=union) for f in parse_findings(raw_json)]
+
+        actual_input = 0
+        calls_before = (await self._review_budget.snapshot()).provider_calls if self._review_budget else 0
+        try:
+            validated, usage, retries_used, latency_ms, used_fallback, served_by = await self._call_role(
+                role,
+                prompt,
+                max_output_tokens=max_output_tokens,
+                max_retries=max_retries,
+                validation_context=union,
+                role_estimate=estimate,
+                budget_lock=budget_lock,
+                budget_state=budget_state,
+                max_total_input_tokens=max_total_input_tokens,
+                parse_response=_parse,
+            )
+        except BudgetExceeded as exc:
+            # A retry/fallback denied by the budget still means the first
+            # attempt(s) really happened -- report them as attempted.
+            calls_after = (await self._review_budget.snapshot()).provider_calls if self._review_budget else 0
+            result.attempted = calls_after > calls_before
+            result.retries_used = max(0, calls_after - calls_before - 1)
+            result.budget_exhausted = True
+            result.error = f"review budget exhausted: {exc.reason.value}"
+            log.warning("review_budget_exhausted", stage="single_pass_call", reason=exc.reason.value)
+        except (ProviderFatalError, ProviderTransientError, ResponseSchemaError) as exc:
+            result.attempted = True
+            result.failed = True
+            result.error = f"{role.value} batch call failed: {type(exc).__name__}"
+            log.warning(
+                "single_pass_call_failed",
+                role=role.value,
+                error_type=type(exc).__name__,
+                provider_failure_kind=getattr(exc, "kind", None),
+            )
+        else:
+            result.attempted = True
+            result.usage = usage
+            result.retries_used = retries_used
+            result.latency_ms = latency_ms
+            result.used_fallback = used_fallback
+            result.served_by = served_by
+            actual_input = usage.input_tokens
+            for v in validated:
+                result.per_target.setdefault(attribute_finding(v.finding, targets), []).append(v)
+        finally:
+            async with budget_lock:
+                budget_state["used_input_tokens"] = max(
+                    0, budget_state["used_input_tokens"] - estimate + actual_input
+                )
+        return result
 
     async def _call_role(
         self,
@@ -534,8 +716,15 @@ class AgentOrchestrator:
         budget_lock: asyncio.Lock,
         budget_state: dict[str, int],
         max_total_input_tokens: int,
+        parse_response: Callable[[str], list[ValidatedFinding]] | None = None,
     ) -> tuple[list[ValidatedFinding], TokenUsage, int, float, bool, str]:
-        """Returns ``(validated, usage, retries_used, latency_ms,
+        """``parse_response`` (M4 single-pass): replaces the default
+        ``parse_and_validate_response(raw, context=validation_context)``
+        -- a batched call validates against the union of everything it
+        was shown. It still runs *inside* the attempt, so a malformed
+        batched response is fallback-eligible exactly like a single one.
+
+        Returns ``(validated, usage, retries_used, latency_ms,
         used_fallback, served_by_provider)`` -- validation now happens
         *inside* this method (previously the caller's own, separate
         ``parse_and_validate_response`` call) so a schema-invalid
@@ -603,7 +792,11 @@ class AgentOrchestrator:
             if reservation is not None:
                 assert self._review_budget is not None
                 await self._review_budget.reconcile(reservation, result.usage)
-            validated = parse_and_validate_response(result.raw_json, context=validation_context)
+            validated = (
+                parse_response(result.raw_json)
+                if parse_response is not None
+                else parse_and_validate_response(result.raw_json, context=validation_context)
+            )
             usage = TokenUsage(
                 input_tokens=result.usage.input_tokens,
                 output_tokens=result.usage.output_tokens,
@@ -611,14 +804,15 @@ class AgentOrchestrator:
             )
             return validated, usage, result.latency_ms, provider.identity.provider
 
-        primary = self._reviewer_providers[role]
+        primary = self._provider_for(role, self._reviewer_providers)
+        assert primary is not None
         try:
             (validated, usage, latency_ms, served_by), retries_used = await call_with_retry(
                 lambda: _attempt(primary), max_retries=max_retries
             )
             return validated, usage, retries_used, latency_ms, False, served_by
         except (ProviderTransientError, ResponseSchemaError):
-            fallback = (self._reviewer_fallback_providers or {}).get(role)
+            fallback = self._provider_for(role, self._reviewer_fallback_providers or {})
             if fallback is None:
                 raise
             async with budget_lock:

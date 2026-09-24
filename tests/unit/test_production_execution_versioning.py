@@ -41,11 +41,14 @@ def test_executable_verification_version_unchanged() -> None:
 
 
 def test_review_prompt_version_unchanged() -> None:
-    assert REVIEW_PROMPT_VERSION == _PRE_S6_PROMPT_VERSION
+    # S6 itself changed no prompt; a later milestone (M4, single-pass
+    # prompt) legitimately bumped it -- see test_m4_cost_engine_versioning.
+    assert REVIEW_PROMPT_VERSION >= _PRE_S6_PROMPT_VERSION
 
 
 def test_telemetry_schema_version_unchanged() -> None:
-    assert TELEMETRY_SCHEMA_VERSION == _PRE_S6_TELEMETRY_SCHEMA_VERSION
+    # S6 itself added no telemetry field; M4 later added the cost section.
+    assert TELEMETRY_SCHEMA_VERSION >= _PRE_S6_TELEMETRY_SCHEMA_VERSION
 
 
 def test_quality_cost_policy_version_unchanged() -> None:

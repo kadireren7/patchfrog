@@ -127,6 +127,15 @@ candidates_skipped_budget_total = Counter(
 critic_calls_total = Counter(
     "patchfrog_critic_calls_total", "Critic verification calls made across all candidates"
 )
+# M4 Ultra-Low-Cost Review Engine. ``risk_tier`` and ``reason`` are
+# closed, low-cardinality enums (patchfrog.change_risk.ChangeRiskTier,
+# patchfrog.review.cost_policy.EscalationReason) -- same bar as above.
+reviews_by_risk_tier_total = Counter(
+    "patchfrog_reviews_by_risk_tier_total", "Completed review runs by M4 change/risk tier", ["risk_tier"]
+)
+review_escalations_total = Counter(
+    "patchfrog_review_escalations_total", "Sequential specialist escalation calls by reason", ["reason"]
+)
 
 
 def start_worker_metrics_server(port: int) -> bool:

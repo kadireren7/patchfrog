@@ -73,6 +73,12 @@ class CostBudget:
     max_output_tokens: int
     max_estimated_cost_usd: float | None = None
     max_elapsed_seconds: float | None = None
+    #: M4: optional ceiling on *review-phase* calls (reviewer, escalation
+    #: specialists, and their retries/fallbacks) inside
+    #: ``max_provider_calls``. The remainder is reserved for verification
+    #: (critic) calls, so review work can never starve a mandatory critic
+    #: verification. ``None`` = no separate review-phase ceiling.
+    max_review_calls: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +144,10 @@ class ReviewBudget:
         self._output_tokens = 0
         self._estimated_cost_usd = 0.0
         self._termination_reason: BudgetTerminationReason | None = None
+        #: A review-phase ceiling hit is recorded but *not* sticky:
+        #: verification calls may still use the reserved remainder.
+        self._review_phase_denied: BudgetTerminationReason | None = None
+        self._review_calls = 0
         self._by_model: dict[str, _MutableMetric] = {}
 
     def _now(self) -> float:
@@ -159,7 +169,13 @@ class ReviewBudget:
         estimated_input_tokens: int,
         estimated_output_tokens: int,
         is_retry: bool,
+        verification: bool = False,
     ) -> CallReservation:
+        """``verification=True`` marks a critic call: it may use the
+        calls reserved for verification (see
+        :attr:`CostBudget.max_review_calls`); every other call is a
+        review-phase call."""
+
         async with self._lock:
             if self._termination_reason is not None:
                 raise BudgetExceeded(self._termination_reason)
@@ -168,6 +184,13 @@ class ReviewBudget:
                 self._deny(BudgetTerminationReason.ELAPSED_TIME)
             if self._provider_calls + 1 > self.limits.max_provider_calls:
                 self._deny(BudgetTerminationReason.PROVIDER_CALLS)
+            if (
+                not verification
+                and self.limits.max_review_calls is not None
+                and self._review_calls + 1 > self.limits.max_review_calls
+            ):
+                self._review_phase_denied = BudgetTerminationReason.PROVIDER_CALLS
+                raise BudgetExceeded(BudgetTerminationReason.PROVIDER_CALLS)
             if is_retry and self._retry_attempts + 1 > self.limits.max_retry_attempts:
                 self._deny(BudgetTerminationReason.RETRIES)
             if self._input_tokens + estimated_input_tokens > self.limits.max_input_tokens:
@@ -185,6 +208,7 @@ class ReviewBudget:
                 self._deny(BudgetTerminationReason.ESTIMATED_COST)
 
             self._provider_calls += 1
+            self._review_calls += int(not verification)
             self._retry_attempts += int(is_retry)
             self._input_tokens += estimated_input_tokens
             self._output_tokens += estimated_output_tokens
@@ -254,7 +278,7 @@ class ReviewBudget:
                 output_tokens=self._output_tokens,
                 estimated_cost_usd=self._estimated_cost_usd,
                 elapsed_seconds=max(0.0, self._now() - self._started_at),
-                termination_reason=self._termination_reason,
+                termination_reason=self._termination_reason or self._review_phase_denied,
                 by_model=metrics,
             )
 

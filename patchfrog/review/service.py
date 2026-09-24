@@ -28,7 +28,7 @@ import shutil
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,6 +36,7 @@ from pathlib import Path
 import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from patchfrog.analysis.domain import FindingCategory, Severity
 from patchfrog.analysis.queries import AnalysisQueryService
 from patchfrog.change_intelligence.change_map import render_change_map, select_change_map_unit
 from patchfrog.change_intelligence.domain import ChangeIntelligenceReport, ExpectedCompanionChange
@@ -44,9 +45,19 @@ from patchfrog.change_intelligence.service import build_change_intelligence_repo
 from patchfrog.change_intelligence.telemetry import (
     summarize_for_persistence as summarize_change_intelligence,
 )
+from patchfrog.change_risk import (
+    ChangeRiskClassification,
+    ChangeRiskTier,
+    CommentLineEvidence,
+    classify_change,
+    python_comment_lines,
+    python_files_needing_comment_evidence,
+)
 from patchfrog.context.config import AdaptiveContextConfig, ContextConfig
 from patchfrog.context.domain import ContextTargetType
 from patchfrog.context.service import ContextService
+from patchfrog.context.tokens import estimate_tokens
+from patchfrog.contract_intelligence.base_fetch import fetch_base_file_contents
 from patchfrog.contract_intelligence.domain import ContractIntelligenceReport
 from patchfrog.contract_intelligence.evidence import (
     evidence_text_for_candidate as contract_evidence_text_for_candidate,
@@ -166,6 +177,13 @@ from patchfrog.review.budget import (
 from patchfrog.review.candidates import ReviewCandidateGenerator, summarize_static_finding
 from patchfrog.review.confidence import aggregate, meets_minimum
 from patchfrog.review.config import MalformedReviewConfigError, ReviewConfig, ReviewModelIdentity
+from patchfrog.review.cost_policy import (
+    TIER_ALLOWS_CONTEXT_EXPANSION,
+    TIER_CONTEXT_FRACTION,
+    ReviewCostPolicy,
+    ReviewCostTelemetry,
+    ReviewStrategy,
+)
 from patchfrog.review.critic import CriticService
 from patchfrog.review.dedup import deduplicate
 from patchfrog.review.domain import (
@@ -186,9 +204,18 @@ from patchfrog.review.orchestration import (
     CRITIC_BUDGET_EXHAUSTED,
     CRITIC_FAILURE_HOLD,
     AgentOrchestrator,
+    CandidateOrchestrationResult,
 )
+from patchfrog.review.prompt import SinglePassTarget, build_single_pass_prompt
 from patchfrog.review.provider import LLMProvider
 from patchfrog.review.redaction import redact_secrets
+from patchfrog.review.single_pass import (
+    BatchCallResult,
+    BatchTarget,
+    decide_escalations,
+    dedupe_context_blocks,
+    plan_batches,
+)
 from patchfrog.routing.domain import ReviewRoutePlan
 from patchfrog.test_intelligence.domain import TestIntelligenceReport
 from patchfrog.test_intelligence.evidence import (
@@ -380,6 +407,9 @@ class _CandidateOutcome:
         "candidate",
         "completed",
         "context_bundle_id",
+        "context_expanded_tokens",
+        "context_expansion_reasons",
+        "context_initial_tokens",
         "context_text",
         "critic_calls",
         "critic_usage",
@@ -424,6 +454,21 @@ class _CandidateOutcome:
         #: happened for this candidate (see AgentOrchestrator._critique's
         #: own docstring for exactly when).
         self.executable_verification_report: ExecutableVerificationReport | None = None
+        #: M4.6 context-cost metrics (estimated tokens, never text).
+        self.context_initial_tokens = 0
+        self.context_expanded_tokens = 0
+        self.context_expansion_reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedCandidate:
+    """Everything needed to make provider calls for one candidate, built
+    before any provider call: redacted evidence, the finalized effort
+    decision, and the lazily-invoked executable verifier."""
+
+    evidence: CandidateEvidencePackage
+    effort_decision: ReviewEffortDecision
+    verifier: Callable[[], Awaitable[ExecutableVerificationReport]]
 
 
 class PullRequestReviewService:
@@ -441,8 +486,21 @@ class PullRequestReviewService:
         verifier_dispatcher: VerifierDispatcher | None = None,
         verification_snapshot_root: str | None = None,
         pricing_catalog: PricingCatalog | None = None,
+        cost_policy: ReviewCostPolicy | None = None,
     ) -> None:
-        """``route_plan`` (Milestone U, Model Router): when given, its own
+        """``cost_policy`` (M4, :mod:`patchfrog.review.cost_policy`): when
+        given, the run is classified by the deterministic PR-level
+        change/risk classifier and executed per that policy -- with
+        ``ReviewStrategy.COST_AWARE`` that means a zero-call NO_AI path,
+        per-tier provider-call ceilings, one single-pass reviewer call per
+        candidate batch and sequential, reason-carrying escalation. Every
+        production entry point (Celery task, CLI, evaluation harness)
+        passes ``ReviewCostPolicy.from_settings(settings)``. ``None`` (the
+        constructor default, kept for backward compatibility of this
+        class's API and its existing tests) is the exact pre-M4
+        per-candidate specialist fan-out, with no risk classification.
+
+        ``route_plan`` (Milestone U, Model Router): when given, its own
         ``reviewer_providers``/``critic_provider`` govern every provider
         call this run makes, and ``reviewer_provider``/``critic_provider``
         above are ignored entirely (never silently merged) -- see
@@ -501,6 +559,7 @@ class PullRequestReviewService:
         self._verifier_dispatcher = verifier_dispatcher
         self._verification_snapshot_root = verification_snapshot_root
         self._pricing_catalog = pricing_catalog or PricingCatalog()
+        self._cost_policy = cost_policy
         self._queries = query_service or RepositoryQueryService()
         self._candidates = candidate_generator or ReviewCandidateGenerator(query_service=self._queries)
         self._context_service = context_service or ContextService(session_factory=session_factory)
@@ -533,6 +592,7 @@ class PullRequestReviewService:
         title: str | None = None,
         body: str | None = None,
         previous_generation_ancestry_verified: bool = False,
+        force_review: bool = False,
     ) -> ReviewRunSummary:
         """Review a repository already checked out on disk (CLI / dogfood
         use). Context is built against the same local checkout via
@@ -586,6 +646,12 @@ class PullRequestReviewService:
         ``None`` (the default) is "Phase 8 doesn't exist" behavior --
         identical to today's per-candidate budget-derived config.
 
+        ``force_review`` (M4.7): bypass exact-head reuse for this one call
+        -- the run gets a fresh, never-reused identity (its config
+        fingerprint is salted with a one-off nonce) and is recorded as
+        ``forced``. Default ``False``: an identical exact-head rerun
+        returns the stored run with zero provider calls.
+
         ``previous_generation_ancestry_verified`` (Trajectory Intelligence,
         :mod:`patchfrog.trajectory_intelligence`) is Phase 7's own
         already-computed answer to "is the PR's latest persisted review
@@ -614,6 +680,7 @@ class PullRequestReviewService:
             title=title,
             body=body,
             previous_generation_ancestry_verified=previous_generation_ancestry_verified,
+            force_review=force_review,
         )
 
     async def review_pull_request(
@@ -634,6 +701,7 @@ class PullRequestReviewService:
         title: str | None = None,
         body: str | None = None,
         previous_generation_ancestry_verified: bool = False,
+        force_review: bool = False,
     ) -> ReviewRunSummary:
         """Review a repository fetched from ``clone_url`` (production /
         Celery-task use). ``config`` is expected to already be resolved by
@@ -658,6 +726,7 @@ class PullRequestReviewService:
             title=title,
             previous_generation_ancestry_verified=previous_generation_ancestry_verified,
             body=body,
+            force_review=force_review,
         )
 
     async def _require_matching_index(self, *, repository_id: uuid.UUID, commit_sha: str) -> uuid.UUID:
@@ -683,6 +752,7 @@ class PullRequestReviewService:
         title: str | None = None,
         body: str | None = None,
         previous_generation_ancestry_verified: bool = False,
+        force_review: bool = False,
     ) -> ReviewRunSummary:
         start = time.monotonic()
         log = logger.bind(repository_id=str(repository_id), commit_sha=commit_sha)
@@ -696,9 +766,16 @@ class PullRequestReviewService:
             reviewer_model=self._reviewer_provider.identity.model,
             critic_provider=(self._critic_provider.identity.provider if self._critic_provider else None),
             critic_model=(self._critic_provider.identity.model if self._critic_provider else None),
+            cost_policy_fingerprint=self._cost_policy.fingerprint() if self._cost_policy is not None else None,
         )
         model_fingerprint = model_identity.fingerprint()
         config_fingerprint = config.fingerprint()
+        if force_review:
+            # M4.7: an explicit force-review must never be satisfied by (or
+            # later satisfy) exact-head reuse -- a one-off salted identity.
+            config_fingerprint = hashlib.sha256(
+                f"{config_fingerprint}:force_review:{uuid.uuid4()}".encode()
+            ).hexdigest()
 
         async with self._session_factory() as session:
             run, is_new = await self._run_repo.get_or_create_running(
@@ -746,6 +823,7 @@ class PullRequestReviewService:
                 review_started_at=run.started_at,
                 pull_request_id=pull_request_id,
                 previous_generation_ancestry_verified=previous_generation_ancestry_verified,
+                force_review=force_review,
             )
         except Exception as exc:
             async with self._session_factory() as session:
@@ -781,7 +859,39 @@ class PullRequestReviewService:
         review_started_at: datetime | None = None,
         pull_request_id: uuid.UUID | None = None,
         previous_generation_ancestry_verified: bool = False,
+        force_review: bool = False,
     ) -> ReviewRunSummary:
+        # M4.1/M4.2: deterministic PR-level change/risk classification,
+        # before anything else. A NO_AI change (docs/comments/excluded
+        # generated or vendored files/lockfiles only) never reaches a
+        # provider: the run is still created and persisted SUCCEEDED with
+        # its reason, so the check/publication lifecycle runs unchanged.
+        classification: ChangeRiskClassification | None = None
+        cost_aware = self._cost_policy is not None and self._cost_policy.strategy is ReviewStrategy.COST_AWARE
+        comment_evidence: CommentLineEvidence = {}
+        if self._cost_policy is not None:
+            if cost_aware:
+                comment_evidence = await _python_comment_evidence(
+                    diff_files, commit_sha=commit_sha, base_sha=base_sha, local=local, context_kwargs=context_kwargs
+                )
+            classification = classify_change(
+                diff_files, policy=self._cost_policy.risk_policy, comment_lines=comment_evidence
+            )
+            log.info("review_change_classified", **classification.to_dict())
+            if cost_aware and classification.tier is ChangeRiskTier.NO_AI:
+                return await self._persist_no_ai_run(
+                    run_id=run_id,
+                    repository_id=repository_id,
+                    commit_sha=commit_sha,
+                    config_fingerprint=config_fingerprint,
+                    model_fingerprint=model_fingerprint,
+                    incremental_context_fingerprint=incremental_context_fingerprint,
+                    classification=classification,
+                    start=start,
+                    log=log,
+                    force_review=force_review,
+                )
+
         async with self._session_factory() as session:
             static_findings = []
             latest_analysis = await self._analysis_runs.get_latest_succeeded_for_commit(
@@ -800,6 +910,14 @@ class PullRequestReviewService:
                 static_findings=static_findings,
                 max_candidates=config.max_candidates,
             )
+
+            if self._cost_policy is not None and _has_static_high_risk_finding(candidates, static_findings):
+                classification = classify_change(
+                    diff_files,
+                    policy=self._cost_policy.risk_policy,
+                    static_high_risk_finding=True,
+                    comment_lines=comment_evidence,
+                )
 
             # Change Intelligence Foundation (patchfrog.change_intelligence):
             # computed once per run, on the full pre-narrowing candidate set
@@ -1056,14 +1174,24 @@ class PullRequestReviewService:
 
         budget_lock = asyncio.Lock()
         budget_state = {"used_input_tokens": 0}
+        max_provider_calls = config.max_provider_calls
+        max_review_calls: int | None = None
+        if cost_aware and classification is not None and self._cost_policy is not None:
+            # M4.8: the per-risk-tier ceiling is applied to the one
+            # existing ledger, so reviewer calls, retries, fallbacks and
+            # critic calls all count against it. Inside it, review-phase
+            # work is capped so a mandatory critic can never be starved.
+            max_provider_calls = min(max_provider_calls, self._cost_policy.provider_call_budget(classification.tier))
+            max_review_calls = min(max_provider_calls, self._cost_policy.review_call_budget(classification.tier))
         review_budget = ReviewBudget(
             CostBudget(
-                max_provider_calls=config.max_provider_calls,
+                max_provider_calls=max_provider_calls,
                 max_retry_attempts=config.max_retry_attempts,
                 max_input_tokens=config.max_total_input_tokens,
                 max_output_tokens=config.max_total_output_tokens,
                 max_estimated_cost_usd=config.max_estimated_cost_usd,
                 max_elapsed_seconds=config.max_elapsed_seconds,
+                max_review_calls=max_review_calls,
             ),
             pricing=self._pricing_catalog,
         )
@@ -1114,41 +1242,55 @@ class PullRequestReviewService:
             critic_failure_policy=config.critic_failure_policy,
         )
 
+        candidate_kwargs: dict[str, object] = {
+            "run_id": run_id,
+            "repository_id": repository_id,
+            "repository_full_name": repository_full_name,
+            "commit_sha": commit_sha,
+            "diff_files": diff_files,
+            "config": config,
+            "static_by_id": static_by_id,
+            "context_kwargs": context_kwargs,
+            "local": local,
+            "budget_lock": budget_lock,
+            "budget_state": budget_state,
+            "log": log,
+            "context_config_override": context_config_override,
+            "change_intelligence_report": change_intelligence_report,
+            "contract_intelligence_report": contract_intelligence_report,
+            "intent_verification_report": intent_verification_report,
+            "test_intelligence_report": test_intelligence_report,
+            "historical_regression_report": historical_regression_report,
+            "repository_learnings_report": repository_learnings_report,
+            "trajectory_report": trajectory_report,
+            "cross_pr_report": cross_pr_report,
+            "cross_repo_report": cross_repo_report,
+            "combined_companions": combined_companions,
+            "verification_budget": verification_budget,
+            "staged_artifact": staged_artifact,
+        }
+
         async def _process(outcome: _CandidateOutcome) -> None:
             async with semaphore:
-                await self._review_candidate(
-                    outcome,
-                    run_id=run_id,
-                    repository_id=repository_id,
-                    repository_full_name=repository_full_name,
-                    commit_sha=commit_sha,
-                    diff_files=diff_files,
-                    config=config,
-                    static_by_id=static_by_id,
-                    context_kwargs=context_kwargs,
-                    local=local,
-                    budget_lock=budget_lock,
-                    budget_state=budget_state,
-                    log=log,
-                    context_config_override=context_config_override,
-                    orchestrator=orchestrator,
-                    change_intelligence_report=change_intelligence_report,
-                    contract_intelligence_report=contract_intelligence_report,
-                    intent_verification_report=intent_verification_report,
-                    test_intelligence_report=test_intelligence_report,
-                    historical_regression_report=historical_regression_report,
-                    repository_learnings_report=repository_learnings_report,
-                    trajectory_report=trajectory_report,
-                    cross_pr_report=cross_pr_report,
-                    cross_repo_report=cross_repo_report,
-                    combined_companions=combined_companions,
-                    verification_budget=verification_budget,
-                    staged_artifact=staged_artifact,
-                )
+                await self._review_candidate(outcome, orchestrator=orchestrator, **candidate_kwargs)  # type: ignore[arg-type]
                 outcome.completed = True
 
+        escalation_reasons: list[str] = []
+
         try:
-            work = asyncio.gather(*(_process(o) for o in outcomes))
+            work = (
+                self._run_cost_aware(
+                    outcomes,
+                    classification=classification,
+                    orchestrator=orchestrator,
+                    review_budget=review_budget,
+                    semaphore=semaphore,
+                    escalation_reasons=escalation_reasons,
+                    candidate_kwargs=candidate_kwargs,
+                )
+                if cost_aware and classification is not None
+                else asyncio.gather(*(_process(o) for o in outcomes))
+            )
             try:
                 if config.max_elapsed_seconds is None:
                     await work
@@ -1214,6 +1356,9 @@ class PullRequestReviewService:
         )
 
         duration_ms = (time.monotonic() - start) * 1000
+        cost_telemetry = self._cost_telemetry(
+            classification, escalation_reasons=escalation_reasons, outcomes=outcomes, forced=force_review
+        )
 
         async with self._session_factory() as session:
             existing = await self._run_repo.claim_for_write(
@@ -1474,6 +1619,7 @@ class PullRequestReviewService:
                     executable_verification_reports, version=EXECUTABLE_VERIFICATION_VERSION
                 ),
                 budget=budget_snapshot,
+                cost_telemetry=cost_telemetry,
             )
             await session.commit()
 
@@ -1496,7 +1642,7 @@ class PullRequestReviewService:
             ),
         )
 
-        return ReviewRunSummary(
+        summary = ReviewRunSummary(
             run_id=final_run.id,
             status=run_status,
             candidate_count=len(outcomes),
@@ -1519,6 +1665,311 @@ class PullRequestReviewService:
             retries_consumed=retries_total,
             reviewer_latency_ms=reviewer_latency_ms_total,
             budget=budget_snapshot,
+        )
+        return _with_cost_telemetry(summary, cost_telemetry)
+
+    async def _run_cost_aware(
+        self,
+        outcomes: list[_CandidateOutcome],
+        *,
+        classification: ChangeRiskClassification,
+        orchestrator: AgentOrchestrator,
+        review_budget: ReviewBudget,
+        semaphore: asyncio.Semaphore,
+        escalation_reasons: list[str],
+        candidate_kwargs: dict[str, object],
+    ) -> None:
+        """M4.3/M4.4/M4.5 execution for one run (``ReviewStrategy.COST_AWARE``).
+
+        1. Prepare every candidate (context, redaction, evidence, effort
+           decision) -- no provider calls; bounded concurrency.
+        2. ONE single-pass UNIFIED call per batch of prepared candidates,
+           batches run sequentially.
+        3. Sequential, reason-carrying specialist escalation, only for
+           ELEVATED/HIGH_RISK runs and only while the tier budget can
+           still afford a critic call afterwards.
+        4. Per candidate, the *unchanged* post-proposal pipeline
+           (:meth:`AgentOrchestrator.verify_proposals`): cross-role
+           grouping, escalation of the effort decision, on-demand critic
+           (``CriticSelectionPolicy`` + ``CriticExpectation``),
+           contradiction resolution -- then confidence aggregation.
+
+        Budget exhaustion anywhere degrades to the existing
+        skipped/suppressed/PARTIAL semantics, never to a silent clean run.
+        """
+
+        config = candidate_kwargs["config"]
+        assert isinstance(config, ReviewConfig)
+        log = candidate_kwargs["log"]
+        budget_lock = candidate_kwargs["budget_lock"]
+        budget_state = candidate_kwargs["budget_state"]
+        assert isinstance(budget_lock, asyncio.Lock)
+        assert isinstance(budget_state, dict)
+        assert self._cost_policy is not None
+        run_tier = classification.tier
+
+        prepared: dict[int, _PreparedCandidate] = {}
+
+        async def _prepare(key: int, outcome: _CandidateOutcome) -> None:
+            async with semaphore:
+                result = await self._prepare_candidate(
+                    outcome, run_risk_tier=run_tier, **candidate_kwargs  # type: ignore[arg-type]
+                )
+            if result is None:
+                outcome.completed = True
+            else:
+                prepared[key] = result
+
+        await asyncio.gather(*(_prepare(i, o) for i, o in enumerate(outcomes)))
+
+        targets = [BatchTarget(key=k, evidence=prepared[k].evidence) for k in sorted(prepared)]
+        if not targets:
+            return
+
+        def _estimate(batch: Sequence[BatchTarget]) -> int:
+            system_prompt, user_prompt = build_single_pass_prompt(
+                AgentRole.UNIFIED,
+                targets=[
+                    SinglePassTarget(
+                        candidate=t.evidence.candidate,
+                        diff_excerpt=t.evidence.diff_excerpt,
+                        static_findings=t.evidence.static_findings,
+                        intelligence_sections=t.evidence.intelligence_sections(),
+                    )
+                    for t in batch
+                ],
+                context_blocks=dedupe_context_blocks(batch),
+            )
+            return estimate_tokens(system_prompt) + estimate_tokens(user_prompt)
+
+        def _output_budget(batch_size: int) -> int:
+            return max(1, int(config.max_output_tokens_per_candidate * 0.5 * min(batch_size, 3)))
+
+        def _retry_limit(batch: Sequence[BatchTarget]) -> int:
+            return min(config.max_retries, max(prepared[t.key].effort_decision.retry_limit for t in batch))
+
+        proposals: dict[int, list[AgentProposal]] = {t.key: [] for t in targets}
+        usage_by_role: dict[int, dict[AgentRole, TokenUsage]] = {t.key: {} for t in targets}
+        calls_by_role: dict[int, dict[AgentRole, int]] = {t.key: {} for t in targets}
+        retries: dict[int, int] = {t.key: 0 for t in targets}
+        latency: dict[int, float] = {t.key: 0.0 for t in targets}
+        fallback_roles: dict[int, list[AgentRole]] = {t.key: [] for t in targets}
+        failed_roles: dict[int, list[AgentRole]] = {t.key: [] for t in targets}
+        executed_by: dict[int, dict[AgentRole, str]] = {t.key: {} for t in targets}
+        unusable: set[int] = set()
+
+        def _record(call: BatchCallResult, batch: Sequence[BatchTarget]) -> None:
+            # A batched call is charged once -- to the batch's first
+            # candidate -- so run-level sums never multiply one call.
+            owner = batch[0].key
+            role = call.role
+            if call.attempted:
+                calls_by_role[owner][role] = calls_by_role[owner].get(role, 0) + 1
+                retries[owner] += call.retries_used
+            if call.failed or call.budget_exhausted:
+                for t in batch:
+                    failed_roles[t.key].append(role)
+                return
+            usage_by_role[owner][role] = usage_by_role[owner].get(role, TokenUsage()) + call.usage
+            latency[owner] += call.latency_ms
+            for t in batch:
+                if call.served_by is not None:
+                    executed_by[t.key][role] = call.served_by
+                if call.used_fallback:
+                    fallback_roles[t.key].append(role)
+                for validated in call.per_target.get(t.key, ()):
+                    proposals[t.key].append(AgentProposal(role=role, validated=validated, reviewer_usage=call.usage))
+
+        batches = plan_batches(
+            targets, estimate=_estimate, max_input_tokens=self._cost_policy.single_pass_max_input_tokens
+        )
+        for batch in batches:
+            call = await orchestrator.review_batch(
+                AgentRole.UNIFIED,
+                batch,
+                max_output_tokens=_output_budget(len(batch)),
+                max_retries=_retry_limit(batch),
+                max_total_input_tokens=config.max_total_input_tokens,
+                budget_lock=budget_lock,
+                budget_state=budget_state,
+                log=log,  # type: ignore[arg-type]
+            )
+            _record(call, batch)
+            if call.failed or call.budget_exhausted:
+                for t in batch:
+                    unusable.add(t.key)
+                    outcome = outcomes[t.key]
+                    if call.budget_exhausted and not call.attempted:
+                        outcome.skipped_budget = True
+                    else:
+                        outcome.failed = not call.budget_exhausted
+                        outcome.skipped_budget = call.budget_exhausted
+                    outcome.error = call.error
+                    outcome.calls_by_role = dict(calls_by_role[t.key])
+                    outcome.retries_consumed = retries[t.key]
+                    outcome.completed = True
+
+        live_targets = [t for t in targets if t.key not in unusable]
+        snapshot = await review_budget.snapshot()
+        plans = decide_escalations(
+            classification,
+            targets=live_targets,
+            first_pass={t.key: [p.validated for p in proposals[t.key]] for t in live_targets},
+            remaining_provider_calls=_remaining_review_calls(review_budget, snapshot.provider_calls),
+        )
+        for plan in plans:
+            batch = [t for t in live_targets if t.key in plan.target_keys]
+            if not batch:
+                continue
+            escalation_reasons.append(plan.reason.value)
+            log.info(  # type: ignore[attr-defined]
+                "review_escalation",
+                role=plan.role.value,
+                reason=plan.reason.value,
+                candidates=len(batch),
+            )
+            call = await orchestrator.review_batch(
+                plan.role,
+                batch,
+                max_output_tokens=_output_budget(len(batch)),
+                max_retries=_retry_limit(batch),
+                max_total_input_tokens=config.max_total_input_tokens,
+                budget_lock=budget_lock,
+                budget_state=budget_state,
+                log=log,  # type: ignore[arg-type]
+            )
+            _record(call, batch)
+
+        for t in live_targets:
+            key = t.key
+            outcome = outcomes[key]
+            ready = prepared[key]
+            result = await orchestrator.verify_proposals(
+                ready.evidence,
+                proposals=tuple(proposals[key]),
+                effort_decision=ready.effort_decision,
+                usage_by_role=usage_by_role[key],
+                failed_roles=tuple(failed_roles[key]),
+                calls_by_role=calls_by_role[key],
+                retries_consumed=retries[key],
+                reviewer_latency_ms=latency[key],
+                fallback_used_roles=tuple(fallback_roles[key]),
+                executed_provider_by_role=executed_by[key],
+                min_final_confidence=config.min_final_confidence,
+                max_total_input_tokens=config.max_total_input_tokens,
+                budget_lock=budget_lock,
+                budget_state=budget_state,
+                log=log,  # type: ignore[arg-type]
+                allow_post_proposal_escalation=self._effort_decision_override is None,
+                executable_verifier=ready.verifier,
+            )
+            self._complete_candidate(outcome, result, config=config)
+            outcome.completed = True
+
+    async def _persist_no_ai_run(
+        self,
+        *,
+        run_id: uuid.UUID,
+        repository_id: uuid.UUID,
+        commit_sha: str,
+        config_fingerprint: str,
+        model_fingerprint: str,
+        incremental_context_fingerprint: str,
+        classification: ChangeRiskClassification,
+        start: float,
+        log: structlog.stdlib.BoundLogger,
+        force_review: bool,
+    ) -> ReviewRunSummary:
+        """M4.2: the zero-call path. Persisted exactly like any other
+        terminal run (same identity/claim/supersede rules), SUCCEEDED
+        with zero candidates, zero provider calls and an explicit
+        ``no_ai_reason`` -- never a silently skipped lifecycle."""
+
+        assert self._cost_policy is not None
+        duration_ms = (time.monotonic() - start) * 1000
+        budget_snapshot = ReviewBudgetSnapshot(
+            provider_calls=0,
+            retry_attempts=0,
+            input_tokens=0,
+            output_tokens=0,
+            estimated_cost_usd=0.0,
+            elapsed_seconds=duration_ms / 1000,
+            termination_reason=None,
+            by_model=(),
+        )
+        telemetry = self._cost_telemetry(classification, escalation_reasons=(), outcomes=(), forced=force_review)
+        async with self._session_factory() as session:
+            existing = await self._run_repo.claim_for_write(
+                session,
+                run_id=run_id,
+                repository_id=repository_id,
+                commit_sha=commit_sha,
+                config_fingerprint=config_fingerprint,
+                model_fingerprint=model_fingerprint,
+                incremental_context_fingerprint=incremental_context_fingerprint,
+            )
+            if existing is not None:
+                await self._run_repo.mark_failed(
+                    session, run_id=run_id, error_message=f"superseded by concurrent review run {existing.id}"
+                )
+                await session.commit()
+                return _summary_from_model(existing, reused=True)
+            final_run = await self._run_repo.mark_succeeded(
+                session,
+                run_id=run_id,
+                status=ReviewRunStatus.SUCCEEDED,
+                candidate_count=0,
+                candidates_reviewed=0,
+                candidates_failed=0,
+                candidates_skipped_budget=0,
+                proposals_count=0,
+                accepted_count=0,
+                rejected_count=0,
+                suppressed_duplicate_count=0,
+                reviewer_input_tokens=0,
+                reviewer_output_tokens=0,
+                critic_input_tokens=0,
+                critic_output_tokens=0,
+                duration_ms=duration_ms,
+                budget=budget_snapshot,
+                cost_telemetry=telemetry,
+            )
+            await session.commit()
+        log.info(
+            "review_run_completed_without_ai",
+            run_id=str(run_id),
+            risk_tier=classification.tier.value,
+            no_ai_reason=classification.no_ai_reason.value if classification.no_ai_reason else None,
+            provider_calls=0,
+        )
+        return _summary_from_model(final_run, reused=final_run.id != run_id)
+
+    def _cost_telemetry(
+        self,
+        classification: ChangeRiskClassification | None,
+        *,
+        escalation_reasons: Sequence[str],
+        outcomes: Sequence[_CandidateOutcome],
+        forced: bool,
+    ) -> ReviewCostTelemetry | None:
+        if self._cost_policy is None:
+            return None
+        reasons = sorted({r for o in outcomes for r in o.context_expansion_reasons})
+        return ReviewCostTelemetry(
+            review_strategy=self._cost_policy.strategy.value,
+            risk_tier=classification.tier.value if classification is not None else None,
+            risk_signals=tuple(sig.value for sig in classification.signals) if classification is not None else (),
+            no_ai_reason=(
+                classification.no_ai_reason.value
+                if classification is not None and classification.no_ai_reason is not None
+                else None
+            ),
+            escalation_reasons=tuple(escalation_reasons),
+            context_initial_tokens=sum(o.context_initial_tokens for o in outcomes),
+            context_expanded_tokens=sum(o.context_expanded_tokens for o in outcomes),
+            context_expansion_reasons=tuple(reasons),
+            cost_policy_fingerprint=self._cost_policy.fingerprint(),
+            forced=forced,
         )
 
     async def _review_candidate(
@@ -1552,6 +2003,153 @@ class PullRequestReviewService:
         staged_artifact: _StagedArtifact | None = None,
         context_config_override: ContextConfig | None = None,
     ) -> None:
+        prepared = await self._prepare_candidate(
+            outcome,
+            run_id=run_id,
+            repository_id=repository_id,
+            repository_full_name=repository_full_name,
+            commit_sha=commit_sha,
+            diff_files=diff_files,
+            config=config,
+            static_by_id=static_by_id,
+            context_kwargs=context_kwargs,
+            local=local,
+            budget_lock=budget_lock,
+            budget_state=budget_state,
+            log=log,
+            change_intelligence_report=change_intelligence_report,
+            contract_intelligence_report=contract_intelligence_report,
+            intent_verification_report=intent_verification_report,
+            test_intelligence_report=test_intelligence_report,
+            historical_regression_report=historical_regression_report,
+            repository_learnings_report=repository_learnings_report,
+            trajectory_report=trajectory_report,
+            cross_pr_report=cross_pr_report,
+            cross_repo_report=cross_repo_report,
+            combined_companions=combined_companions,
+            verification_budget=verification_budget,
+            staged_artifact=staged_artifact,
+            context_config_override=context_config_override,
+        )
+        if prepared is None:
+            return
+        result = await orchestrator.review_candidate(
+            prepared.evidence,
+            effort_decision=prepared.effort_decision,
+            min_final_confidence=config.min_final_confidence,
+            max_total_input_tokens=config.max_total_input_tokens,
+            budget_lock=budget_lock,
+            budget_state=budget_state,
+            log=log,
+            # A fixed override (evaluation "uniform baseline" ablation)
+            # must never escalate -- same reasoning as skipping finalize().
+            allow_post_proposal_escalation=self._effort_decision_override is None,
+            executable_verifier=prepared.verifier,
+        )
+        self._complete_candidate(outcome, result, config=config)
+
+    def _complete_candidate(
+        self, outcome: _CandidateOutcome, result: CandidateOrchestrationResult, *, config: ReviewConfig
+    ) -> None:
+        """Fold one candidate's orchestration result into its outcome and
+        apply confidence aggregation -- shared by both strategies."""
+
+        candidate = outcome.candidate
+        if result.skipped_budget:
+            outcome.skipped_budget = True
+            return
+        if result.failed:
+            outcome.failed = True
+            outcome.error = result.error
+            outcome.calls_by_role = result.calls_by_role
+            outcome.retries_consumed = result.retries_consumed
+            return
+
+        # The orchestrator may have escalated this candidate post-proposal
+        # (a surviving proposal's own risk profile -- see
+        # patchfrog.review.orchestration._detect_high_risk_proposal);
+        # persist the *effective* decision, never the stale pre-escalation
+        # one this outcome was seeded with above.
+        if result.effort_decision is not None:
+            outcome.effort_decision = result.effort_decision
+
+        outcome.proposals = list(result.proposals)
+        outcome.reviewer_usage = result.reviewer_usage
+        outcome.critic_usage = result.critic_usage
+        outcome.usage_by_role = result.usage_by_role
+        outcome.calls_by_role = result.calls_by_role
+        outcome.critic_calls = result.critic_calls
+        outcome.retries_consumed = result.retries_consumed
+        outcome.reviewer_latency_ms = result.reviewer_latency_ms
+        outcome.executable_verification_report = result.executable_verification_report
+
+        for agent_proposal in outcome.proposals:
+            v = agent_proposal.validated
+            if v.outcome != ValidationOutcome.VALID:
+                continue
+            if agent_proposal.suppressed_reason is not None:
+                continue
+
+            verdict = agent_proposal.critic_verdict
+            if verdict is not None and verdict.decision == CriticDecision.REJECT:
+                continue
+
+            corroborated = bool(candidate.static_finding_ids)
+            aggregated = aggregate(
+                reviewer_confidence=v.finding.confidence,
+                reviewer_severity=v.finding.severity,
+                critic_verdict=verdict,
+                corroborated_by_static=corroborated,
+            )
+            if not meets_minimum(aggregated.final_confidence, minimum=config.min_final_confidence):
+                continue
+
+            outcome.final.append(
+                FinalAIFinding(
+                    proposal_id=uuid.uuid4(),  # placeholder, overwritten once the proposal row is persisted
+                    candidate_id=uuid.uuid4(),
+                    candidate=candidate,
+                    finding=v.finding,
+                    critic_verdict=verdict,
+                    final_severity=aggregated.final_severity,
+                    final_confidence=aggregated.final_confidence,
+                    corroborated_by_static=aggregated.corroborated_by_static,
+                    static_finding_ids=candidate.static_finding_ids,
+                    agent_role=agent_proposal.role,
+                )
+            )
+
+    async def _prepare_candidate(
+        self,
+        outcome: _CandidateOutcome,
+        *,
+        run_id: uuid.UUID,
+        repository_id: uuid.UUID,
+        repository_full_name: str,
+        commit_sha: str,
+        diff_files: list[DiffFile],
+        config: ReviewConfig,
+        static_by_id: dict[uuid.UUID, FindingModel],
+        context_kwargs: dict[str, object],
+        local: bool,
+        budget_lock: asyncio.Lock,
+        budget_state: dict[str, int],
+        log: structlog.stdlib.BoundLogger,
+        change_intelligence_report: ChangeIntelligenceReport,
+        contract_intelligence_report: ContractIntelligenceReport,
+        intent_verification_report: IntentVerificationReport,
+        test_intelligence_report: TestIntelligenceReport,
+        historical_regression_report: HistoricalRegressionReport,
+        repository_learnings_report: RepositoryLearningsReport,
+        trajectory_report: TrajectoryIntelligenceReport,
+        cross_pr_report: CrossPRIntelligenceReport,
+        cross_repo_report: CrossRepoIntelligenceReport,
+        combined_companions: tuple[ExpectedCompanionChange, ...],
+        verification_budget: VerificationBudget,
+        staged_artifact: _StagedArtifact | None = None,
+        context_config_override: ContextConfig | None = None,
+        run_risk_tier: ChangeRiskTier | None = None,
+    ) -> _PreparedCandidate | None:
         candidate = outcome.candidate
 
         static_summaries = tuple(
@@ -1605,6 +2203,15 @@ class PullRequestReviewService:
         )
 
         try:
+            # M4.6 context minimization: a TINY/NORMAL run narrows the
+            # per-candidate context further and disables adaptive
+            # expansion (broader context needs a reason those tiers, by
+            # definition, do not have). ELEVATED/HIGH_RISK and the legacy
+            # path (run_risk_tier is None) keep today's behavior exactly.
+            tier_fraction = TIER_CONTEXT_FRACTION[run_risk_tier] if run_risk_tier is not None else 1.0
+            adaptive_enabled = provisional_decision.context_adaptive_enabled and (
+                run_risk_tier is None or TIER_ALLOWS_CONTEXT_EXPANSION[run_risk_tier]
+            )
             context_config = context_config_override or ContextConfig(
                 max_tokens=max(
                     500,
@@ -1612,6 +2219,7 @@ class PullRequestReviewService:
                         config.max_input_tokens_per_candidate
                         * 0.6
                         * provisional_decision.context_token_fraction
+                        * tier_fraction
                     ),
                 ),
                 # Milestone E: real reviews adopt adaptive multi-hop
@@ -1626,7 +2234,7 @@ class PullRequestReviewService:
                 # configs (via context_config_override, used by
                 # evaluation ablation and by tests) are unaffected --
                 # ContextConfig's own bare default keeps adaptive off.
-                adaptive=AdaptiveContextConfig(enabled=provisional_decision.context_adaptive_enabled),
+                adaptive=AdaptiveContextConfig(enabled=adaptive_enabled),
             )
             target_type = ContextTargetType.SYMBOL if candidate.symbol_id else ContextTargetType.LINE
             build_kwargs: dict[str, object] = {
@@ -1646,13 +2254,14 @@ class PullRequestReviewService:
                 build_kwargs["commit_sha"] = commit_sha
                 bundle = await self._context_service.build_context(**build_kwargs)  # type: ignore[arg-type]
 
-            context_text = "\n\n".join(f"# {item.file_path}\n{item.content}" for item in bundle.items)
+            raw_blocks = [f"# {item.file_path}\n{item.content}" for item in bundle.items]
+            context_text = "\n\n".join(raw_blocks)
             allowed_file_paths = frozenset({candidate.file_path} | {i.file_path for i in bundle.items})
             outcome.context_bundle_id = bundle.id
         except Exception as exc:
             outcome.failed = True
             outcome.error = f"context build failed: {exc}"
-            return
+            return None
 
         diff_excerpt = _render_diff_excerpt(diff_files, candidate)
         context_redaction = redact_secrets(context_text)
@@ -1667,6 +2276,19 @@ class PullRequestReviewService:
         diff_excerpt = diff_redaction.text
         outcome.context_text = context_text
         outcome.diff_excerpt = diff_excerpt
+
+        context_blocks = tuple(redact_secrets(block).text for block in raw_blocks)
+        adaptive_metrics = bundle.adaptive_metrics
+        expanded_tokens = (
+            adaptive_metrics.depth_2_tokens if adaptive_metrics is not None and adaptive_metrics.occurred else 0
+        )
+        outcome.context_initial_tokens = max(0, bundle.total_tokens_estimate - expanded_tokens)
+        outcome.context_expanded_tokens = expanded_tokens
+        outcome.context_expansion_reasons = (
+            tuple(r.value for r in adaptive_metrics.reasons)
+            if adaptive_metrics is not None and adaptive_metrics.occurred
+            else ()
+        )
 
         evidence = CandidateEvidencePackage(
             candidate=candidate,
@@ -1688,6 +2310,7 @@ class PullRequestReviewService:
             trajectory_intelligence_text=trajectory_evidence_text_for_candidate(trajectory_report, candidate),
             cross_pr_intelligence_text=cross_pr_evidence_text_for_candidate(cross_pr_report, candidate),
             cross_repo_intelligence_text=cross_repo_evidence_text_for_candidate(cross_repo_report, candidate),
+            context_blocks=context_blocks,
         )
 
         # Stage 2: finalize the effort decision now that the context
@@ -1790,84 +2413,113 @@ class PullRequestReviewService:
                 version=EXECUTABLE_VERIFICATION_VERSION, attempted=True, evidence=evidence,
             )
 
-        result = await orchestrator.review_candidate(
-            evidence,
-            effort_decision=effort_decision,
-            min_final_confidence=config.min_final_confidence,
-            max_total_input_tokens=config.max_total_input_tokens,
-            budget_lock=budget_lock,
-            budget_state=budget_state,
-            log=log,
-            # A fixed override (evaluation "uniform baseline" ablation)
-            # must never escalate -- same reasoning as skipping finalize()
-            # above.
-            allow_post_proposal_escalation=self._effort_decision_override is None,
-            executable_verifier=_verify,
+        return _PreparedCandidate(evidence=evidence, effort_decision=effort_decision, verifier=_verify)
+
+
+def _has_static_high_risk_finding(
+    candidates: Sequence[ReviewCandidate], static_findings: Sequence[FindingModel]
+) -> bool:
+    """Static evidence already attached to a changed span (HIGH/CRITICAL
+    severity or security category) -- an input to the risk classifier,
+    never a finding by itself."""
+
+    attached = {fid for c in candidates for fid in c.static_finding_ids}
+    for finding in static_findings:
+        if finding.id not in attached:
+            continue
+        if finding.severity in (Severity.HIGH.value, Severity.CRITICAL.value):
+            return True
+        if finding.category == FindingCategory.SECURITY.value:
+            return True
+    return False
+
+
+async def _python_comment_evidence(
+    diff_files: Sequence[DiffFile],
+    *,
+    commit_sha: str,
+    base_sha: str | None,
+    local: bool,
+    context_kwargs: Mapping[str, object],
+) -> CommentLineEvidence:
+    """Exact comment-line evidence for the few Python files whose changed
+    lines all *look* like comments -- the only files where it can turn a
+    change into a zero-call (NO_AI) one. Reuses the existing bounded,
+    never-executing single-commit reader
+    (:func:`patchfrog.contract_intelligence.base_fetch.fetch_base_file_contents`).
+    Any read failure simply leaves the conservative diff-only rule in
+    force for that file; nothing here can make a change look *less*
+    risky than the diff alone shows."""
+
+    paths = frozenset(python_files_needing_comment_evidence(diff_files))
+    if not paths:
+        return {}
+
+    def _read(sha: str) -> dict[str, str | None]:
+        return fetch_base_file_contents(
+            local=local,
+            base_sha=sha,
+            paths=paths,
+            root_path=context_kwargs.get("root_path") if local else None,  # type: ignore[arg-type]
+            clone_url=context_kwargs.get("clone_url") if not local else None,  # type: ignore[arg-type]
+            token=context_kwargs.get("token") if not local else None,  # type: ignore[arg-type]
         )
 
-        if result.skipped_budget:
-            outcome.skipped_budget = True
-            return
-        if result.failed:
-            outcome.failed = True
-            outcome.error = result.error
-            outcome.calls_by_role = result.calls_by_role
-            outcome.retries_consumed = result.retries_consumed
-            return
+    try:
+        head = await asyncio.to_thread(_read, commit_sha)
+        base = await asyncio.to_thread(_read, base_sha) if base_sha else {}
+    except Exception:  # evidence is optional; the conservative rule stands
+        return {}
 
-        # The orchestrator may have escalated this candidate post-proposal
-        # (a surviving proposal's own risk profile -- see
-        # patchfrog.review.orchestration._detect_high_risk_proposal);
-        # persist the *effective* decision, never the stale pre-escalation
-        # one this outcome was seeded with above.
-        if result.effort_decision is not None:
-            outcome.effort_decision = result.effort_decision
+    evidence: dict[str, tuple[frozenset[int] | None, frozenset[int] | None]] = {}
+    for path in paths:
+        head_text = head.get(path)
+        base_text = base.get(path)
+        evidence[path] = (
+            python_comment_lines(head_text) if head_text is not None else None,
+            python_comment_lines(base_text) if base_text is not None else None,
+        )
+    return evidence
 
-        outcome.proposals = list(result.proposals)
-        outcome.reviewer_usage = result.reviewer_usage
-        outcome.critic_usage = result.critic_usage
-        outcome.usage_by_role = result.usage_by_role
-        outcome.calls_by_role = result.calls_by_role
-        outcome.critic_calls = result.critic_calls
-        outcome.retries_consumed = result.retries_consumed
-        outcome.reviewer_latency_ms = result.reviewer_latency_ms
-        outcome.executable_verification_report = result.executable_verification_report
 
-        for agent_proposal in outcome.proposals:
-            v = agent_proposal.validated
-            if v.outcome != ValidationOutcome.VALID:
-                continue
-            if agent_proposal.suppressed_reason is not None:
-                continue
+def _remaining_review_calls(budget: ReviewBudget, provider_calls_so_far: int) -> int:
+    """Calls escalation may still plan: bounded by the total ceiling and,
+    when set, the review-phase ceiling (so escalation never eats the
+    critic's reserve). Before any critic call, every call so far was a
+    review-phase call."""
 
-            verdict = agent_proposal.critic_verdict
-            if verdict is not None and verdict.decision == CriticDecision.REJECT:
-                continue
+    limits = budget.limits
+    remaining = limits.max_provider_calls - provider_calls_so_far
+    if limits.max_review_calls is not None:
+        # decide_escalations keeps one call back for the critic itself;
+        # the review-phase ceiling already reserved it, so add it back.
+        remaining = min(remaining, limits.max_review_calls - provider_calls_so_far + 1)
+    return max(0, remaining)
 
-            corroborated = bool(candidate.static_finding_ids)
-            aggregated = aggregate(
-                reviewer_confidence=v.finding.confidence,
-                reviewer_severity=v.finding.severity,
-                critic_verdict=verdict,
-                corroborated_by_static=corroborated,
-            )
-            if not meets_minimum(aggregated.final_confidence, minimum=config.min_final_confidence):
-                continue
 
-            outcome.final.append(
-                FinalAIFinding(
-                    proposal_id=uuid.uuid4(),  # placeholder, overwritten once the proposal row is persisted
-                    candidate_id=uuid.uuid4(),
-                    candidate=candidate,
-                    finding=v.finding,
-                    critic_verdict=verdict,
-                    final_severity=aggregated.final_severity,
-                    final_confidence=aggregated.final_confidence,
-                    corroborated_by_static=aggregated.corroborated_by_static,
-                    static_finding_ids=candidate.static_finding_ids,
-                    agent_role=agent_proposal.role,
-                )
-            )
+def _with_cost_telemetry(summary: ReviewRunSummary, telemetry: ReviewCostTelemetry | None) -> ReviewRunSummary:
+    if telemetry is None:
+        return summary
+    return replace(
+        summary,
+        review_strategy=telemetry.review_strategy,
+        risk_tier=telemetry.risk_tier,
+        risk_signals=telemetry.risk_signals,
+        no_ai_reason=telemetry.no_ai_reason,
+        escalation_reasons=telemetry.escalation_reasons,
+        context_initial_tokens=telemetry.context_initial_tokens,
+        context_expanded_tokens=telemetry.context_expanded_tokens,
+        context_expansion_reasons=telemetry.context_expansion_reasons,
+        forced=telemetry.forced,
+    )
+
+
+def _json_str_tuple(raw: str | None) -> tuple[str, ...]:
+    try:
+        value = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return ()
+    return tuple(str(v) for v in value) if isinstance(value, list) else ()
 
 
 def _malformed_config_fingerprint(exc: MalformedReviewConfigError) -> str:
@@ -1991,4 +2643,13 @@ def _summary_from_model(run: ReviewRunModel, *, reused: bool) -> ReviewRunSummar
         retries_consumed=run.retries_consumed,
         reviewer_latency_ms=run.reviewer_latency_ms,
         budget=budget,
+        review_strategy=run.review_strategy,
+        risk_tier=run.risk_tier,
+        risk_signals=_json_str_tuple(run.risk_signals),
+        no_ai_reason=run.no_ai_reason,
+        escalation_reasons=_json_str_tuple(run.escalation_reasons),
+        context_initial_tokens=run.context_initial_tokens or 0,
+        context_expanded_tokens=run.context_expanded_tokens or 0,
+        context_expansion_reasons=_json_str_tuple(run.context_expansion_reasons),
+        forced=bool(run.forced),
     )

@@ -19,6 +19,7 @@ from patchfrog.persistence.models.review import ReviewRunModel
 from patchfrog.repository_learnings.telemetry import RepositoryLearningsSummary
 from patchfrog.review.agents.roles import AgentRole
 from patchfrog.review.budget import ReviewBudgetSnapshot
+from patchfrog.review.cost_policy import ReviewCostTelemetry
 from patchfrog.review.domain import ReviewRunStatus
 from patchfrog.review.effort_types import ReviewEffortTier
 from patchfrog.review_memory.config import NO_MEMORY_CONTEXT_FINGERPRINT
@@ -227,6 +228,7 @@ class ReviewRunRepository:
         cross_repo_intelligence: CrossRepoIntelligenceSummary | None = None,
         executable_verification: ExecutableVerificationSummary | None = None,
         budget: ReviewBudgetSnapshot | None = None,
+        cost_telemetry: ReviewCostTelemetry | None = None,
     ) -> ReviewRunModel:
         """Mark a run succeeded or partial. Returns the *canonical* run for
         this identity -- if a concurrent run already claimed
@@ -312,6 +314,17 @@ class ReviewRunRepository:
                 ],
                 sort_keys=True,
             )
+        if cost_telemetry is not None:
+            model.review_strategy = cost_telemetry.review_strategy
+            model.risk_tier = cost_telemetry.risk_tier
+            model.risk_signals = json.dumps(list(cost_telemetry.risk_signals))
+            model.no_ai_reason = cost_telemetry.no_ai_reason
+            model.escalation_reasons = json.dumps(list(cost_telemetry.escalation_reasons))
+            model.context_initial_tokens = cost_telemetry.context_initial_tokens
+            model.context_expanded_tokens = cost_telemetry.context_expanded_tokens
+            model.context_expansion_reasons = json.dumps(list(cost_telemetry.context_expansion_reasons))
+            model.cost_policy_fingerprint = cost_telemetry.cost_policy_fingerprint
+            model.forced = cost_telemetry.forced
         model.duration_ms = duration_ms
         if change_intelligence is not None:
             model.change_unit_count = change_intelligence.change_unit_count

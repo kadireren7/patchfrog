@@ -146,5 +146,23 @@ def _presentation(
     )
 
 
+_NO_AI_DETAIL = {
+    "docs_only": "only documentation changed",
+    "comment_only": "only comments or blank lines changed",
+    "generated_or_vendor_only": "only policy-excluded generated or vendored files changed",
+    "lockfile_only": "only dependency lockfiles changed",
+    "non_code_only": "only documentation, comments, lockfiles or excluded generated/vendored files changed",
+    "empty_diff": "the change contains no line changes",
+}
+
+
+def no_ai_check_detail(no_ai_reason: str) -> str:
+    """Deterministic, visible explanation for a zero-call (NO_AI) review
+    -- the check still completes; it just says why no model was used."""
+
+    why = _NO_AI_DETAIL.get(no_ai_reason, "the change needed no model review")
+    return f"PatchFrog completed a deterministic review with no AI calls: {why}."
+
+
 def github_check_publisher(*, client: GitHubClient, installation_id: int) -> ReviewCheckPublisher:
     return ReviewCheckPublisher(client=client, installation_id=installation_id)
