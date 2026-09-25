@@ -88,6 +88,19 @@ def locate_calls(source: str, path: str, line: int, chain: str) -> list[LocatedC
     return []
 
 
+def locate_calls_at_line(source: str, path: str, line: int) -> list[LocatedCall]:
+    """Every call on ``line``, whatever its chain -- for re-checking a
+    call after an earlier step already renamed it."""
+
+    language = language_for(path)
+    if language == "python":
+        tree = parse_python(source)
+        return python_calls_at_line(tree, LineIndex(source), line) if tree is not None else []
+    if language == "javascript":
+        return js_calls_at_line(source, line)
+    return []
+
+
 # -- Python ----------------------------------------------------------------------
 
 
@@ -146,6 +159,37 @@ def parse_python(source: str) -> ast.Module | None:
         return None
 
 
+def _python_located_call(node: ast.Call, index: LineIndex, chain_span: Span, has_receiver: bool) -> LocatedCall:
+    func_span = index.node_span(node.func)
+    call_span = index.node_span(node)
+    keywords: list[KeywordArg] = []
+    indirect = False
+    for kw in node.keywords:
+        if kw.arg is None:
+            indirect = True
+            continue
+        start = index.offset(kw.lineno, kw.col_offset)
+        literal, is_literal = _literal(kw.value)
+        keywords.append(
+            KeywordArg(kw.arg, Span(start, start + len(kw.arg)), index.node_span(kw.value), literal, is_literal)
+        )
+    ends = [index.node_span(a).end for a in node.args] + [k.value_span.end for k in keywords]
+    ends += [index.node_span(kw.value).end for kw in node.keywords if kw.arg is None]
+    return LocatedCall(
+        language="python",
+        line=node.lineno,
+        chain_span=chain_span,
+        has_receiver=has_receiver,
+        call_span=call_span,
+        open_paren=_python_open_paren(index.source, func_span.end),
+        close_paren=call_span.end - 1,
+        keywords=tuple(keywords),
+        indirect_keywords=indirect or any(isinstance(a, ast.Starred) for a in node.args),
+        positional_args=len(node.args),
+        last_arg_end=max(ends) if ends else None,
+    )
+
+
 def python_calls_at(tree: ast.Module, index: LineIndex, line: int, chain: str) -> list[LocatedCall]:
     wanted = chain.split(".")
     found: list[LocatedCall] = []
@@ -165,35 +209,31 @@ def python_calls_at(tree: ast.Module, index: LineIndex, line: int, chain: str) -
         else:
             chain_span = func_span
             has_receiver = False
-        call_span = index.node_span(node)
-        keywords: list[KeywordArg] = []
-        indirect = False
-        for kw in node.keywords:
-            if kw.arg is None:
-                indirect = True
-                continue
-            start = index.offset(kw.lineno, kw.col_offset)
-            literal, is_literal = _literal(kw.value)
-            keywords.append(
-                KeywordArg(kw.arg, Span(start, start + len(kw.arg)), index.node_span(kw.value), literal, is_literal)
-            )
-        ends = [index.node_span(a).end for a in node.args] + [k.value_span.end for k in keywords]
-        ends += [index.node_span(kw.value).end for kw in node.keywords if kw.arg is None]
-        found.append(
-            LocatedCall(
-                language="python",
-                line=line,
-                chain_span=chain_span,
-                has_receiver=has_receiver,
-                call_span=call_span,
-                open_paren=_python_open_paren(index.source, func_span.end),
-                close_paren=call_span.end - 1,
-                keywords=tuple(keywords),
-                indirect_keywords=indirect or any(isinstance(a, ast.Starred) for a in node.args),
-                positional_args=len(node.args),
-                last_arg_end=max(ends) if ends else None,
-            )
-        )
+        found.append(_python_located_call(node, index, chain_span, has_receiver))
+    return found
+
+
+def python_calls_at_line(tree: ast.Module, index: LineIndex, line: int) -> list[LocatedCall]:
+    """Every call on ``line``, whatever its chain -- for re-checking a
+    call after an earlier step already renamed its chain/symbol."""
+
+    found: list[LocatedCall] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or node.lineno != line:
+            continue
+        parts = dotted(node.func)
+        if parts is None:
+            continue
+        func_span = index.node_span(node.func)
+        if len(parts) > 1:
+            receiver: ast.AST = node.func
+            receiver = receiver.value  # type: ignore[attr-defined]
+            chain_span = Span(index.node_span(receiver).end, func_span.end)
+            has_receiver = True
+        else:
+            chain_span = func_span
+            has_receiver = False
+        found.append(_python_located_call(node, index, chain_span, has_receiver))
     return found
 
 
@@ -387,6 +427,47 @@ def _js_object_properties(
     return props, indirect
 
 
+def _js_located_call(source: str, mask: list[bool], line: int, match_start: int, open_paren: int,
+                      close_paren: int) -> LocatedCall:
+    has_receiver = source[match_start:open_paren].lstrip().startswith(".")
+    chain_start = match_start
+    while chain_start < open_paren and source[chain_start].isspace():
+        chain_start += 1
+    chain_end = open_paren
+    while chain_end > chain_start and source[chain_end - 1].isspace():
+        chain_end -= 1
+    args = _split_top_level(source, mask, open_paren + 1, close_paren)
+    keywords: list[KeywordArg] = []
+    indirect = False
+    object_span: Span | None = None
+    if args:
+        first_start, first_end = _strip_span(source, *args[0])
+        if source[first_start] == "{":
+            close_brace = matching_close(source, mask, first_start)
+            if close_brace is not None and close_brace == first_end - 1:
+                object_span = Span(first_start, close_brace + 1)
+                keywords, indirect = _js_object_properties(source, mask, first_start, close_brace)
+            else:
+                indirect = True
+        else:
+            indirect = True
+    last_arg_end = _strip_span(source, *args[-1])[1] if args else None
+    return LocatedCall(
+        language="javascript",
+        line=line,
+        chain_span=Span(chain_start, chain_end),
+        has_receiver=has_receiver,
+        call_span=Span(chain_start, close_paren + 1),
+        open_paren=open_paren,
+        close_paren=close_paren,
+        keywords=tuple(keywords),
+        indirect_keywords=indirect,
+        positional_args=max(0, len(args) - (1 if object_span else 0)),
+        last_arg_end=last_arg_end,
+        object_span=object_span,
+    )
+
+
 def locate_js_calls(source: str, line: int, chain: str) -> list[LocatedCall]:
     bounds = _line_bounds(source, line)
     if bounds is None:
@@ -404,49 +485,38 @@ def locate_js_calls(source: str, line: int, chain: str) -> list[LocatedCall]:
             break
         if not mask[match.start()]:
             continue
-        has_receiver = source[match.start():match.end()].lstrip().startswith(".")
         open_paren = match.end() - 1
         close_paren = matching_close(source, mask, open_paren)
         if close_paren is None:
             continue
-        chain_start = match.start()
-        while chain_start < open_paren and source[chain_start].isspace():
-            chain_start += 1
-        chain_end = open_paren
-        while chain_end > chain_start and source[chain_end - 1].isspace():
-            chain_end -= 1
-        args = _split_top_level(source, mask, open_paren + 1, close_paren)
-        keywords: list[KeywordArg] = []
-        indirect = False
-        object_span: Span | None = None
-        if args:
-            first_start, first_end = _strip_span(source, *args[0])
-            if source[first_start] == "{":
-                close_brace = matching_close(source, mask, first_start)
-                if close_brace is not None and close_brace == first_end - 1:
-                    object_span = Span(first_start, close_brace + 1)
-                    keywords, indirect = _js_object_properties(source, mask, first_start, close_brace)
-                else:
-                    indirect = True
-            else:
-                indirect = True
-        last_arg_end = _strip_span(source, *args[-1])[1] if args else None
-        found.append(
-            LocatedCall(
-                language="javascript",
-                line=line,
-                chain_span=Span(chain_start, chain_end),
-                has_receiver=has_receiver,
-                call_span=Span(chain_start, close_paren + 1),
-                open_paren=open_paren,
-                close_paren=close_paren,
-                keywords=tuple(keywords),
-                indirect_keywords=indirect,
-                positional_args=max(0, len(args) - (1 if object_span else 0)),
-                last_arg_end=last_arg_end,
-                object_span=object_span,
-            )
-        )
+        found.append(_js_located_call(source, mask, line, match.start(), open_paren, close_paren))
+    return found
+
+
+#: Any bare or dotted identifier chain immediately followed by ``(`` --
+#: used to re-locate a call after an earlier step already renamed its
+#: chain (no fixed chain name to search for).
+_JS_ANY_CALL_RE = re.compile(rf"(?:(?<=[\w$)\]])\s*\.\s*{_JS_IDENT}|(?<![\w$.]){_JS_IDENT})"
+                             rf"(?:\s*\.\s*{_JS_IDENT})*\s*\(")
+
+
+def js_calls_at_line(source: str, line: int) -> list[LocatedCall]:
+    """Every call on ``line``, whatever its chain."""
+
+    bounds = _line_bounds(source, line)
+    if bounds is None:
+        return []
+    mask = js_code_mask(source)
+    line_start, line_end = bounds
+    found: list[LocatedCall] = []
+    for match in _JS_ANY_CALL_RE.finditer(source, line_start, line_end):
+        if not mask[match.start()]:
+            continue
+        open_paren = match.end() - 1
+        close_paren = matching_close(source, mask, open_paren)
+        if close_paren is None:
+            continue
+        found.append(_js_located_call(source, mask, line, match.start(), open_paren, close_paren))
     return found
 
 
@@ -458,12 +528,15 @@ __all__ = [
     "LocatedCall",
     "Span",
     "dotted",
+    "js_calls_at_line",
     "js_code_mask",
     "language_for",
     "locate_calls",
+    "locate_calls_at_line",
     "locate_js_calls",
     "locate_python_calls",
     "matching_close",
     "parse_python",
     "python_calls_at",
+    "python_calls_at_line",
 ]

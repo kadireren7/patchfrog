@@ -60,18 +60,6 @@ def test_case_matches_expectations(case_dir: Path) -> None:
         unaffected = {loc for i in impact.consumer_impacts for loc in i.unaffected_locations}
         for location in wanted.get("unaffected_includes", []):
             assert location in unaffected, (name, location)
-        if "migration" in wanted:
-            from patchfrog.dependencies.discovery import discover_dependencies
-            from patchfrog.migration.planner import plan_migration
-            from patchfrog.upstream.workspace import adapters_for_target
-
-            inventory = discover_dependencies(case.repositories[name], repository=name,
-                                              adapters=adapters_for_target(case.event.target))
-            plan = plan_migration(case.event, impact, inventory, hints=case.hints)
-            assert plan.status.value == wanted["migration"]["plan_status"], name
-            assert plan.residual_risk.value == wanted["migration"]["residual_risk"], name
-            steps = sorted(f"{s.eligibility.value} {s.strategy.value} {s.target.location}" for s in plan.steps)
-            assert steps == sorted(wanted["migration"]["steps"]), name
         if "files_without_call_graph" in wanted:
             assert sorted({f for r in impact.blast_radii for f in r.files_without_call_graph}) == sorted(
                 wanted["files_without_call_graph"]

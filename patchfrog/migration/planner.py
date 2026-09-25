@@ -87,6 +87,7 @@ _REQUIRED_KINDS = frozenset({
     DiffItemKind.REQUEST_FIELD_ADDED_REQUIRED, DiffItemKind.REQUEST_FIELD_BECAME_REQUIRED,
 })
 _RESPONSE_PREFIXES = ("response_", "schema_")
+_REWRITABLE_MANIFEST_ECOSYSTEMS = frozenset({"pypi", "npm"})
 _AUTH_PREFIXES = ("auth_", "security_scheme_")
 _ARGUMENT_LEVEL = frozenset({
     DiffItemKind.SDK_PARAMETER_RENAMED, DiffItemKind.SDK_PARAMETER_REMOVED, DiffItemKind.SDK_PARAMETER_TYPE_CHANGED,
@@ -160,7 +161,8 @@ def _rule(item: ContractDiffItem, consumer: AffectedConsumer, hints: ChangeHints
             hints.required_value(symbol, member) if symbol else None)
         if symbol and source is not None:
             if source.has_value:
-                operation = EditOperation.of("add_keyword", name=member, value=_literal_code(source.value))
+                # Raw JSON: each rewriter renders it in its own language.
+                operation = EditOperation.of("add_keyword", name=member, value_json=json.dumps(source.value))
                 proposed = f"pass `{member}={_literal_code(source.value)}` (value from hints)"
             else:
                 operation = EditOperation.of("add_keyword", name=member, from_parameter=source.from_parameter or "")
@@ -318,7 +320,9 @@ def _package_steps(
         if declaration is None:
             continue
         manifest, line, package = declaration
-        if item.kind in (DiffItemKind.PACKAGE_DOWNGRADE, DiffItemKind.PACKAGE_VERSION_UNPARSEABLE):
+        if dependency.ecosystem.value not in _REWRITABLE_MANIFEST_ECOSYSTEMS:
+            eligibility, residual = UNSUPPORTED, f"{dependency.ecosystem.value} manifests are not rewritten"
+        elif item.kind in (DiffItemKind.PACKAGE_DOWNGRADE, DiffItemKind.PACKAGE_VERSION_UNPARSEABLE):
             eligibility, residual = HUMAN, "downgrades and unparseable versions need a person to choose the constraint"
         elif item.kind in (DiffItemKind.PACKAGE_MINOR_BUMP, DiffItemKind.PACKAGE_PATCH_BUMP) and \
                 item.compatibility is CompatibilityClass.NON_BREAKING:
@@ -336,7 +340,7 @@ def _package_steps(
         operation = (
             EditOperation.of("bump_manifest_version", package=package, ecosystem=dependency.ecosystem.value,
                              version=new_version)
-            if eligibility is not HUMAN else None
+            if eligibility in (AUTO_SAFE, AUTO_WITH_REVIEW) else None
         )
         steps.append(
             MigrationStep(

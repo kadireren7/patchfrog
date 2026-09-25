@@ -49,7 +49,7 @@ def test_new_required_value_is_never_invented(tmp_path: Path) -> None:
     step = _steps(hinted)["add_required_parameter"]
     assert step.eligibility is AutoFixEligibility.AUTO_WITH_REVIEW
     assert step.operation is not None and step.operation.as_dict() == {
-        "kind": "add_keyword", "params": {"name": "queue", "value": '"default"'}}
+        "kind": "add_keyword", "params": {"name": "queue", "value_json": '"default"'}}
 
 
 def test_one_to_one_renames_are_auto_safe_and_steps_carry_full_context(tmp_path: Path) -> None:
