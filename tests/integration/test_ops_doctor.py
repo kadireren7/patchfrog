@@ -11,6 +11,8 @@ database/Redis outage or a real GitHub App to prove FAIL/WARN behavior.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -362,7 +364,7 @@ async def test_verifier_enabled_but_unreachable_warns(db_engine: AsyncEngine, te
 
 async def _row_counts(engine: AsyncEngine) -> dict[str, int]:
     async with engine.connect() as conn:
-        tables = (
+        tables: Sequence[str] = (
             await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
         ).scalars().all()
         return {

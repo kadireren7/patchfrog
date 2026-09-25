@@ -183,7 +183,7 @@ async def test_ingestion_status_is_persisted_as_lowercase_value(
     await service.ingest(EVENT)
 
     async with session_factory() as session:
-        raw_status = (
+        raw_status: str = (
             await session.execute(text("SELECT status FROM pull_request_ingestions"))
         ).scalar_one()
 

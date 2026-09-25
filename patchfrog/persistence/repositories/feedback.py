@@ -120,7 +120,9 @@ class FeedbackEventRepository:
         if repository_id is not None:
             stmt = stmt.where(FeedbackEventModel.repository_id == repository_id)
         result = await session.execute(stmt)
-        return [row[0] for row in result.all()]
+        # ``is_not(None)`` above already excludes NULL in SQL; the
+        # explicit check only narrows the nullable column's type.
+        return [finding_id for (finding_id,) in result.all() if finding_id is not None]
 
     async def list_all(
         self, session: AsyncSession, *, repository_id: uuid.UUID | None = None, since: object = None
