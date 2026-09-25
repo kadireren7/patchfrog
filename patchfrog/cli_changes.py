@@ -28,6 +28,16 @@ from patchfrog.config.settings import get_settings
 from patchfrog.dependencies.discovery import discover_dependencies
 from patchfrog.dependencies.domain import DependencyInventory, Ecosystem
 from patchfrog.dependencies.registry import DependencyRegistry
+from patchfrog.migration.domain import GeneratedPatch, MigrationPlan
+from patchfrog.migration.generator import generate_patch
+from patchfrog.migration.planner import plan_migration
+from patchfrog.migration.report import (
+    patch_to_dict,
+    plan_to_dict,
+    render_patch_text,
+    render_plan_text,
+)
+from patchfrog.migration.store import MigrationStore, build_linkage
 from patchfrog.persistence.database import create_engine, create_session_factory
 from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.repository.git import GitError, run_git
@@ -340,6 +350,169 @@ def run_changes_analyze(args: argparse.Namespace, upsert_repository: UpsertRepos
     return 0
 
 
+async def _persist_plan_and_patch(
+    *,
+    event: ExternalChangeEvent,
+    plan: MigrationPlan,
+    patch: GeneratedPatch | None,
+    root: Path,
+    repository_name: str,
+    upsert_repository: UpsertRepository,
+) -> dict[str, Any]:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory: async_sessionmaker[AsyncSession] = create_session_factory(engine)
+    upstream_store = UpstreamChangeStore()
+    migration_store = MigrationStore()
+    try:
+        repository_id = await upsert_repository(session_factory, full_name=repository_name)
+        async with session_factory() as session:
+            event_row, event_created = await upstream_store.record_event(session, event)
+            plan_row, base_fingerprint, plan_created = await migration_store.record_plan(
+                session, event_id=event_row.id, repository_id=repository_id, plan=plan, root=root
+            )
+            result: dict[str, Any] = {
+                "event_id": str(event_row.id), "event_created": event_created,
+                "plan_id": str(plan_row.id), "plan_created": plan_created,
+            }
+            if patch is not None:
+                linkage = build_linkage(plan, patch, base_content_fingerprint=base_fingerprint,
+                                        plan_fingerprint=plan_row.plan_fingerprint)
+                patch_row, patch_created = await migration_store.record_patch(
+                    session, plan_id=plan_row.id, patch=patch, linkage=linkage
+                )
+                result["patch_id"] = str(patch_row.id)
+                result["patch_created"] = patch_created
+            await session.commit()
+        return result
+    finally:
+        await engine.dispose()
+
+
+def run_migrations_plan(args: argparse.Namespace, upsert_repository: UpsertRepository) -> int:
+    if not args.repo:
+        raise CommandError("give at least one --repo PATH (or NAME=PATH)")
+    analysis = analyze_local(args, [_repo_arg(r) for r in args.repo])
+    plans = {}
+    for impact in analysis.workspace.repositories:
+        inventory = analysis.inventories[impact.repository]
+        plans[impact.repository] = plan_migration(analysis.event, impact, inventory, hints=analysis.hints)
+
+    persisted: dict[str, Any] = {}
+    if args.persist:
+        for name, plan in plans.items():
+            persisted[name] = asyncio.run(
+                _persist_plan_and_patch(event=analysis.event, plan=plan, patch=None, root=analysis.roots[name],
+                                        repository_name=name, upsert_repository=upsert_repository)
+            )
+
+    payload: dict[str, Any] = {
+        "event": event_to_dict(analysis.event),
+        "plans": {name: plan_to_dict(plan) for name, plan in plans.items()},
+    }
+    if persisted:
+        payload["persisted"] = persisted
+    if args.output:
+        Path(args.output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(render_event_text(analysis.event), end="")
+        for plan in plans.values():
+            print(render_plan_text(plan), end="")
+        if persisted:
+            print(f"persisted: {persisted}")
+    return 0
+
+
+def run_migrations_generate(args: argparse.Namespace, upsert_repository: UpsertRepository) -> int:
+    if not args.repo:
+        raise CommandError("give at least one --repo PATH (or NAME=PATH)")
+    analysis = analyze_local(args, [_repo_arg(r) for r in args.repo])
+    plans: dict[str, MigrationPlan] = {}
+    patches: dict[str, GeneratedPatch] = {}
+    for impact in analysis.workspace.repositories:
+        inventory = analysis.inventories[impact.repository]
+        plan = plan_migration(analysis.event, impact, inventory, hints=analysis.hints)
+        plans[impact.repository] = plan
+        patches[impact.repository] = generate_patch(plan, analysis.roots[impact.repository])
+
+    if args.write:
+        for name, patch in patches.items():
+            if not patch.is_candidate:
+                continue
+            root = analysis.roots[name]
+            for relative_path, content in patch.new_contents.items():
+                (root / relative_path).write_text(content, encoding="utf-8")
+    if args.output_dir:
+        out = Path(args.output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        for name, patch in patches.items():
+            if patch.unified_diff:
+                (out / f"{name.replace('/', '_')}.patch").write_text(patch.unified_diff)
+
+    persisted: dict[str, Any] = {}
+    if args.persist:
+        for name, plan in plans.items():
+            persisted[name] = asyncio.run(
+                _persist_plan_and_patch(event=analysis.event, plan=plan, patch=patches[name],
+                                        root=analysis.roots[name], repository_name=name,
+                                        upsert_repository=upsert_repository)
+            )
+
+    payload: dict[str, Any] = {
+        "event": event_to_dict(analysis.event),
+        "plans": {name: plan_to_dict(plan) for name, plan in plans.items()},
+        "patches": {name: patch_to_dict(patches[name]) for name in plans},
+    }
+    if persisted:
+        payload["persisted"] = persisted
+    if args.output:
+        Path(args.output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(render_event_text(analysis.event), end="")
+        for name in plans:
+            print(render_plan_text(plans[name]), end="")
+            print(render_patch_text(patches[name]), end="")
+        if persisted:
+            print(f"persisted: {persisted}")
+    return 0
+
+
+#: The M7.10 demo: a deterministic, fictional SDK
+#: (``client.chat.create(prompt=...)`` -> ``client.responses.create(input=...)``)
+#: bundled with the repository -- offline, no live provider call, never
+#: describes a real vendor's API (see its own README). Follows the same
+#: "runtime command reads its bundled fixture data from tests/fixtures"
+#: convention patchfrog.evaluation.fixtures.DEFAULT_CASES_ROOT already
+#: uses for `eval run`.
+DEMO_ROOT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "upstream_changes" / "demo"
+
+
+def run_migrations_demo(args: argparse.Namespace) -> int:
+    if not DEMO_ROOT.is_dir():
+        raise CommandError(f"demo assets not found at {DEMO_ROOT} (expected a full repository checkout)")
+    hints = load_hints((DEMO_ROOT / "hints.yaml").read_text())
+    event = build_contract_change(load_contract_file(DEMO_ROOT / "old.yaml"), load_contract_file(DEMO_ROOT / "new.yaml"),
+                                  hints=hints)
+    root = DEMO_ROOT / "repo"
+    inventory = discover_dependencies(root, repository="demo", adapters=adapters_for_target(event.target))
+    impact = analyze_inventory(inventory, event, hints=hints, root=root)
+    plan = plan_migration(event, impact, inventory, hints=hints)
+    patch = generate_patch(plan, root)
+
+    if args.json:
+        print(json.dumps({"event": event_to_dict(event), "plan": plan_to_dict(plan),
+                          "patch": patch_to_dict(patch)}, indent=2, sort_keys=True))
+        return 0
+    print(render_event_text(event), end="")
+    print(render_plan_text(plan), end="")
+    print(render_patch_text(patch), end="")
+    return 0
+
+
 # -- wiring ---------------------------------------------------------------------------------
 
 
@@ -371,6 +544,39 @@ def register(subparsers: Any) -> None:
     analyze.add_argument("--json", action="store_true")
     analyze.add_argument("--output", default=None)
 
+    migrations = subparsers.add_parser(
+        "migrations",
+        help="M7: deterministic migration plan and patch generation for an upstream change (offline)",
+    )
+    migrations_sub = migrations.add_subparsers(dest="migrations_command", required=True)
+
+    plan = migrations_sub.add_parser("plan", help="Build a migration plan for one or more local repositories")
+    add_change_inputs(plan)
+    plan.add_argument("--repo", action="append", default=[],
+                      help="Local repository checkout (repeatable; NAME=PATH to name it)")
+    plan.add_argument("--persist", action="store_true", help="Record the event and plan (requires DATABASE_URL)")
+    plan.add_argument("--json", action="store_true")
+    plan.add_argument("--output", default=None)
+
+    generate = migrations_sub.add_parser(
+        "generate", help="Plan and generate a deterministic patch (never writes the checkout unless --write is given)"
+    )
+    add_change_inputs(generate)
+    generate.add_argument("--repo", action="append", default=[],
+                          help="Local repository checkout (repeatable; NAME=PATH to name it)")
+    generate.add_argument("--write", action="store_true",
+                          help="Materialize a candidate patch's changes into the checkout (off by default)")
+    generate.add_argument("--output-dir", default=None, help="Write each repository's unified diff to DIR/<repo>.patch")
+    generate.add_argument("--persist", action="store_true",
+                          help="Record the event, plan and patch (requires DATABASE_URL)")
+    generate.add_argument("--json", action="store_true")
+    generate.add_argument("--output", default=None)
+
+    demo = migrations_sub.add_parser(
+        "demo", help="M7.10: the bundled deterministic demo, end to end (offline, no live provider call)"
+    )
+    demo.add_argument("--json", action="store_true")
+
 
 def dispatch(args: argparse.Namespace, *, upsert_repository: UpsertRepository) -> int:
     try:
@@ -379,6 +585,13 @@ def dispatch(args: argparse.Namespace, *, upsert_repository: UpsertRepository) -
                 return run_changes_diff(args)
             if args.changes_command == "analyze":
                 return run_changes_analyze(args, upsert_repository)
+        if args.command == "migrations":
+            if args.migrations_command == "plan":
+                return run_migrations_plan(args, upsert_repository)
+            if args.migrations_command == "generate":
+                return run_migrations_generate(args, upsert_repository)
+            if args.migrations_command == "demo":
+                return run_migrations_demo(args)
     except (CommandError, ContractLoadError, SurfaceError, HintError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
