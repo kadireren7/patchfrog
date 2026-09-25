@@ -1,0 +1,5 @@
+patchfrog_change_hints: 1
+provenance: "synthetic fixture (not a real GitHub change)"
+target: {provider: github}
+endpoint_replacements:
+  - {old: "GET /repos/{owner}/{repo}/legacy-stats", new: "GET /repos/{owner}/{repo}/stats/summary"}

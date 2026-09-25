@@ -1,0 +1,14 @@
+description: New required arguments -- one with a known value source (hint), one without; one call already passes it.
+change: {old: old.yaml, new: new.yaml, hints: hints.yaml}
+repositories: {repo: repo}
+expect:
+  risk: breaking
+  consumer_affecting_kinds: [package_major_bump, sdk_parameter_added_required, sdk_parameter_became_required]
+  repositories:
+    repo:
+      status: affected
+      direct: [payments/charges.py::create_charge, payments/refunds.py::refund]
+      potential: []
+      ruled_out: [payments/legacy.py::create_pinned_charge]
+      transitive: []
+      related_tests: []

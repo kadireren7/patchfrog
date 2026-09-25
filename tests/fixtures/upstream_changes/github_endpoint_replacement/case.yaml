@@ -1,0 +1,15 @@
+description: GitHub-like REST endpoint removed, replacement known from an explicit hint; raw HTTP consumer.
+change: {old: old.yaml, new: new.yaml, hints: hints.yaml}
+repositories: {repo: repo}
+expect:
+  risk: breaking
+  consumer_affecting_kinds: [endpoint_path_changed]
+  repositories:
+    repo:
+      status: affected
+      direct: [insights/github_api.py::repo_stats]
+      potential: []
+      ruled_out: []
+      transitive: [insights/report.py::weekly_report]
+      related_tests: []
+      unaffected_includes: [insights/github_api.py::open_issues]

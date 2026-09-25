@@ -1,0 +1,14 @@
+openapi: 3.0.3
+info: {title: Catalog API, version: "1.0.0"}
+paths:
+  /v1/products:
+    get:
+      operationId: listProducts
+      parameters:
+        - {name: locale, in: query, required: false, schema: {type: string}}
+      responses: {"200": {description: ok}}
+  /v1/products/{id}:
+    get:
+      operationId: getProduct
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {"200": {description: ok}}

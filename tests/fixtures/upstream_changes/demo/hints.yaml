@@ -1,0 +1,8 @@
+patchfrog_change_hints: 1
+provenance: "acme-ai 2.0 migration guide (fictional demo SDK)"
+symbol_renames:
+  - {old: chat.create, new: responses.create}
+parameter_renames:
+  - {symbol: chat.create, old: prompt, new: input}
+return_field_renames:
+  - {symbol: chat.create, old: text, new: output_text}

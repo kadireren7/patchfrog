@@ -1,0 +1,4 @@
+patchfrog_change_hints: 1
+provenance: "synthetic fixture (not a real Stripe change)"
+parameter_renames:
+  - {symbol: checkout.sessions.create, old: payment_method_types, new: payment_methods}

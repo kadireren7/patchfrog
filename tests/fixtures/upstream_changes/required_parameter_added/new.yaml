@@ -1,0 +1,11 @@
+patchfrog_sdk_surface: 1
+package: paylane
+ecosystem: pypi
+version: "4.0.0"
+modules: [paylane]
+symbols:
+  Client: {}
+  charges.create:
+    params: {amount: {required: true}, currency: {required: true}, api_version: {required: true}}
+  refunds.create:
+    params: {charge: {required: true}, reason: {required: true}}

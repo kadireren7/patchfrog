@@ -1,0 +1,17 @@
+# Synthetic fixture -- NOT OpenAI's real API. Only the package name is
+# borrowed so the built-in OpenAI adapter path is exercised.
+patchfrog_sdk_surface: 1
+package: openai
+ecosystem: pypi
+version: "1.40.0"
+modules: [openai]
+symbols:
+  OpenAI: {}
+  chat.create:
+    params:
+      model: {required: true}
+      prompt: {required: true}
+      temperature: {type: number}
+    returns: {fields: {text: string}}
+  embeddings.create:
+    params: {model: {required: true}, input: {required: true}}

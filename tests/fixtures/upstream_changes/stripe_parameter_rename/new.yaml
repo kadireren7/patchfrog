@@ -1,0 +1,15 @@
+# Synthetic fixture -- NOT Stripe's real API.
+patchfrog_sdk_surface: 1
+package: stripe
+ecosystem: npm
+version: "13.0.0"
+modules: [stripe]
+symbols:
+  checkout.sessions.create:
+    params:
+      mode: {required: true, enum: [payment, setup, subscription]}
+      success_url: {required: true}
+      payment_methods: {type: array}
+      customer_email: {}
+  customers.create:
+    params: {email: {}}
