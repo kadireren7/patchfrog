@@ -67,6 +67,7 @@ class ReviewRunModel(Base):
         Index("ix_review_runs_repository_id", "repository_id"),
         Index("ix_review_runs_repository_index_id", "repository_index_id"),
         Index("ix_review_runs_pull_request_id", "pull_request_id"),
+        Index("ix_review_runs_risk_tier", "risk_tier"),
         Index(
             "uq_review_runs_succeeded_identity",
             "repository_id",
@@ -180,6 +181,20 @@ class ReviewRunModel(Base):
     budget_elapsed_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     budget_termination_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     provider_cost_breakdown: Mapped[str] = mapped_column(Text, default="[]")
+
+    #: M4 Ultra-Low-Cost Review Engine (patchfrog.review.cost_policy).
+    #: Nullable/empty-default so runs predating M4 (or made without a
+    #: cost policy) read back honestly as "not recorded".
+    review_strategy: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    risk_tier: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    risk_signals: Mapped[str] = mapped_column(Text, default="[]")
+    no_ai_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    escalation_reasons: Mapped[str] = mapped_column(Text, default="[]")
+    context_initial_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    context_expanded_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    context_expansion_reasons: Mapped[str] = mapped_column(Text, default="[]")
+    cost_policy_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    forced: Mapped[bool] = mapped_column(Boolean, default=False)
 
     duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

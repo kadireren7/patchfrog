@@ -1,0 +1,64 @@
+openapi: 3.0.3
+info:
+  title: Inventory Service
+  version: 1.4.0
+  description: Internal inventory API used by the billing app.
+servers:
+  - url: https://inventory.internal.example.com
+security:
+  - bearerAuth: []
+paths:
+  /v1/items/{item_id}:
+    get:
+      operationId: getItem
+      summary: Fetch one item
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The item
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Item"
+  /v1/reservations:
+    post:
+      operationId: createReservation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Reservation"
+      responses:
+        "201":
+          description: Created
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Item:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        stock:
+          type: integer
+    Reservation:
+      type: object
+      required: [item, qty]
+      properties:
+        item:
+          type: string
+        qty:
+          type: integer
+          minimum: 1

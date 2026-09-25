@@ -125,7 +125,14 @@ from patchfrog.review.effort_types import ReviewEffortReason, ReviewEffortTier
 #: reasoning a tenth time -- ``ReviewTelemetrySnapshot`` gained the
 #: ``executable_verification`` field (:class:`ExecutableVerificationTelemetry`),
 #: a real additional key in the exported JSON.
-TELEMETRY_SCHEMA_VERSION = 11
+#:
+#: Bumped 11 -> 12 for the M4 Ultra-Low-Cost Review Engine:
+#: ``ReviewTelemetrySnapshot`` gained the ``cost`` field
+#: (:class:`ReviewCostTelemetrySnapshot`) -- risk tier, provider/critic
+#: call counts, retries, token/cost estimates, escalation reasons,
+#: context-cost metrics and budget status -- a real additional key in
+#: the exported JSON.
+TELEMETRY_SCHEMA_VERSION = 12
 
 
 class FindingLifecycleOutcome(StrEnum):
@@ -550,6 +557,30 @@ class ExecutableVerificationTelemetry:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewCostTelemetrySnapshot:
+    """M4 cost answers for one run -- counts, identities and reasons
+    only; never prompts, source, responses or secrets. Empty/zero/``None``
+    for runs predating M4 or made without a cost policy."""
+
+    review_strategy: str | None
+    risk_tier: str | None
+    risk_signals: tuple[str, ...]
+    no_ai_reason: str | None
+    provider_calls: int
+    critic_calls: int
+    retries: int
+    estimated_input_tokens: int
+    estimated_output_tokens: int
+    estimated_cost_usd: float
+    escalation_reasons: tuple[str, ...]
+    context_initial_tokens: int
+    context_expanded_tokens: int
+    context_expansion_reasons: tuple[str, ...]
+    forced: bool
+    budget_status: str
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewTelemetrySnapshot:
     """The complete, deterministic telemetry snapshot for one review run
     -- what :func:`patchfrog.telemetry.collector.collect_review_telemetry`
@@ -706,6 +737,9 @@ class ReviewTelemetrySnapshot:
             executable_verification_inconclusive_count=0,
         )
     )
+    #: M4 -- see :class:`ReviewCostTelemetrySnapshot`. ``None`` only for
+    #: snapshots built by code paths that predate M4.
+    cost: ReviewCostTelemetrySnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)

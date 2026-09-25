@@ -164,6 +164,8 @@ async def fetch_changed_surfaces_for_peers(
     by_run: dict[uuid.UUID, list[tuple[str, str]]] = {}
     seen_by_run: dict[uuid.UUID, set[tuple[str, str]]] = {}
     for review_run_id, file_path, qualified_name in result.all():
+        if qualified_name is None:
+            continue  # already excluded in SQL; narrows the nullable column's type
         key = (file_path, qualified_name)
         seen = seen_by_run.setdefault(review_run_id, set())
         if key in seen:

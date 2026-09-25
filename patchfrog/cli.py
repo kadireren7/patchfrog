@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import json
 import sys
 import time
 import uuid
@@ -40,6 +41,7 @@ from apps.worker.celery_app import celery_app
 from apps.worker.tasks.run_review_pipeline import run_review_pipeline_task
 from patchfrog.analysis.domain import AnalysisRunSummary
 from patchfrog.analysis.service import StaleIndexError, StaticAnalysisService
+from patchfrog.change_risk import classify_change
 from patchfrog.config.logging import configure_logging
 from patchfrog.config.settings import Settings, get_settings
 from patchfrog.context.config import ContextConfig
@@ -50,9 +52,17 @@ from patchfrog.cross_repo_intelligence.domain import (
     RepositoryRelationKind,
     RepositoryRelationProvenance,
 )
+from patchfrog.dependencies import DependencyInventory, discover_dependencies
+from patchfrog.dependencies.registry import DependencyRegistry, RegistryWriteResult
+from patchfrog.dependencies.report import inventory_to_dict, render_inventory_text
 from patchfrog.evaluation.beta_readiness import (
     compute_beta_readiness_metrics,
     load_beta_profile,
+)
+from patchfrog.evaluation.cost_benchmark import (
+    build_cost_benchmark_report,
+    render_cost_benchmark_markdown,
+    run_cost_benchmark,
 )
 from patchfrog.evaluation.domain import (
     CaseStatus,
@@ -143,6 +153,7 @@ from patchfrog.review.config_resolution import (
     apply_operator_hard_caps,
     resolve_repository_review_config,
 )
+from patchfrog.review.cost_policy import ReviewCostPolicy, ReviewStrategy
 from patchfrog.review.domain import ReviewCandidate, ReviewRunSummary
 from patchfrog.review.local_diff import diff_against_base
 from patchfrog.review.provider import LLMProvider
@@ -394,7 +405,7 @@ async def _review_dry_run(
 
 
 async def _review_local(
-    *, repository_path: Path, full_name: str, base_ref: str, incremental: bool
+    *, repository_path: Path, full_name: str, base_ref: str, incremental: bool, force_review: bool = False
 ) -> ReviewRunSummary:
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -435,6 +446,7 @@ async def _review_local(
             session_factory=session_factory,
             route_plan=route_plan,
             pricing_catalog=PricingCatalog.from_config(settings.provider_pricing),
+            cost_policy=ReviewCostPolicy.from_settings(settings),
         )
 
         if not incremental:
@@ -445,6 +457,7 @@ async def _review_local(
                 commit_sha=commit_sha,
                 diff_files=diff_files,
                 config=config,
+                force_review=force_review,
             )
 
         async with session_factory() as session:
@@ -493,6 +506,7 @@ async def _review_local(
             candidate_filter=prepared.candidate_filter,
             incremental_context_fingerprint=prepared.incremental_context_fingerprint,
             previous_generation_ancestry_verified=prepared.plan.selection.ancestry_verified,
+            force_review=force_review,
         )
         if prepared.memory_tracking_active:
             await memory_service.finalize(
@@ -748,6 +762,16 @@ def _run_review(args: argparse.Namespace) -> int:
                 f"(provider={runtime_config.provider} model={runtime_config.model}, "
                 "no provider call made)"
             )
+            dry_diff = diff_against_base(repository_path, args.base)
+            dry_policy = ReviewCostPolicy.from_settings(get_settings())
+            risk = classify_change(dry_diff, policy=dry_policy.risk_policy)
+            print(
+                f"risk tier: {risk.tier.value} (max provider calls "
+                f"{dry_policy.provider_call_budget(risk.tier)}, strategy={dry_policy.strategy.value}) "
+                f"signals={[sig.value for sig in risk.signals]}"
+            )
+            for reason in risk.reasons:
+                print(f"  - {reason}")
             for c in candidates:
                 target = c.qualified_name or c.symbol_name or f"{c.file_path}:{c.start_line}"
                 print(
@@ -776,7 +800,7 @@ def _run_review(args: argparse.Namespace) -> int:
         summary = asyncio.run(
             _review_local(
                 repository_path=repository_path, full_name=full_name, base_ref=args.base,
-                incremental=args.incremental,
+                incremental=args.incremental, force_review=args.force,
             )
         )
     except GitError as exc:
@@ -801,6 +825,15 @@ def _run_review(args: argparse.Namespace) -> int:
         f"reviewer_tokens={summary.reviewer_usage.input_tokens}/{summary.reviewer_usage.output_tokens} "
         f"critic_tokens={summary.critic_usage.input_tokens}/{summary.critic_usage.output_tokens} "
         f"duration_ms={summary.duration_ms:.1f} reused={summary.reused_existing_run}"
+    )
+    cost = summary.cost_report()
+    print(
+        f"cost: risk_tier={cost['risk_tier']} provider_calls={cost['provider_calls']} "
+        f"reviewer_calls={cost['reviewer_calls']} critic_calls={cost['critic_calls']} "
+        f"retries={cost['retries']} est_tokens={cost['estimated_input_tokens']}/{cost['estimated_output_tokens']} "
+        f"est_cost_usd={cost['estimated_cost_usd']:.6f} escalations={cost['escalation_reasons']} "
+        f"cache_hit={cost['cache_hit']} budget={cost['budget_status']}"
+        + (f" no_ai_reason={cost['no_ai_reason']}" if cost["no_ai_reason"] else "")
     )
     return 0
 
@@ -1759,7 +1792,8 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
     try:
-        runner = EvaluationRunner(session_factory=session_factory)
+        review_strategy = ReviewStrategy(args.review_strategy)
+        runner = EvaluationRunner(session_factory=session_factory, review_strategy=review_strategy)
         context_override = None  # normal, production-equivalent context by default
 
         cases_by_id = {c.id: c for c in cases}
@@ -1793,7 +1827,7 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
                 "critic_off": build_report(
                     EvaluationRunResult(
                         identity=build_evaluation_identity(
-                            mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=False,
+                            review_strategy=review_strategy, mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=False,
                             cases=cases, cases_root=DEFAULT_CASES_ROOT,
                         ),
                         generated_at=datetime.now(UTC).isoformat(), duration_ms=off_duration_ms,
@@ -1804,7 +1838,7 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
                 "critic_on": build_report(
                     EvaluationRunResult(
                         identity=build_evaluation_identity(
-                            mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=True,
+                            review_strategy=review_strategy, mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=True,
                             cases=cases, cases_root=DEFAULT_CASES_ROOT,
                         ),
                         generated_at=datetime.now(UTC).isoformat(), duration_ms=on_duration_ms,
@@ -1831,7 +1865,7 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
         if args.context_ablation:
             context_ablation_report = await _run_context_ablation(
                 runner, cases, mode=mode, provider_factory=provider_factory, timeout=args.timeout,
-                cases_by_id=cases_by_id, fixture_info=fixture_info,
+                cases_by_id=cases_by_id, fixture_info=fixture_info, review_strategy=review_strategy,
             )
 
         static_only_report: dict[str, Any] | None = None
@@ -1843,7 +1877,7 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
             )
             static_duration_ms = (time.monotonic() - static_start) * 1000
             static_identity = build_evaluation_identity(
-                mode=EvaluationMode.STATIC_ONLY, reviewer_provider=provider_factory(cases[0]),
+                review_strategy=review_strategy, mode=EvaluationMode.STATIC_ONLY, reviewer_provider=provider_factory(cases[0]),
                 critic_enabled=False, cases=cases, cases_root=DEFAULT_CASES_ROOT,
             )
             static_only_report = build_report(
@@ -1870,7 +1904,7 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
         duration_ms = (time.monotonic() - start) * 1000
 
         identity = build_evaluation_identity(
-            mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=critic_enabled_flag,
+            review_strategy=review_strategy, mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=critic_enabled_flag,
             cases=cases, cases_root=DEFAULT_CASES_ROOT,
         )
 
@@ -1919,6 +1953,71 @@ async def _eval_run_async(args: argparse.Namespace) -> dict[str, Any]:
         await engine.dispose()
 
 
+async def _persist_dependency_inventory(inventory: DependencyInventory, *, full_name: str) -> RegistryWriteResult:
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        repository_id = await _upsert_cli_repository(session_factory, full_name=full_name)
+        async with session_factory() as session:
+            result = await DependencyRegistry().record_inventory(
+                session, repository_id=repository_id, inventory=inventory
+            )
+            await session.commit()
+        return result
+    finally:
+        await engine.dispose()
+
+
+def _run_dependencies_discover(args: argparse.Namespace) -> int:
+    """M5.8: offline and read-only unless ``--persist``. Never opens
+    secret-store-like files, never prints a value, makes no network or
+    provider call."""
+
+    root: Path = args.repository
+    if not root.is_dir():
+        print(f"error: not a directory: {root}", file=sys.stderr)
+        return 1
+    commit_sha: str | None = None
+    if (root / ".git").exists():
+        try:
+            commit_sha = run_git(["-C", str(root), "rev-parse", "HEAD"]).strip()
+        except GitError:
+            commit_sha = None
+    full_name = args.full_name or _default_full_name(root)
+    inventory = discover_dependencies(root, repository=full_name, commit_sha=commit_sha)
+    payload = inventory_to_dict(inventory)
+    if args.persist:
+        result = asyncio.run(_persist_dependency_inventory(inventory, full_name=full_name))
+        payload["registry"] = asdict(result)
+    if args.output:
+        Path(args.output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(render_inventory_text(inventory, show_all_packages=args.all), end="")
+        if args.persist:
+            print(f"registry: {payload['registry']}")
+    return 0
+
+
+def _run_eval_cost_benchmark(args: argparse.Namespace) -> int:
+    """M4.10: never touches the configured database or any provider --
+    every scenario runs on its own private in-memory SQLite database with
+    a deterministic fake reviewer."""
+
+    configure_logging("WARNING")
+    results = asyncio.run(run_cost_benchmark())
+    report = build_cost_benchmark_report(results)
+    markdown = render_cost_benchmark_markdown(report)
+    if args.output:
+        Path(args.output).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    if args.markdown_output:
+        Path(args.markdown_output).write_text(markdown)
+    print(json.dumps(report, indent=2, sort_keys=True) if args.json else markdown, end="")
+    return 0 if report["all_targets_met"] and report["all_findings_preserved"] else 1
+
+
 def _asdict_metrics(metrics: Any) -> dict[str, Any]:
     from dataclasses import asdict
 
@@ -1934,6 +2033,7 @@ async def _run_context_ablation(
     timeout: float,
     cases_by_id: dict[str, EvaluationCase],
     fixture_info: dict[str, FixtureInfo],
+    review_strategy: ReviewStrategy = ReviewStrategy.COST_AWARE,
 ) -> dict[str, Any]:
     variants: dict[str, Any] = {}
     for label, kinds in _ABLATION_KIND_SETS.items():
@@ -1946,7 +2046,7 @@ async def _run_context_ablation(
         )
         variant_duration_ms = (time.monotonic() - variant_start) * 1000
         variant_identity = build_evaluation_identity(
-            mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=True,
+            review_strategy=review_strategy, mode=mode, reviewer_provider=provider_factory(cases[0]), critic_enabled=True,
             cases=cases, cases_root=DEFAULT_CASES_ROOT, context_config_override=override,
         )
         variant_report = build_report(
@@ -2208,6 +2308,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Build candidates and context only -- never constructs a provider or calls the LLM",
     )
     review_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass exact-head reuse: re-review even if this exact head was already reviewed",
+    )
+    review_parser.add_argument(
         "--incremental",
         action="store_true",
         help=(
@@ -2362,6 +2467,27 @@ def main(argv: list[str] | None = None) -> int:
         help="Disallow real GitHub writes for --installation",
     )
 
+    dependencies_parser = subparsers.add_parser(
+        "dependencies",
+        help="M5: external API/SDK dependency discovery + contract registry (offline, never reads secret values)",
+    )
+    dependencies_sub = dependencies_parser.add_subparsers(dest="dependencies_command", required=True)
+    discover_parser = dependencies_sub.add_parser(
+        "discover", help="Discover external dependencies, usage sites and contract fingerprints in a repository"
+    )
+    discover_parser.add_argument("repository", type=Path, help="Path to a local repository checkout")
+    discover_parser.add_argument("--json", action="store_true", help="Print the machine-readable JSON inventory")
+    discover_parser.add_argument("--all", action="store_true", help="List every declared package, not only the first 10")
+    discover_parser.add_argument("--output", default=None, help="Also write the JSON inventory to this path")
+    discover_parser.add_argument(
+        "--persist",
+        action="store_true",
+        help="Record the inventory in the dependency/contract registry (requires DATABASE_URL)",
+    )
+    discover_parser.add_argument(
+        "--full-name", default=None, help="Repository identity for --persist, e.g. 'owner/repo' (default: directory name)"
+    )
+
     cross_repo_parser = subparsers.add_parser(
         "cross-repo",
         help=(
@@ -2451,6 +2577,13 @@ def main(argv: list[str] | None = None) -> int:
         "ANTHROPIC_API_KEY.",
     )
     eval_run_parser.add_argument(
+        "--review-strategy",
+        choices=[strategy.value for strategy in ReviewStrategy],
+        default=ReviewStrategy.COST_AWARE.value,
+        help="M4 execution strategy under evaluation: 'cost_aware' (production default: risk tier, "
+        "zero-call NO_AI path, single-pass review) or 'specialist_fanout' (pre-M4 per-candidate fan-out)",
+    )
+    eval_run_parser.add_argument(
         "--beta-readiness",
         action="store_true",
         help="Run the committed 20-case beta profile with explicit candidate/critic/publishability expectations",
@@ -2498,6 +2631,17 @@ def main(argv: list[str] | None = None) -> int:
     eval_update_baseline_parser.add_argument("--input", default=None, help="JSON report path (default: evaluation_baselines/latest_run.json)")
     eval_update_baseline_parser.add_argument("--baseline", default=None, help="Baseline path (default: evaluation_baselines/phase8_baseline.json)")
 
+    eval_cost_parser = eval_subparsers.add_parser(
+        "cost-benchmark",
+        help=(
+            "M4: deterministic review-cost benchmark (pre-M4 fan-out vs cost-aware) over "
+            "tests/fixtures/cost_benchmark -- fake provider, synthetic prices, no network"
+        ),
+    )
+    eval_cost_parser.add_argument("--json", action="store_true", help="Print the JSON report to stdout")
+    eval_cost_parser.add_argument("--output", default=None, help="Also write the JSON report here")
+    eval_cost_parser.add_argument("--markdown-output", default=None, help="Also write a Markdown report here")
+
     mcp_parser = subparsers.add_parser(
         "mcp", help="Milestone T: Agent Handoff MCP server (patchfrog.mcp) -- stdio only"
     )
@@ -2533,6 +2677,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_telemetry_beta_summary(args)
     if args.command == "ops":
         return _run_ops(args)
+    if args.command == "dependencies" and args.dependencies_command == "discover":
+        return _run_dependencies_discover(args)
     if args.command == "cross-repo":
         return _run_cross_repo(args)
     if args.command == "eval":
@@ -2544,6 +2690,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_eval_report(args)
         if args.eval_command == "update-baseline":
             return _run_eval_update_baseline(args)
+        if args.eval_command == "cost-benchmark":
+            return _run_eval_cost_benchmark(args)
     if args.command == "mcp" and args.mcp_command == "serve":
         return _run_mcp_serve(args)
 

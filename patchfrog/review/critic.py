@@ -79,6 +79,7 @@ class CriticService:
                 estimated_input_tokens=estimated_input_tokens,
                 estimated_output_tokens=self._max_output_tokens,
                 is_retry=is_retry,
+                verification=True,
             )
         result = await self._provider.generate_structured(request)
         if reservation is not None:

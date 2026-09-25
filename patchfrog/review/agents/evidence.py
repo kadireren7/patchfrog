@@ -91,3 +91,25 @@ class CandidateEvidencePackage:
     #: explicitly consumed by another, authorized repository. Same size
     #: discipline as every other Intelligence text field above.
     cross_repo_intelligence_text: str = ""
+    #: M4 single-pass review: the same repository context as
+    #: ``context_text``, kept as individual ``# path\n<content>`` blocks
+    #: so a batched prompt can show each block once across candidates
+    #: (context de-duplication) instead of splitting ``context_text``
+    #: heuristically. Empty for callers that never batch.
+    context_blocks: tuple[str, ...] = ()
+
+    def intelligence_sections(self) -> tuple[tuple[str, str], ...]:
+        """``(tag, text)`` pairs in the same order/tags
+        :func:`patchfrog.review.prompt.build_agent_prompt` renders them."""
+
+        return (
+            ("change_intelligence", self.change_intelligence_text),
+            ("contract_intelligence", self.contract_intelligence_text),
+            ("intent_verification", self.intent_verification_text),
+            ("test_intelligence", self.test_intelligence_text),
+            ("historical_regression", self.historical_regression_text),
+            ("repository_learning", self.repository_learning_text),
+            ("trajectory_intelligence", self.trajectory_intelligence_text),
+            ("cross_pr_intelligence", self.cross_pr_intelligence_text),
+            ("cross_repo_intelligence", self.cross_repo_intelligence_text),
+        )

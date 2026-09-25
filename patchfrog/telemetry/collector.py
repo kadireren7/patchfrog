@@ -67,6 +67,7 @@ from patchfrog.telemetry.domain import (
     ProviderRoleUsage,
     ProviderTelemetry,
     RepositoryLearningsTelemetry,
+    ReviewCostTelemetrySnapshot,
     ReviewFeedbackEventTelemetry,
     ReviewTelemetrySnapshot,
     TestIntelligenceTelemetry,
@@ -409,6 +410,25 @@ async def collect_review_telemetry(
         executable_verification_inconclusive_count=run.executable_verification_inconclusive_count,
     )
 
+    cost = ReviewCostTelemetrySnapshot(
+        review_strategy=run.review_strategy,
+        risk_tier=run.risk_tier,
+        risk_signals=_json_str_tuple(run.risk_signals),
+        no_ai_reason=run.no_ai_reason,
+        provider_calls=run.provider_calls,
+        critic_calls=run.critic_calls,
+        retries=run.retry_attempts,
+        estimated_input_tokens=run.budget_input_tokens,
+        estimated_output_tokens=run.budget_output_tokens,
+        estimated_cost_usd=run.estimated_cost_usd,
+        escalation_reasons=_json_str_tuple(run.escalation_reasons),
+        context_initial_tokens=run.context_initial_tokens or 0,
+        context_expanded_tokens=run.context_expanded_tokens or 0,
+        context_expansion_reasons=_json_str_tuple(run.context_expansion_reasons),
+        forced=bool(run.forced),
+        budget_status=run.budget_termination_reason or "within_budget",
+    )
+
     return ReviewTelemetrySnapshot(
         schema_version=TELEMETRY_SCHEMA_VERSION,
         review_run_id=run.id,
@@ -440,4 +460,13 @@ async def collect_review_telemetry(
         cross_pr_intelligence=cross_pr_intelligence,
         cross_repo_intelligence=cross_repo_intelligence,
         executable_verification=executable_verification,
+        cost=cost,
     )
+
+
+def _json_str_tuple(raw: str | None) -> tuple[str, ...]:
+    try:
+        value = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return ()
+    return tuple(str(v) for v in value) if isinstance(value, list) else ()

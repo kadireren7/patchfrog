@@ -141,6 +141,14 @@ def _is_denylisted(relative_path: str) -> bool:
     return any(part in _DENYLISTED_DIR_NAMES for part in PurePosixPath(relative_path).parts[:-1])
 
 
+def is_denylisted_path(relative_path: str) -> bool:
+    """Public form of the vendor/build/virtualenv directory denylist, for
+    other repository walkers (e.g. :mod:`patchfrog.dependencies`) that
+    must skip exactly the same directories indexing already skips."""
+
+    return _is_denylisted(relative_path)
+
+
 def _looks_binary(data: bytes) -> bool:
     return b"\x00" in data[:8192]
 

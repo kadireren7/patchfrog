@@ -31,6 +31,7 @@ from patchfrog.evaluation.matcher import unsupported_reason
 from patchfrog.evaluation.metrics import compute_critic_comparison, compute_static_ai_overlap
 from patchfrog.evaluation.runner import EvaluationRunner
 from patchfrog.review.agents.roles import AgentRole
+from patchfrog.review.cost_policy import ReviewStrategy
 from patchfrog.review.effort_types import ReviewEffortTier
 from patchfrog.review.provider import ProviderRequest
 from patchfrog.review.providers.fake import FakeLLMProvider, ScriptedResponse
@@ -156,7 +157,9 @@ async def test_hallucinated_finding_is_rejected_by_validation_and_marked_unsuppo
     )
     reviewer = FakeLLMProvider(response_factory=_factory_for_target("can_withdraw", hallucinated))
     critic = FakeLLMProvider(response_factory=_factory_for_target("can_withdraw", hallucinated))
-    runner = EvaluationRunner(session_factory=session_factory)
+    # Exercises the per-role specialist fan-out explicitly (M4 kept it as
+    # ReviewStrategy.SPECIALIST_FANOUT); the runner's default is cost-aware.
+    runner = EvaluationRunner(session_factory=session_factory, review_strategy=ReviewStrategy.SPECIALIST_FANOUT)
     result = await runner.run_case(case, cases_root=cases_root, mode=EvaluationMode.FULL_PIPELINE, reviewer_provider=reviewer, critic_provider=critic)
     assert not result.is_error, result.error
     # Rejected before validation -- never becomes an accepted prediction at all.
@@ -289,6 +292,29 @@ async def test_analyzer_executions_are_captured_for_per_analyzer_coverage(
     assert ruff_coverage.attempted == 1
 
 
+async def test_cost_aware_single_pass_hallucination_is_rejected_by_the_same_validation(
+    session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
+) -> None:
+    """M4: the single-pass UNIFIED call goes through the identical
+    deterministic validation gate -- a hallucinated quote never becomes a
+    prediction, and is still visible as one pre-validation proposal."""
+
+    case, cases_root = _write_case(tmp_path, "hallu-cost-aware", {"billing.py": _SECURITY_SIGNAL_SOURCE}, expected=())
+    hallucinated = ScriptedResponse(
+        raw_json=json.dumps({"findings": [_finding(quoted="this text does not exist in the file at all")]})
+    )
+    reviewer = FakeLLMProvider(response_factory=_factory_for_target("can_withdraw", hallucinated))
+    runner = EvaluationRunner(session_factory=session_factory)
+    result = await runner.run_case(
+        case, cases_root=cases_root, mode=EvaluationMode.FULL_PIPELINE, reviewer_provider=reviewer,
+        critic_provider=reviewer,
+    )
+    assert not result.is_error, result.error
+    assert result.predictions == ()
+    assert len(result.proposals_before_validation) == 1
+    assert result.proposals_before_validation[0].agent_role is AgentRole.UNIFIED
+
+
 async def test_evaluation_records_role_provenance_and_call_counts(
     session_factory: async_sessionmaker[AsyncSession], tmp_path: Path
 ) -> None:
@@ -308,7 +334,9 @@ async def test_evaluation_records_role_provenance_and_call_counts(
     findings_response = ScriptedResponse(raw_json=json.dumps({"findings": [_finding()]}))
     reviewer = FakeLLMProvider(response_factory=_factory_for_target("can_withdraw", findings_response))
     critic = FakeLLMProvider(response_factory=_factory_for_target("can_withdraw", findings_response))
-    runner = EvaluationRunner(session_factory=session_factory)
+    # Exercises the per-role specialist fan-out explicitly (M4 kept it as
+    # ReviewStrategy.SPECIALIST_FANOUT); the runner's default is cost-aware.
+    runner = EvaluationRunner(session_factory=session_factory, review_strategy=ReviewStrategy.SPECIALIST_FANOUT)
     result = await runner.run_case(
         case, cases_root=cases_root, mode=EvaluationMode.FULL_PIPELINE, reviewer_provider=reviewer, critic_provider=critic
     )
@@ -341,7 +369,9 @@ async def test_quality_cost_guard_ablation_changes_call_shape_for_identical_fixt
     reviewer_factory: Callable[[ProviderRequest], ScriptedResponse] = _factory_for_target(
         "can_withdraw", _NO_FINDINGS
     )
-    runner = EvaluationRunner(session_factory=session_factory)
+    # Exercises the per-role specialist fan-out explicitly (M4 kept it as
+    # ReviewStrategy.SPECIALIST_FANOUT); the runner's default is cost-aware.
+    runner = EvaluationRunner(session_factory=session_factory, review_strategy=ReviewStrategy.SPECIALIST_FANOUT)
 
     guard_result = await runner.run_case(
         case, cases_root=cases_root, mode=EvaluationMode.FULL_PIPELINE,

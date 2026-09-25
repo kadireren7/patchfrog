@@ -458,6 +458,11 @@ class EvaluationIdentity:
     #: depth-2 run, an adaptive run, and a kind-restricted ablation
     #: variant each get a distinct identity.
     context_config_identity: str = "default"
+    #: M4: which review execution strategy produced this run
+    #: (:class:`~patchfrog.review.cost_policy.ReviewStrategy`). Defaults
+    #: to the pre-M4 ``"specialist_fanout"`` so a baseline serialized
+    #: before this field existed deserializes as what it actually was.
+    review_strategy: str = "specialist_fanout"
 
 
 @dataclass(frozen=True, slots=True)

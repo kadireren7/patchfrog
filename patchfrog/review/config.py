@@ -123,7 +123,12 @@ CONFIG_SCHEMA_VERSION = 5
 #: patchfrog.executable_verification.evidence only when a real, bounded,
 #: targeted test execution actually produced a PASSED/CONFIRMED_FAILURE
 #: result for the exact proposal being critiqued -- empty otherwise.
-REVIEW_PROMPT_VERSION = 13
+#: Bumped to 14 for the M4 Ultra-Low-Cost Review Engine: a new
+#: single-pass (``AgentRole.UNIFIED``) system prompt and a batched,
+#: multi-target user prompt with shared, de-duplicated repository
+#: context (patchfrog.review.prompt.build_single_pass_prompt). The
+#: Correctness/Security/critic prompts themselves are unchanged.
+REVIEW_PROMPT_VERSION = 14
 
 #: Bumped whenever patchfrog.review.validation / patchfrog.review.critic /
 #: patchfrog.review.confidence's rules for what survives to a final
@@ -149,7 +154,13 @@ REVIEW_POLICY_VERSION = 4
 #: budget, and retry allowance are now tier-driven
 #: (patchfrog.review.effort.ReviewEffortPolicy) rather than uniform --
 #: a materially different call shape per candidate than the prior
-#: engine version ever produced.
+#: engine version ever produced. Deliberately NOT bumped for M4: the
+#: legacy per-candidate call shape is unchanged when no cost policy is
+#: given, and every cost-aware run's canonical identity already carries
+#: the operator cost policy's fingerprint (which folds in
+#: REVIEW_COST_POLICY_VERSION and CHANGE_RISK_POLICY_VERSION) -- a
+#: second, global engine bump would add nothing but invalidate every
+#: legacy identity for no behavioral reason.
 REVIEW_ENGINE_VERSION = 3
 
 #: Independent version for the Quality + Cost Guard's own tiering policy
@@ -284,6 +295,13 @@ class ReviewModelIdentity(BaseModel):
     engine_version: int = REVIEW_ENGINE_VERSION
     #: See :data:`QUALITY_COST_POLICY_VERSION`.
     quality_cost_policy_version: int = QUALITY_COST_POLICY_VERSION
+    #: M4: :meth:`patchfrog.review.cost_policy.ReviewCostPolicy.fingerprint`
+    #: of the operator cost policy this run executes under (strategy,
+    #: per-tier call budgets, classifier thresholds). ``None`` for a run
+    #: without a cost policy -- then it is omitted from the fingerprint
+    #: payload entirely, so pre-M4-shaped identities are unaffected by
+    #: its mere existence.
+    cost_policy_fingerprint: str | None = None
 
     def fingerprint(self) -> str:
         payload = {
@@ -296,6 +314,8 @@ class ReviewModelIdentity(BaseModel):
             "engine_version": self.engine_version,
             "quality_cost_policy_version": self.quality_cost_policy_version,
         }
+        if self.cost_policy_fingerprint is not None:
+            payload["cost_policy_fingerprint"] = self.cost_policy_fingerprint
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()
 

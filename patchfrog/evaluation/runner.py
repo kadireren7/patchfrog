@@ -82,6 +82,7 @@ from patchfrog.review.config import (
     REVIEW_PROMPT_VERSION,
     ReviewConfig,
 )
+from patchfrog.review.cost_policy import ReviewCostPolicy, ReviewStrategy
 from patchfrog.review.domain import ProposalStatus, ReviewRunSummary
 from patchfrog.review.effort import uniform_baseline_decision
 from patchfrog.review.effort_types import ReviewEffortTier
@@ -118,6 +119,7 @@ def build_evaluation_identity(
     cases_root: Path,
     use_quality_cost_guard: bool = True,
     context_config_override: ContextConfig | None = None,
+    review_strategy: ReviewStrategy = ReviewStrategy.COST_AWARE,
 ) -> EvaluationIdentity:
     """Everything that must match for two evaluation runs to be
     comparable -- see the module docstring of
@@ -154,6 +156,7 @@ def build_evaluation_identity(
         context_config_identity=(
             context_config_override.fingerprint() if context_config_override is not None else "default"
         ),
+        review_strategy=review_strategy.value,
     )
 
 _ALWAYS_NO_FINDINGS = ScriptedResponse(raw_json=json.dumps({"findings": []}))
@@ -255,8 +258,21 @@ class EvaluationRunner:
     reuse across many :meth:`run_case` calls (each fully cleans up its
     own throwaway repo)."""
 
-    def __init__(self, *, session_factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        review_strategy: ReviewStrategy = ReviewStrategy.COST_AWARE,
+    ) -> None:
+        """``review_strategy`` (M4): ``COST_AWARE`` (default) evaluates the
+        production-equivalent path -- the same
+        :class:`~patchfrog.review.cost_policy.ReviewCostPolicy` defaults
+        every production entry point uses. ``SPECIALIST_FANOUT`` evaluates
+        the exact pre-M4 per-candidate fan-out (no cost policy at all),
+        which is the "before" arm of a before/after comparison."""
+
         self._session_factory = session_factory
+        self._review_strategy = review_strategy
         self._indexing = RepositoryIndexingService(session_factory=session_factory)
         self._static = StaticAnalysisService(session_factory=session_factory)
         self._analysis_queries = AnalysisQueryService()
@@ -419,6 +435,11 @@ class EvaluationRunner:
                     session_factory=self._session_factory, reviewer_provider=provider,
                     critic_provider=effective_critic,
                     effort_decision_override=effort_decision_override,
+                    cost_policy=(
+                        ReviewCostPolicy()
+                        if self._review_strategy is ReviewStrategy.COST_AWARE
+                        else None
+                    ),
                 )
                 summary: ReviewRunSummary = await service.review_local(
                     repository_id=repository_id, root_path=repo_root, repository_full_name=full_name,

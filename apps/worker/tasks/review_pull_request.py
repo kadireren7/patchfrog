@@ -60,6 +60,7 @@ from patchfrog.review.config_resolution import (
     apply_operator_hard_caps,
     resolve_repository_review_config,
 )
+from patchfrog.review.cost_policy import ReviewCostPolicy
 from patchfrog.review.domain import ReviewRunStatus, ReviewRunSummary
 from patchfrog.review.runtime_config import resolve_review_runtime_config
 from patchfrog.review.service import (
@@ -276,6 +277,9 @@ async def _review_pull_request(
             verifier_dispatcher=verifier_dispatcher,
             verification_snapshot_root=settings.verification_snapshot_root,
             pricing_catalog=PricingCatalog.from_config(settings.provider_pricing),
+            # M4: PR-level risk tier, zero-call NO_AI path, per-tier call
+            # budgets, single-pass review -- operator policy from Settings.
+            cost_policy=ReviewCostPolicy.from_settings(settings),
         )
         summary = await service.review_pull_request(
             repository_id=repository_id,
@@ -335,6 +339,10 @@ async def _review_pull_request(
             metrics.candidates_by_tier_total.labels(tier=tier.value).inc(count)
         metrics.candidates_skipped_budget_total.inc(summary.candidates_skipped_budget)
         metrics.critic_calls_total.inc(summary.critic_calls)
+        if summary.risk_tier is not None and not summary.reused_existing_run:
+            metrics.reviews_by_risk_tier_total.labels(risk_tier=summary.risk_tier).inc()
+            for reason in summary.escalation_reasons:
+                metrics.review_escalations_total.labels(reason=reason).inc()
 
         return summary
     finally:

@@ -21,6 +21,14 @@ from patchfrog.intelligence.tests import TestRelationship
 class NodeKind(StrEnum):
     FILE = "file"
     SYMBOL = "symbol"
+    #: M5 (patchfrog.dependencies.graph): an external API/SDK/contract the
+    #: repository depends on. ``file_path`` is empty and ``qualified_name``
+    #: is the dependency key (e.g. ``openai:pypi``) -- never persisted to
+    #: ``repository_edges`` (the dependency registry owns its own tables).
+    EXTERNAL_DEPENDENCY = "external_dependency"
+    #: M5: one normalized contract snapshot; ``qualified_name`` is the
+    #: contract fingerprint.
+    EXTERNAL_CONTRACT = "external_contract"
 
 
 class EdgeKind(StrEnum):
@@ -31,6 +39,10 @@ class EdgeKind(StrEnum):
     SYMBOL_REFERENCES_SYMBOL = "symbol_references_symbol"
     FILE_TESTS_FILE = "file_tests_file"
     SYMBOL_TESTED_BY_SYMBOL = "symbol_tested_by_symbol"
+    #: M5: a file/symbol uses an external dependency (a usage site).
+    USES_EXTERNAL_DEPENDENCY = "uses_external_dependency"
+    #: M5: an external dependency is described by a contract snapshot.
+    DEPENDENCY_HAS_CONTRACT = "dependency_has_contract"
 
 
 @dataclass(frozen=True, slots=True)

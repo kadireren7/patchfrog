@@ -378,3 +378,61 @@ class ReviewRunSummary:
     #: docstring for why the two are never conflated.
     reviewer_latency_ms: float = 0.0
     budget: ReviewBudgetSnapshot | None = None
+    #: M4 cost-aware execution (:mod:`patchfrog.review.cost_policy`).
+    #: ``None``/empty for a run made without a cost policy (the legacy
+    #: per-candidate fan-out) or before M4 existed -- never fabricated.
+    review_strategy: str | None = None
+    risk_tier: str | None = None
+    risk_signals: tuple[str, ...] = ()
+    #: Set only for a zero-call NO_AI run -- the deterministic reason.
+    no_ai_reason: str | None = None
+    #: One entry per *additional* specialist call made after the single
+    #: pass (see :class:`~patchfrog.review.cost_policy.EscalationReason`).
+    escalation_reasons: tuple[str, ...] = ()
+    #: Estimated context tokens actually built for review: the initial
+    #: (depth-1) part, the adaptive (depth-2) expansion on top of it, and
+    #: why expansion happened. Counts only -- never source text.
+    context_initial_tokens: int = 0
+    context_expanded_tokens: int = 0
+    context_expansion_reasons: tuple[str, ...] = ()
+    #: An explicit force-review bypassed exact-head reuse for this run.
+    forced: bool = False
+
+    def cost_report(self) -> dict[str, object]:
+        """Everything M4.9 requires a review to be able to answer about
+        its own cost -- counts, identities and reasons only (never
+        prompts, source, responses or secrets)."""
+
+        budget = self.budget
+        reviewer_calls = sum(self.calls_by_role.values())
+        return {
+            "risk_tier": self.risk_tier,
+            "risk_signals": list(self.risk_signals),
+            "review_strategy": self.review_strategy,
+            "no_ai_reason": self.no_ai_reason,
+            "cache_hit": self.reused_existing_run,
+            "forced": self.forced,
+            "provider_calls": budget.provider_calls if budget is not None else reviewer_calls + self.critic_calls,
+            "reviewer_calls": reviewer_calls,
+            "reviewer_calls_by_role": {role.value: n for role, n in sorted(self.calls_by_role.items())},
+            "critic_calls": self.critic_calls,
+            "retries": budget.retry_attempts if budget is not None else self.retries_consumed,
+            "providers": [
+                {"provider": m.provider, "model": m.model, "calls": m.call_count}
+                for m in (budget.by_model if budget is not None else ())
+            ],
+            "estimated_input_tokens": budget.input_tokens if budget is not None else self.reviewer_usage.input_tokens
+            + self.critic_usage.input_tokens,
+            "estimated_output_tokens": budget.output_tokens if budget is not None else self.reviewer_usage.output_tokens
+            + self.critic_usage.output_tokens,
+            "estimated_cost_usd": budget.estimated_cost_usd if budget is not None else 0.0,
+            "escalation_reasons": list(self.escalation_reasons),
+            "context_initial_tokens": self.context_initial_tokens,
+            "context_expanded_tokens": self.context_expanded_tokens,
+            "context_expansion_reasons": list(self.context_expansion_reasons),
+            "budget_status": (
+                budget.termination_reason.value
+                if budget is not None and budget.termination_reason is not None
+                else "within_budget"
+            ),
+        }

@@ -1,5 +1,12 @@
 # Quality + Cost Guard
 
+> **M4 addition.** This document covers *per-candidate* effort tiers.
+> M4 adds a deterministic *PR-level* risk tier on top (zero-call NO_AI
+> path, single-pass review, per-tier provider-call budgets with a critic
+> verification reserve) -- see `docs/cost-aware-review.md`. The
+> per-candidate tiers below still decide context budget and critic
+> strictness inside a cost-aware run.
+
 `patchfrog/review/effort.py`, `patchfrog/review/effort_types.py`, and the
 tier-aware parts of `patchfrog/review/orchestration.py` and
 `patchfrog/review/service.py` introduce a deterministic layer that
