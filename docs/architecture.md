@@ -24,20 +24,23 @@ provider (LLM) work only follows when it is justified.
     │   usage sites, normalized contract      external_contract_snapshots,
     │   fingerprints with history             patchfrog/dependencies/graph
     ▼
- [M6] Upstream change detection              (future)                          NOT YET
+ [M6] Upstream change detection              patchfrog/upstream                IMPLEMENTED
     │   new SDK versions / spec revisions diffed against the registry
     ▼
- [M6] Consumer impact / blast radius         (future; reuses the code graph,   NOT YET
-    │   usage site → symbol → callers          Contract Intelligence K,
-    │                                          Cross-Repo Intelligence R)
+ [M6] Consumer impact / blast radius         patchfrog/upstream                IMPLEMENTED
+    │   usage site → symbol → callers          (reuses the code graph;
+    │                                          Python/C/C++ caller graph,
+    │                                          JS/TS usage sites only)
     ▼
- [M7+] Migration generation                  (future)                          NOT YET
+ [M7] Migration planning + generated patch   patchfrog/migration               IMPLEMENTED
+    │   deterministic rewrite + safety gates,  (structural verification only;
+    │   optional narrow model-assisted path    no executable verification yet)
     ▼
- [M7+] Verification                          executable_verification,          PARTLY EXISTS
-    │   targeted tests, fix verification,     fix_verification, review engine
-    │   cost-aware review as a safety layer   (M4)
+ [M8] Executable/runtime verification        executable_verification,          PARTLY EXISTS
+    │   that a generated patch fixes the       fix_verification, review engine
+    │   break -- not yet wired to M7 patches   (cost-aware review, M4)
     ▼
- [M7+] Evidence-backed pull request          publishing, merge_readiness       PARTLY EXISTS
+ [M9] Evidence-backed pull request           publishing, merge_readiness       PARTLY EXISTS
 ```
 
 ## Where existing capabilities fit
@@ -47,8 +50,8 @@ provider (LLM) work only follows when it is justified.
 | Review engine (`patchfrog/review`) | **Secondary safety/verification layer.** Kept intact; M4 made it cheap (risk tiers, zero-call paths, single pass, per-tier budgets — `docs/cost-aware-review.md`) so it can run inside migration workflows. |
 | Change/risk classifier (`patchfrog/change_risk`) | Pure diff classifier; sizes review effort today and will size migration verification. |
 | Repository index + graph (`indexing`, `parsing`, `intelligence`) | Symbol identities and caller/callee edges the dependency graph plugs into. |
-| Intelligence layers J–R | Deterministic evidence; K (contracts) and R (cross-repo) are the natural consumers-impact building blocks for M6. |
-| Executable/fix verification (S, T) | Verification step for generated migrations. |
+| Intelligence layers J–R | Deterministic evidence, used by normal PR review; M6 consumer-impact matching reuses the same code-graph primitives independently, not these layers directly. |
+| Executable/fix verification (S, T) | Not yet wired to M7-generated patches; that integration is M8. |
 | Publishing, checks, merge readiness (V) | Decision and PR surface. |
 
 Generic PR review remains available (`PATCHFROG_REVIEW_STRATEGY`,

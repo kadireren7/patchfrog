@@ -168,8 +168,8 @@ Invariant: change -> impact -> evidence -> verification -> decision. Full
 picture: `docs/architecture.md`. Generic PR review becomes a secondary
 safety/verification capability (kept, not removed).
 
-Under development on `feat/m4-m5-cost-engine-dependency-discovery`, open
-for review, not yet merged to `main`.
+M4+M5 merged to `main`. M6+M7 under development on
+`feat/m6-m7-upstream-change-migration`, open for review, not yet merged.
 
 **M4 — Ultra-Low-Cost Review Engine.** Implemented: deterministic PR-level
 change/risk tiers (`patchfrog.change_risk`), zero-call NO_AI path,
@@ -187,9 +187,41 @@ dependency graph on the existing graph primitives, and a CLI. See
 `docs/dependency-discovery.md`.
 
 **M6 — Upstream change detection + consumer impact / blast radius.**
-Next; **not started.** Diff new upstream SDK versions/spec revisions
-against the registry's contract snapshots and walk usage sites into the
-existing code graph.
+Implemented: a deterministic contract-diff engine (OpenAPI + a small
+provider-agnostic SDK surface format) and semver-aware version diff,
+explicit change hints as the only source of rename/replacement
+knowledge, consumer mapping from M6 diff items to M5 usage sites
+(unmatched sites are reported as ignored, never affected), a bounded
+DIRECT/TRANSITIVE/POTENTIAL blast radius on the existing code graph
+(a real caller graph for Python/C/C++, usage sites only for JS/TS),
+multi-repository impact reusing the M5 registry as the trusted
+cross-repository consumer set, and idempotent persistence. See
+`docs/upstream-changes.md`.
+
+**M7 — Migration Planner + Generated Fix.** Implemented: a migration
+planner that assigns a strategy and an auto-fix eligibility
+(AUTO_SAFE/AUTO_WITH_REVIEW/HUMAN_REQUIRED/UNSUPPORTED) per affected
+usage site x diff item, never inventing a value with no deterministic
+source; AST-located (Python) / lexically-located (JS/TS) span rewrites
+that leave all other bytes untouched; a pure, idempotent patch generator
+(re-running against an already-migrated checkout yields zero steps and
+an empty diff); eight deterministic safety gates every candidate patch
+must pass; an optional, narrowly-scoped model-assisted path for the one
+case a deterministic strategy cannot resolve (a single located call, one
+structured value field, same rewriter and safety gates, its own
+`PatchOrigin`, never merged with the deterministic patch); and idempotent
+persistence with a `PatchLinkage` M8/M9 can key on. See `docs/migration.md`.
+
+**M8 — Executable/Runtime Verification of a generated migration.** Next;
+**not started.** Wire a generated M7 patch into (an extension of) the
+existing executable/fix-verification sandbox to confirm the original
+break is actually gone at the candidate fix, not just structurally
+plausible.
+
+**M9 — Automated Migration PRs.** Not started; depends on M8. Open an
+evidence-backed pull request from a verified M7 patch, through the
+existing publishing/merge-readiness surface -- never a second PR-opening
+path.
 
 ## Then — Advanced Verification
 
