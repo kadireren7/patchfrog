@@ -54,7 +54,7 @@ def _rewrite(step: MigrationStep, text: str) -> list[TextEdit]:
     raise RewriteError(f"no deterministic rewriter for language {language!r}")
 
 
-def _read_file(root: Path, relative_path: str) -> str | None:
+def read_target_file(root: Path, relative_path: str) -> str | None:
     if is_secret_store_path(relative_path):
         return None
     candidate = (root / relative_path).resolve()
@@ -83,7 +83,7 @@ def generate_patch(plan: MigrationPlan, root: Path) -> GeneratedPatch:
     step_results: list[StepResult] = []
 
     for file_path, steps in sorted(by_file.items()):
-        original = _read_file(resolved_root, file_path)
+        original = read_target_file(resolved_root, file_path)
         if original is None:
             for step in steps:
                 step_results.append(
@@ -142,4 +142,4 @@ def generate_patch(plan: MigrationPlan, root: Path) -> GeneratedPatch:
     )
 
 
-__all__ = ["generate_patch"]
+__all__ = ["generate_patch", "read_target_file"]

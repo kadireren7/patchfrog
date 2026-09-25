@@ -227,3 +227,29 @@ def test_package_json_bump_never_touches_other_fields(tmp_path: Path) -> None:
 
 def test_unified_diff_is_empty_for_identical_text() -> None:
     assert unified_diff("a.py", "same\n", "same\n") == ""
+
+
+# -- structural: the deterministic path never imports a provider -----------------
+
+
+_MIGRATION_DIR = Path(__file__).resolve().parents[2] / "patchfrog" / "migration"
+
+
+def test_deterministic_migration_modules_never_import_a_provider() -> None:
+    """Only assist.py (M7.4, explicitly optional) may import the LLM
+    provider abstraction -- planning, rewriting and safety gates
+    (M7.1-M7.3, M7.5) must stay deterministic and provider-free."""
+
+    import ast
+
+    for path in _MIGRATION_DIR.glob("*.py"):
+        if path.name in ("assist.py", "__init__.py"):
+            continue
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                assert not node.module.startswith(("patchfrog.review.provider", "patchfrog.review.providers")), (
+                    f"{path.name} imports {node.module}"
+                )
+            if isinstance(node, ast.Import):
+                assert not any(a.name.split(".")[0] in ("anthropic", "openai", "google") for a in node.names)
