@@ -7,8 +7,12 @@ expect:
   repositories:
     repo:
       status: affected
-      direct: [stock/sync.py::fetch_item, stock/sync.py::push_stock]
+      direct: ['stock/sync.py::fetch_item', 'stock/sync.py::push_stock']
       potential: []
       ruled_out: []
       transitive: []
       related_tests: []
+      migration:
+        plan_status: human_required
+        residual_risk: high
+        steps: ['human_required update_auth stock/sync.py::fetch_item', 'human_required update_auth stock/sync.py::push_stock']

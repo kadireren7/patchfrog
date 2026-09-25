@@ -1,21 +1,21 @@
 description: One Stripe-like change across an organisation of four repositories.
 change: {old: old.yaml, new: new.yaml, hints: hints.yaml}
-repositories:
-  checkout-service: org/checkout-service
-  crm-service: org/crm-service
-  docs-site: org/docs-site
-  billing-worker: org/billing-worker
+repositories: {checkout-service: org/checkout-service, crm-service: org/crm-service, docs-site: org/docs-site, billing-worker: org/billing-worker}
 expect:
   risk: breaking
   consumer_affecting_kinds: [package_major_bump, sdk_parameter_renamed]
   repositories:
     checkout-service:
       status: affected
-      direct: [checkout/session.py::start_checkout]
+      direct: ['checkout/session.py::start_checkout']
       potential: []
       ruled_out: []
       transitive: []
       related_tests: []
+      migration:
+        plan_status: planned
+        residual_risk: low
+        steps: [auto_safe bump_package_version requirements.txt, 'auto_safe rename_parameter checkout/session.py::start_checkout']
     crm-service:
       status: unaffected
       direct: []
@@ -23,7 +23,11 @@ expect:
       ruled_out: []
       transitive: []
       related_tests: []
-      unaffected_includes: [crm/customers.py::register]
+      unaffected_includes: ['crm/customers.py::register']
+      migration:
+        plan_status: not_required
+        residual_risk: low
+        steps: []
     docs-site:
       status: unaffected
       direct: []
@@ -31,10 +35,18 @@ expect:
       ruled_out: []
       transitive: []
       related_tests: []
+      migration:
+        plan_status: not_required
+        residual_risk: low
+        steps: []
     billing-worker:
       status: uncertain
       direct: []
-      potential: [worker/jobs.py::run]
+      potential: ['worker/jobs.py::run']
       ruled_out: []
       transitive: []
       related_tests: []
+      migration:
+        plan_status: planned
+        residual_risk: high
+        steps: [auto_with_review bump_package_version requirements.txt, 'human_required manual_review worker/jobs.py::run']

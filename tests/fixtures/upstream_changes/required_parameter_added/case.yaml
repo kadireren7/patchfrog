@@ -7,8 +7,13 @@ expect:
   repositories:
     repo:
       status: affected
-      direct: [payments/charges.py::create_charge, payments/refunds.py::refund]
+      direct: ['payments/charges.py::create_charge', 'payments/refunds.py::refund']
       potential: []
-      ruled_out: [payments/legacy.py::create_pinned_charge]
+      ruled_out: ['payments/legacy.py::create_pinned_charge']
       transitive: []
       related_tests: []
+      migration:
+        plan_status: planned
+        residual_risk: high
+        steps: ['auto_with_review add_required_parameter payments/charges.py::create_charge', auto_with_review bump_package_version
+            requirements.txt, 'human_required add_required_parameter payments/refunds.py::refund']

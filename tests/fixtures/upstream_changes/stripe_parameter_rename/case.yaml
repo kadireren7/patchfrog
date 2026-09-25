@@ -7,10 +7,14 @@ expect:
   repositories:
     repo:
       status: affected
-      direct: [billing/checkout.js::createCheckout]
+      direct: ['billing/checkout.js::createCheckout']
       potential: []
-      ruled_out: [billing/subscribe.js::createSubscriptionCheckout]
+      ruled_out: ['billing/subscribe.js::createSubscriptionCheckout']
       transitive: []
       related_tests: []
-      unaffected_includes: [billing/customers.js::createCustomer]
+      unaffected_includes: ['billing/customers.js::createCustomer']
       files_without_call_graph: [billing/checkout.js]
+      migration:
+        plan_status: planned
+        residual_risk: low
+        steps: [auto_safe bump_package_version package.json, 'auto_safe rename_parameter billing/checkout.js::createCheckout']

@@ -12,4 +12,8 @@ expect:
       ruled_out: []
       transitive: []
       related_tests: []
-      unaffected_includes: [search/index.py::index]
+      unaffected_includes: ['search/index.py::index']
+      migration:
+        plan_status: not_required
+        residual_risk: low
+        steps: []

@@ -7,9 +7,13 @@ expect:
   repositories:
     repo:
       status: affected
-      direct: [insights/github_api.py::repo_stats]
+      direct: ['insights/github_api.py::repo_stats']
       potential: []
       ruled_out: []
-      transitive: [insights/report.py::weekly_report]
+      transitive: ['insights/report.py::weekly_report']
       related_tests: []
-      unaffected_includes: [insights/github_api.py::open_issues]
+      unaffected_includes: ['insights/github_api.py::open_issues']
+      migration:
+        plan_status: planned
+        residual_risk: medium
+        steps: ['auto_with_review replace_endpoint insights/github_api.py::repo_stats']

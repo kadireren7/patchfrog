@@ -7,9 +7,14 @@ expect:
   repositories:
     repo:
       status: affected
-      direct: [assistant/reply.py::answer]
+      direct: ['assistant/reply.py::answer']
       potential: []
       ruled_out: []
-      transitive: [assistant/reply.py::answer_many]
+      transitive: ['assistant/reply.py::answer_many']
       related_tests: [tests/test_reply.py]
-      unaffected_includes: [assistant/search.py::vectorize]
+      unaffected_includes: ['assistant/search.py::vectorize']
+      migration:
+        plan_status: planned
+        residual_risk: low
+        steps: [auto_safe bump_package_version requirements.txt, 'auto_safe rename_parameter assistant/reply.py::answer',
+          'auto_safe rename_symbol assistant/reply.py::answer']

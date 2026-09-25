@@ -13,3 +13,7 @@ expect:
       ruled_out: []
       transitive: []
       related_tests: []
+      migration:
+        plan_status: planned
+        residual_risk: high
+        steps: [auto_with_review bump_package_version requirements.txt, human_required verify_upgrade requirements.txt]
