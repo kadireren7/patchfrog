@@ -1,0 +1,22 @@
+description: Fictional acme-ai SDK -- chat.create(prompt) -> responses.create(input); the M7.10 demo.
+change: {old: old.yaml, new: new.yaml, hints: hints.yaml}
+repositories: {demo: repo}
+expect:
+  risk: breaking
+  consumer_affecting_kinds: [package_major_bump, sdk_parameter_removed, sdk_parameter_renamed, sdk_return_field_renamed, sdk_symbol_renamed]
+  repositories:
+    demo:
+      status: affected
+      direct: ['app/ai/chat.py::generate_reply', 'workers/summary.py::summarize']
+      potential: []
+      ruled_out: []
+      transitive: ['app/api/routes.py::bulk_reply', 'app/api/routes.py::reply_route', 'workers/jobs.py::nightly_digest']
+      related_tests: [tests/test_chat.py, tests/test_summary.py]
+      unaffected_includes: ['app/ai/embed.py::embed']
+      migration:
+        plan_status: planned
+        residual_risk: high
+        steps: ['auto_safe rename_parameter app/ai/chat.py::generate_reply', 'auto_safe rename_parameter workers/summary.py::summarize',
+          'auto_safe rename_symbol app/ai/chat.py::generate_reply', 'auto_safe rename_symbol workers/summary.py::summarize',
+          'auto_with_review adapt_return_field app/ai/chat.py::generate_reply', 'auto_with_review adapt_return_field workers/summary.py::summarize',
+          auto_with_review bump_package_version requirements.txt, 'human_required remove_argument workers/summary.py::summarize']

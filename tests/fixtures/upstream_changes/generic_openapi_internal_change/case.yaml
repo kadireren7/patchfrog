@@ -1,0 +1,19 @@
+description: Internal OpenAPI change consumed from TypeScript -- a path move (same operationId) and a parameter that became required.
+change: {old: repo/openapi.yaml, new: new.yaml}
+repositories: {repo: repo}
+expect:
+  risk: breaking
+  consumer_affecting_kinds: [endpoint_path_changed, parameter_became_required]
+  repositories:
+    repo:
+      status: affected
+      direct: ['web/catalog.ts::getProduct', 'web/catalog.ts::listProducts']
+      potential: []
+      ruled_out: []
+      transitive: []
+      related_tests: []
+      files_without_call_graph: [web/catalog.ts]
+      migration:
+        plan_status: planned
+        residual_risk: high
+        steps: ['auto_with_review replace_endpoint web/catalog.ts::getProduct', 'human_required add_required_parameter web/catalog.ts::listProducts']

@@ -1,0 +1,16 @@
+openapi: 3.0.3
+info: {title: Inventory API, version: "2.0.0"}
+servers: [{url: "https://inventory.internal.example"}]
+security: [{oauth: [inventory.write]}]
+paths:
+  /v1/items/{sku}:
+    get:
+      parameters: [{name: sku, in: path, required: true, schema: {type: string}}]
+      responses: {"200": {description: ok}}
+  /v1/items/{sku}/stock:
+    put:
+      parameters: [{name: sku, in: path, required: true, schema: {type: string}}]
+      responses: {"204": {description: updated}}
+components:
+  securitySchemes:
+    oauth: {type: oauth2, flow: clientCredentials}

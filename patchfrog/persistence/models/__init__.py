@@ -64,6 +64,13 @@ from patchfrog.persistence.models.review_memory import (
     ReviewMemoryFindingModel,
     ReviewMemoryTransitionModel,
 )
+from patchfrog.persistence.models.upstream import (
+    ExternalChangeDiffItemModel,
+    ExternalChangeEventModel,
+    ExternalChangeImpactModel,
+    MigrationPatchModel,
+    MigrationPlanModel,
+)
 
 __all__ = [
     "AIFindingModel",
@@ -78,6 +85,9 @@ __all__ = [
     "ContextBundleStatus",
     "ContextItemModel",
     "CriticVerdictModel",
+    "ExternalChangeDiffItemModel",
+    "ExternalChangeEventModel",
+    "ExternalChangeImpactModel",
     "ExternalContractSnapshotModel",
     "ExternalDependencyModel",
     "ExternalDependencyUsageSiteModel",
@@ -94,6 +104,8 @@ __all__ = [
     "IngestionStatus",
     "InstallationModel",
     "InstallationStatus",
+    "MigrationPatchModel",
+    "MigrationPlanModel",
     "ParsedFileCacheModel",
     "PullRequestIngestionModel",
     "PullRequestModel",

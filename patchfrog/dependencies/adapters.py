@@ -176,6 +176,10 @@ class KnownProviderAdapter:
     def provider(self) -> DependencyProvider:
         return self._provider
 
+    @property
+    def spec(self) -> ProviderSpec:
+        return self._spec
+
     def tracked_modules(self) -> frozenset[str]:
         return frozenset(self._spec.python_modules) | frozenset(self._spec.js_modules)
 

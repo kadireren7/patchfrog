@@ -1,0 +1,19 @@
+description: Major version bump with release metadata only -- no structural evidence, so review is required, never "breaking".
+change: {package: acme-http, ecosystem: pypi, to_version_from_release: release.json}
+repositories: {repo: repo}
+expect:
+  risk: review_required
+  reasons_include: [major_version_bump_without_structural_proof]
+  consumer_affecting_kinds: [package_major_bump]
+  repositories:
+    repo:
+      status: uncertain
+      direct: []
+      potential: [net/fetch.py]
+      ruled_out: []
+      transitive: []
+      related_tests: []
+      migration:
+        plan_status: planned
+        residual_risk: high
+        steps: [auto_with_review bump_package_version requirements.txt, human_required verify_upgrade requirements.txt]

@@ -1,0 +1,19 @@
+patchfrog_sdk_surface: 1
+package: acme-ai
+ecosystem: pypi
+version: "1.4.0"
+modules: [acme_ai]
+symbols:
+  Client: {}
+  chat.create:
+    params:
+      model: {required: true, type: string}
+      prompt: {required: true, type: string}
+      stream: {type: boolean}
+      temperature: {type: number}
+    returns:
+      fields: {text: string, id: string}
+  embeddings.create:
+    params:
+      model: {required: true, type: string}
+      input: {required: true, type: string}

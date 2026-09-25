@@ -1,0 +1,18 @@
+description: Contract-wide auth scheme change (API key -> OAuth2 client credentials).
+change: {old: repo/specs/inventory.openapi.yaml, new: new.yaml}
+repositories: {repo: repo}
+expect:
+  risk: breaking
+  consumer_affecting_kinds: [auth_scheme_changed, security_scheme_removed]
+  repositories:
+    repo:
+      status: affected
+      direct: ['stock/sync.py::fetch_item', 'stock/sync.py::push_stock']
+      potential: []
+      ruled_out: []
+      transitive: []
+      related_tests: []
+      migration:
+        plan_status: human_required
+        residual_risk: high
+        steps: ['human_required update_auth stock/sync.py::fetch_item', 'human_required update_auth stock/sync.py::push_stock']

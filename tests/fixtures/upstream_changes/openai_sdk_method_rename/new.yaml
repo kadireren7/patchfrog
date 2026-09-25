@@ -1,0 +1,16 @@
+# Synthetic fixture -- NOT OpenAI's real API.
+patchfrog_sdk_surface: 1
+package: openai
+ecosystem: pypi
+version: "2.0.0"
+modules: [openai]
+symbols:
+  OpenAI: {}
+  responses.create:
+    params:
+      model: {required: true}
+      input: {required: true}
+      temperature: {type: number}
+    returns: {fields: {text: string}}
+  embeddings.create:
+    params: {model: {required: true}, input: {required: true}}

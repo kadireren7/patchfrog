@@ -1,0 +1,4 @@
+patchfrog_change_hints: 1
+provenance: "paylane 4.0 upgrade notes (fictional SDK): pin the API version explicitly"
+required_parameter_values:
+  - {symbol: charges.create, parameter: api_version, value: "2026-09-01"}

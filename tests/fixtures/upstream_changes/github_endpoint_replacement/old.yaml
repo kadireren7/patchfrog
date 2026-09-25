@@ -1,0 +1,18 @@
+# Synthetic fixture -- NOT GitHub's real REST API.
+openapi: 3.0.3
+info: {title: GitHub-like REST, version: "2022-11-28"}
+servers: [{url: "https://api.github.com"}]
+paths:
+  /repos/{owner}/{repo}/issues:
+    get:
+      operationId: issues/list
+      parameters:
+        - {name: owner, in: path, required: true, schema: {type: string}}
+        - {name: repo, in: path, required: true, schema: {type: string}}
+      responses: {"200": {description: ok}}
+  /repos/{owner}/{repo}/legacy-stats:
+    get:
+      parameters:
+        - {name: owner, in: path, required: true, schema: {type: string}}
+        - {name: repo, in: path, required: true, schema: {type: string}}
+      responses: {"200": {description: ok}}

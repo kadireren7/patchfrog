@@ -1,0 +1,20 @@
+description: Stripe-like SDK argument rename in JS; one call does not pass the argument, one calls another method.
+change: {old: old.yaml, new: new.yaml, hints: hints.yaml}
+repositories: {repo: repo}
+expect:
+  risk: breaking
+  consumer_affecting_kinds: [package_major_bump, sdk_parameter_renamed]
+  repositories:
+    repo:
+      status: affected
+      direct: ['billing/checkout.js::createCheckout']
+      potential: []
+      ruled_out: ['billing/subscribe.js::createSubscriptionCheckout']
+      transitive: []
+      related_tests: []
+      unaffected_includes: ['billing/customers.js::createCustomer']
+      files_without_call_graph: [billing/checkout.js]
+      migration:
+        plan_status: planned
+        residual_risk: low
+        steps: [auto_safe bump_package_version package.json, 'auto_safe rename_parameter billing/checkout.js::createCheckout']

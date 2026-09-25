@@ -25,6 +25,7 @@ from patchfrog.dependencies.adapters import (
     DependencyDraft,
     DependencyProviderAdapter,
     FileScanContext,
+    KnownProviderAdapter,
     PackageIndex,
     default_provider_adapters,
 )
@@ -207,7 +208,7 @@ def discover_dependencies(
             if e.provider_key == key or (key == "openapi" and e.provider_key.startswith("openapi:"))
         ]
         drafts.extend(adapter.normalize_dependency(own, packages))
-    drafts.extend(_generic_package_drafts(packages, imports, local_modules))
+    drafts.extend(_generic_package_drafts(packages, imports, local_modules, _claimed_packages(provider_adapters)))
 
     dependencies = tuple(
         sorted((_finalize(d, locator) for d in drafts), key=lambda d: (d.kind is ExternalDependencyKind.PACKAGE, d.key))
@@ -226,18 +227,26 @@ def _mentions_spec_version(text: str) -> bool:
     return "openapi" in head or "swagger" in head
 
 
-def _claimed_packages() -> set[tuple[Ecosystem, str]]:
-    return {(eco, name) for spec in KNOWN_PROVIDER_SPECS for eco, names in spec.packages.items() for name in names}
+def _claimed_packages(adapters: Sequence[DependencyProviderAdapter] = ()) -> set[tuple[Ecosystem, str]]:
+    """Packages a provider adapter owns -- the built-in specs plus any
+    caller-supplied :class:`KnownProviderAdapter` (e.g. one M6 builds from
+    an SDK surface document), so such a package is never also reported
+    as a generic package."""
+
+    specs = list(KNOWN_PROVIDER_SPECS) + [a.spec for a in adapters if isinstance(a, KnownProviderAdapter)]
+    return {(eco, name) for spec in specs for eco, names in spec.packages.items() for name in names}
 
 
 def _generic_package_drafts(
-    packages: PackageIndex, imports: Sequence[tuple[str, str, int]], local_modules: frozenset[str]
+    packages: PackageIndex,
+    imports: Sequence[tuple[str, str, int]],
+    local_modules: frozenset[str],
+    claimed: set[tuple[Ecosystem, str]],
 ) -> list[DependencyDraft]:
     """Declared packages no provider adapter claims -- dependencies too,
     but plain packages: evidence is the declaration plus imports of the
     package's (conventional) import name."""
 
-    claimed = _claimed_packages()
     seen: set[tuple[Ecosystem, str]] = set()
     drafts: list[DependencyDraft] = []
     for declaration in packages.declarations:

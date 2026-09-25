@@ -1,0 +1,6 @@
+patchfrog_change_hints: 1
+provenance: "synthetic fixture (not a real OpenAI change)"
+symbol_renames:
+  - {old: chat.create, new: responses.create}
+parameter_renames:
+  - {symbol: chat.create, old: prompt, new: input}
