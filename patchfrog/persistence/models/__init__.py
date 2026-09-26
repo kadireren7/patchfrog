@@ -39,6 +39,7 @@ from patchfrog.persistence.models.installation import (
     InstallationStatus,
 )
 from patchfrog.persistence.models.learning import RepositoryLearningRecordModel
+from patchfrog.persistence.models.migration_verification import MigrationVerificationRunModel
 from patchfrog.persistence.models.parsed_file_cache import ParsedFileCacheModel
 from patchfrog.persistence.models.publishing import (
     ReviewPublicationCommentModel,
@@ -106,6 +107,7 @@ __all__ = [
     "InstallationStatus",
     "MigrationPatchModel",
     "MigrationPlanModel",
+    "MigrationVerificationRunModel",
     "ParsedFileCacheModel",
     "PullRequestIngestionModel",
     "PullRequestModel",
