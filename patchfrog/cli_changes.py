@@ -38,6 +38,10 @@ from patchfrog.migration.report import (
     render_plan_text,
 )
 from patchfrog.migration.store import MigrationStore, build_linkage
+from patchfrog.migration_verification.domain import MigrationEvidenceBundle
+from patchfrog.migration_verification.report import bundle_to_dict, render_bundle_text
+from patchfrog.migration_verification.service import run_migration_verification
+from patchfrog.migration_verification.store import MigrationVerificationStore
 from patchfrog.persistence.database import create_engine, create_session_factory
 from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.repository.git import GitError, run_git
@@ -481,6 +485,90 @@ def run_migrations_generate(args: argparse.Namespace, upsert_repository: UpsertR
     return 0
 
 
+async def _persist_verification(
+    *,
+    event: ExternalChangeEvent,
+    plan: MigrationPlan,
+    patch: GeneratedPatch | None,
+    bundle: MigrationEvidenceBundle | None,
+    root: Path,
+    repository_name: str,
+    upsert_repository: UpsertRepository,
+) -> dict[str, Any]:
+    result = await _persist_plan_and_patch(
+        event=event, plan=plan, patch=patch, root=root, repository_name=repository_name,
+        upsert_repository=upsert_repository,
+    )
+    if patch is None or bundle is None or "patch_id" not in result:
+        return result
+
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory: async_sessionmaker[AsyncSession] = create_session_factory(engine)
+    verification_store = MigrationVerificationStore()
+    try:
+        async with session_factory() as session:
+            run_row, run_created = await verification_store.record_run(
+                session, patch_id=uuid.UUID(result["patch_id"]), bundle=bundle
+            )
+            await session.commit()
+        result["verification_run_id"] = str(run_row.id)
+        result["verification_run_created"] = run_created
+        return result
+    finally:
+        await engine.dispose()
+
+
+def run_migrations_verify(args: argparse.Namespace, upsert_repository: UpsertRepository) -> int:
+    if not args.repo:
+        raise CommandError("give at least one --repo PATH (or NAME=PATH)")
+    analysis = analyze_local(args, [_repo_arg(r) for r in args.repo])
+    plans: dict[str, MigrationPlan] = {}
+    patches: dict[str, GeneratedPatch | None] = {}
+    bundles: dict[str, MigrationEvidenceBundle] = {}
+    for impact in analysis.workspace.repositories:
+        inventory = analysis.inventories[impact.repository]
+        plan = plan_migration(analysis.event, impact, inventory, hints=analysis.hints)
+        patch = generate_patch(plan, analysis.roots[impact.repository]) if plan.automatic_steps else None
+        plans[impact.repository] = plan
+        patches[impact.repository] = patch
+        bundles[impact.repository] = asyncio.run(
+            run_migration_verification(
+                plan=plan, patch=patch, blast_radii=impact.blast_radii, root=analysis.roots[impact.repository],
+                commit_sha=impact.commit_sha or "",
+            )
+        )
+
+    persisted: dict[str, Any] = {}
+    if args.persist:
+        for name, plan in plans.items():
+            persisted[name] = asyncio.run(
+                _persist_verification(
+                    event=analysis.event, plan=plan, patch=patches[name], bundle=bundles[name],
+                    root=analysis.roots[name], repository_name=name, upsert_repository=upsert_repository,
+                )
+            )
+
+    payload: dict[str, Any] = {
+        "event": event_to_dict(analysis.event),
+        "verification": {name: bundle_to_dict(bundle) for name, bundle in bundles.items()},
+    }
+    if persisted:
+        payload["persisted"] = persisted
+    if args.output:
+        Path(args.output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(render_event_text(analysis.event), end="")
+        for name, bundle in bundles.items():
+            print(f"Migration verification for {name}:")
+            print(render_bundle_text(bundle), end="")
+        if persisted:
+            print(f"persisted: {persisted}")
+    return 0
+
+
 #: The M7.10 demo: a deterministic, fictional SDK
 #: (``client.chat.create(prompt=...)`` -> ``client.responses.create(input=...)``)
 #: bundled with the repository -- offline, no live provider call, never
@@ -572,6 +660,18 @@ def register(subparsers: Any) -> None:
     generate.add_argument("--json", action="store_true")
     generate.add_argument("--output", default=None)
 
+    verify = migrations_sub.add_parser(
+        "verify",
+        help="M8: bounded, sandboxed executable verification of a generated migration patch (offline)",
+    )
+    add_change_inputs(verify)
+    verify.add_argument("--repo", action="append", default=[],
+                        help="Local repository checkout (repeatable; NAME=PATH to name it)")
+    verify.add_argument("--persist", action="store_true",
+                        help="Record the event, plan, patch and verification run (requires DATABASE_URL)")
+    verify.add_argument("--json", action="store_true")
+    verify.add_argument("--output", default=None)
+
     demo = migrations_sub.add_parser(
         "demo", help="M7.10: the bundled deterministic demo, end to end (offline, no live provider call)"
     )
@@ -590,6 +690,8 @@ def dispatch(args: argparse.Namespace, *, upsert_repository: UpsertRepository) -
                 return run_migrations_plan(args, upsert_repository)
             if args.migrations_command == "generate":
                 return run_migrations_generate(args, upsert_repository)
+            if args.migrations_command == "verify":
+                return run_migrations_verify(args, upsert_repository)
             if args.migrations_command == "demo":
                 return run_migrations_demo(args)
     except (CommandError, ContractLoadError, SurfaceError, HintError) as exc:
