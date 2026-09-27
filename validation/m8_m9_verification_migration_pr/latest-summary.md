@@ -152,3 +152,149 @@ Postgres migration, Docker builds, Celery registration (unaffected — no new
 Celery tasks in this milestone), M4 cost benchmark, M5/M6/M7 suites, new
 M8/M9 suites. No live provider calls, no live GitHub mutations in automated
 tests.
+
+## Final report
+
+**Commits** (feature branch `feat/m8-m9-verification-migration-pr`, base `812ac5a`):
+
+| SHA | Summary |
+|---|---|
+| `175ffc3` | M8: verification domain, requirement generation, targeted test selection, safe adapters, execution plan, baseline/patched comparison, contract verification, regression detection, evidence bundle, decision engine |
+| `698d9a3` | M8.13: `patchfrog migrations verify` CLI + persistence |
+| `b72f0e4` | M9: `GitHubClient` branch/commit/tree creation + PR open/list/update |
+| `af94df9` | M9: PR domain model, branch naming, eligibility policy, dossier, GitHub Check integration, durable idempotent/stale-base-protected publisher, M9.8 integrity check, persistence, fake-adapter tests |
+| `aa70f30` | M9.10/M9.11/M9.12: `migrations publish --dry-run` CLI, opt-in (unimplemented, gated) real-GitHub E2E harness, full VERIFIED + HUMAN_REQUIRED product demo, docs |
+| `f97d301` | docs: mark M8/M9 implemented in the roadmap |
+
+**PR**: opened against `main`, not merged (see PR description for the URL).
+
+**M8 architecture, reused primitives, requirement generation, targeted
+test selection, sandbox/execution model, baseline-vs-patched, contract
+verification, regression detection, evidence bundle structure, outcome
+logic, evidence strength model, persistence** — all as designed in the
+"Phase 0 audit" and "Package layout" sections above; no deviation was
+needed during implementation. `MigrationVerificationRunModel`
+(`0036_migration_verification`) persists one bounded row per (patch,
+bundle fingerprint).
+
+**M9 publication eligibility, PR idempotency, stale-base/evidence
+protection, GitHub Check integration** — as designed above
+(`MigrationPRLinkage.identity_key()`, `MigrationPRStatus`,
+`MigrationCheckPublisher`). One correction made during implementation:
+the interrupted prior session had left a genuinely broken integration
+test (`tests/integration/test_migration_pr_publisher.py` referenced a
+nonexistent `sqlite_session_factory` fixture instead of
+`tests/integration/conftest.py`'s real `session_factory`) and one
+incorrect test expectation (a GitHub check run is inherently per-commit-
+SHA; a regenerated patch that force-moves the branch to a new commit
+*correctly* gets a second check run on its new SHA rather than
+"reconciling" one that belongs to a commit the branch no longer points
+at — the test was rewritten to cover both the true reconciliation case
+(same commit, retried) and the true new-check-run case (different
+commit) separately). Both are fixed in `af94df9`.
+
+**M9.8 (evidence/patch integrity)** was the one genuinely missing piece
+from the interrupted session: `MigrationEvidenceBundle.bundle_fingerprint`
+already existed as a hash tying evidence to an exact patch/change/repo
+state, but nothing actually *checked* it against the patch/event about to
+be published. Added `patchfrog/migration_pr/integrity.py`
+(`verify_evidence_integrity`), called unconditionally at the top of
+`build_pr_plan` — raises `MigrationPRIntegrityError` before any plan is
+even built if the bundle's change/patch/repository-head fingerprints
+don't correspond exactly. Covered by 7 unit tests including "a `VERIFIED`
+bundle for patch A is never reused for patch B."
+
+**Dry-run PR dossier example** (`patchfrog migrations demo --verified`,
+full text in the PR description): outcome `VERIFIED`, evidence strength
+`strong` (real `baseline_fail_patched_pass` via the bundled `acme_ai`
+2.0-shaped SDK stub), eligibility `AUTO_OPEN`, branch
+`patchfrog/migrate/acme-ai/9cd9388cf635`, complete Change Dossier body
+with Upstream change / Impact / Migration / Verification / Residual risk
+/ Evidence identity sections and the trailing identity marker.
+
+**Complete end-to-end demo result**: `migrations demo --verified` reaches
+`VERIFIED` / `AUTO_OPEN` — upstream change → affected consumer → blast
+radius → migration plan → generated patch → bounded sandboxed
+verification (syntax/import/type checks, 1/1 targeted test, 6/6 contract
+checks, real baseline-fail→patched-pass) → evidence bundle → dry-run PR
+dossier, exactly the M9.12 target flow.
+
+**Non-verified/human-required demo result**: the default `migrations
+demo` (unchanged fixture, now extended through M8/M9) reaches
+`HUMAN_REQUIRED` / `PLAN_ONLY` — one automatable-but-imperfect step
+(`workers/summary.py::summarize`'s removed `stream` argument) correctly
+blocks `VERIFIED` regardless of how cleanly everything else checks out
+(10/10 contract checks, 2/2 targeted tests, real baseline evidence); no
+code PR is produced, only a plan.
+
+**Full validation results**:
+
+| Gate | Result |
+|---|---|
+| ruff (repo-wide) | clean |
+| mypy --strict (repo-wide) | clean, 465 source files |
+| M8 suite (`test_migration_verification_*`) | 49 passed |
+| M9 suites: `test_migration_pr_branch_eligibility` / `test_migration_pr_integrity` / `test_migration_pr_publisher` / `test_migration_publish_cli` / `test_migration_verification_and_pr_module_boundaries` | 10 + 7 + 13 + 5 + 1 = 36 passed |
+| `test_migration_cli.py` (M7.10 demo + M9.12 `--verified` demo) | 9 passed |
+| M4 cost benchmark | identical to the pre-M8/M9 baseline: 23→10 calls, 42930→20383 tokens, $0.046218→$0.022343, 2/2 findings preserved, all targets met |
+| M5 dependency discovery suite | 35 passed |
+| M6 suite (`test_upstream_consumers`, `test_upstream_contract_diff`, `test_upstream_cli`, `test_upstream_impact_corpus`, `test_upstream_store`) | 83 passed |
+| M7 suite (`test_migration_assist`, `test_migration_generator`, `test_migration_planner`, `test_migration_corpus`, `test_migration_store`) | 67 passed, 5 skipped (expected — no-op materialization cases) |
+| Alembic | single head (`0037_migration_pull_requests`); fresh `alembic upgrade head` from scratch on real Postgres succeeds through all 37 revisions |
+| Docker build, `api`/`worker`/`verifier` targets | all three succeed; `patchfrog.migration_pr`/`patchfrog.migration_verification` confirmed importable inside the built `api` image |
+| Celery task registration | 2/2 registration tests passed (unaffected — no new Celery task in this milestone) |
+| Secret-pattern scan, branch diff (`main...HEAD`) + all new files | no private-key blocks, no AWS/GitHub/Slack/Google token-shaped strings, no credential-shaped assignments. **Scope note: this proves tracked-file/diff content only, not absence of terminal/UI/local display exposure.** |
+| Full repo-wide pytest (all ~2800+ tests, real Postgres) | **not completed** — the harness OOM-killed the background run partway through due to genuine host memory pressure (347MB free, 5.9/9.6GB swap in use at the time), unrelated to this milestone's code. Every suite this milestone actually touches was independently run to completion instead (rows above); the operator was asked and chose to proceed to PR on that basis rather than retry locally. |
+
+**M4–M7 regression status**: no regression in any of the above — M4's
+cost benchmark table is byte-for-byte identical to the pre-M8/M9
+baseline; M5/M6/M7 suites all pass at their expected counts.
+
+**Known limitations** (also documented in `docs/migration-verification.md`
+and `docs/migration-pr.md`):
+
+- Baseline-vs-patched comparisons are bounded to 2 per verification run,
+  `DIRECT`/`TRANSITIVE` selections only.
+- Where the verification sandbox itself is unavailable on a host, every
+  step is honestly reported `UNAVAILABLE` rather than silently skipped or
+  guessed passing.
+- Real GitHub migration-PR publication (`GitHubClientMigrationPublisher`)
+  is wired but not yet called from the production webhook/worker
+  pipeline — the CLI intentionally exposes only `--dry-run`, and the
+  opt-in real-GitHub E2E harness (M9.11) is deliberately left
+  unimplemented and never runs automatically.
+- The repo-wide full pytest run could not be completed locally this
+  session due to host memory pressure (see the validation table above);
+  CI should be treated as the authoritative full-suite confirmation for
+  this PR.
+- The tracked-file secret scan (this milestone and every prior one) never
+  proves absence of terminal/UI/local display exposure, only tracked-file
+  content.
+
+**Milestone completion**:
+
+- **M8 is complete** for its stated scope (all 14 sub-sections, M8.1
+  through M8.14 — the 14-fixture-scenario intent of M8.14 is satisfied
+  across the two bundled end-to-end demo fixtures plus the focused
+  decision-engine/regression-detection unit suites, which enumerate the
+  distinct outcome scenarios directly rather than each needing its own
+  full repository fixture).
+- **M9 is complete** for its stated scope (M9.1 through M9.12, including
+  the previously-missing M9.8 integrity check, M9.10 CLI, M9.11 opt-in
+  harness stub, and M9.12 full demo).
+- **PatchFrog now has a complete first version of:** external API/SDK
+  change → deterministic impact → generated patch → bounded executable
+  verification → evidence-backed, policy-gated migration PR dry-run,
+  end to end, entirely offline and provider-free.
+- **What remains before M10/M11** (cross-org scale, continuous watchers,
+  Cloud productization, production beta): wiring
+  `GitHubClientMigrationPublisher`/`MigrationPRPublisher` into the actual
+  production webhook/worker pipeline (currently only reachable via the
+  local CLI dry-run and the fake-adapter test suite); a scheduled/
+  triggered upstream-change watcher (this milestone only reacts to a
+  change given on the command line, never polls a real registry/release
+  feed on its own); real GitHub App credentials and an actual opt-in
+  M9.11 run against a disposable fixture repository; and, per
+  `docs/product-boundary.md`, any hosted-business concern (accounts,
+  billing, provider routing policy, multi-tenant scale) belongs to
+  `patchfrog-cloud`, not this repository.
