@@ -373,13 +373,13 @@ class GitHubClient:
         return _parse_submitted_review(data)
 
     async def list_check_runs(
-        self, *, installation_id: int, ref: PullRequestRef, head_sha: str
+        self, *, installation_id: int, ref: PullRequestRef, head_sha: str, check_name: str = "PatchFrog review"
     ) -> list[GitHubCheckRun]:
         path = f"/repos/{ref.owner}/{ref.repository}/commits/{head_sha}/check-runs"
         data = await self._get_json(
             installation_id=installation_id,
             path=path,
-            params={"check_name": "PatchFrog review", "filter": "all", "per_page": 100},
+            params={"check_name": check_name, "filter": "all", "per_page": 100},
         )
         if not isinstance(data, dict) or not isinstance(data.get("check_runs"), list):
             raise GitHubResponseError("Malformed check-runs response from GitHub")

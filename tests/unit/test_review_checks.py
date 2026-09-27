@@ -20,7 +20,7 @@ class _FakeCheckClient:
     updates: list[tuple[int, GitHubCheckRunInput]] = field(default_factory=list)
 
     async def list_check_runs(
-        self, *, installation_id: int, ref: PullRequestRef, head_sha: str
+        self, *, installation_id: int, ref: PullRequestRef, head_sha: str, check_name: str = "PatchFrog review"
     ) -> list[GitHubCheckRun]:
         return list(self.checks)
 
