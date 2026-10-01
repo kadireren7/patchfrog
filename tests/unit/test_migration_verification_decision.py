@@ -164,3 +164,59 @@ def test_no_requirements_and_no_human_steps_is_unverified_not_verified() -> None
     )
     assert outcome is VerificationOutcome.UNVERIFIED
     assert reasons
+
+
+def test_human_required_dominates_partially_verified() -> None:
+    coverage = _coverage(satisfied=("r2",), unavailable=("r1",))
+    outcome, reasons = decide_outcome(
+        _PLAN, coverage=coverage, evidence_strength=EvidenceStrength.STRONG, regressions=(),
+        has_unresolved_human_steps=True,
+    )
+    assert outcome is VerificationOutcome.HUMAN_REQUIRED
+    assert any("r1" in r for r in reasons)
+
+
+def test_human_required_dominates_unverified() -> None:
+    coverage = _coverage(unavailable=("r1", "r2"))
+    outcome, _ = decide_outcome(
+        _PLAN, coverage=coverage, evidence_strength=EvidenceStrength.NONE, regressions=(),
+        has_unresolved_human_steps=True,
+    )
+    assert outcome is VerificationOutcome.HUMAN_REQUIRED
+
+
+def test_human_required_dominates_weak_evidence_formal_satisfaction() -> None:
+    outcome, _ = decide_outcome(
+        _PLAN, coverage=_coverage(satisfied=("r1", "r2")), evidence_strength=EvidenceStrength.WEAK,
+        regressions=(), has_unresolved_human_steps=True,
+    )
+    assert outcome is VerificationOutcome.HUMAN_REQUIRED
+
+
+def test_failed_dominates_human_required() -> None:
+    outcome, _ = decide_outcome(
+        _PLAN, coverage=_coverage(satisfied=("r1",), failed=("r2",)), evidence_strength=EvidenceStrength.MODERATE,
+        regressions=(), has_unresolved_human_steps=True,
+    )
+    assert outcome is VerificationOutcome.FAILED
+
+
+def test_regression_dominates_failed_and_human_required() -> None:
+    outcome, _ = decide_outcome(
+        _PLAN, coverage=_coverage(failed=("r1",)), evidence_strength=EvidenceStrength.STRONG,
+        regressions=(RegressionFinding("syntax_failure", "x"),), has_unresolved_human_steps=True,
+    )
+    assert outcome is VerificationOutcome.REGRESSION_DETECTED
+
+
+def test_partially_verified_and_unverified_without_human_steps_unchanged() -> None:
+    partial, _ = decide_outcome(
+        _PLAN, coverage=_coverage(satisfied=("r2",), unavailable=("r1",)), evidence_strength=EvidenceStrength.STRONG,
+        regressions=(), has_unresolved_human_steps=False,
+    )
+    unverified, _ = decide_outcome(
+        _PLAN, coverage=_coverage(unavailable=("r1", "r2")), evidence_strength=EvidenceStrength.NONE,
+        regressions=(), has_unresolved_human_steps=False,
+    )
+    assert partial is VerificationOutcome.PARTIALLY_VERIFIED
+    assert unverified is VerificationOutcome.UNVERIFIED
