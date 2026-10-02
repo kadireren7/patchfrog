@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
 
@@ -262,17 +263,39 @@ class UpstreamChangeStore:
     ) -> tuple[list[RegistryDependency], list[str], dict[tuple[str, str], uuid.UUID], dict[str, uuid.UUID]]:
         """Every active registry dependency (with usage sites) across all
         repositories, every repository name, the dependency row ids and
-        the repository ids -- the cross-repository view of M6.7."""
+        the repository ids -- the cross-repository view of M6.7. **Not
+        tenant-scoped**: hosted callers must use
+        :meth:`registry_dependencies_for_repositories`."""
 
         repositories = list((await session.execute(select(RepositoryModel))).scalars().all())
         repo_names = {r.id: r.full_name for r in repositories}
-        rows = list(
-            (
-                await session.execute(
-                    select(ExternalDependencyModel).where(ExternalDependencyModel.status == STATUS_ACTIVE)
-                )
-            ).scalars().all()
+        rows, dependency_ids = await self._registry_rows(session, repo_names, repository_ids=None)
+        return rows, sorted(repo_names.values()), dependency_ids, {v: k for k, v in repo_names.items()}
+
+    async def registry_dependencies_for_repositories(
+        self, session: AsyncSession, repository_ids: Sequence[uuid.UUID]
+    ) -> list[RegistryDependency]:
+        """Active registry dependencies of exactly the given engine
+        repositories -- the only registry read a multi-tenant caller may
+        use. An empty ``repository_ids`` yields an empty list (never "all")."""
+
+        if not repository_ids:
+            return []
+        repositories = list(
+            (await session.execute(select(RepositoryModel).where(RepositoryModel.id.in_(list(repository_ids)))))
+            .scalars().all()
         )
+        repo_names = {r.id: r.full_name for r in repositories}
+        rows, _ = await self._registry_rows(session, repo_names, repository_ids=list(repo_names))
+        return rows
+
+    async def _registry_rows(
+        self, session: AsyncSession, repo_names: dict[uuid.UUID, str], *, repository_ids: list[uuid.UUID] | None
+    ) -> tuple[list[RegistryDependency], dict[tuple[str, str], uuid.UUID]]:
+        query = select(ExternalDependencyModel).where(ExternalDependencyModel.status == STATUS_ACTIVE)
+        if repository_ids is not None:
+            query = query.where(ExternalDependencyModel.repository_id.in_(repository_ids))
+        rows = list((await session.execute(query)).scalars().all())
         site_rows = list(
             (
                 await session.execute(
@@ -310,7 +333,7 @@ class UpstreamChangeStore:
                                  key=lambda s: (s.file_path, s.line or 0, s.evidence_type.value, s.token)))
             result.append(RegistryDependency(name, row.last_observed_commit_sha, identity, sites))
             dependency_ids[(name, row.dependency_key)] = row.id
-        return result, sorted(repo_names.values()), dependency_ids, {v: k for k, v in repo_names.items()}
+        return result, dependency_ids
 
 
 __all__ = ["MAX_JSON_COLUMN_BYTES", "UpstreamChangeStore"]

@@ -56,6 +56,20 @@ all:
 None of this is being built as part of this PR, and none of it is being
 implied to already exist.
 
+## Compatibility campaigns and watchers (M10/M11)
+
+The same governing rule applies to the compatibility pipeline:
+
+| Public engine (this repository) | Private PatchFrog Cloud |
+|---|---|
+| campaign domain, states, freshness, org blast radius, dossier, internal-contract identity | which workspaces opted in, their stored policy values |
+| watcher interface, source adapters, snapshot comparison, watch-registry aggregation, launch gate | when to poll: schedules, cadence, claims/leases, retry/backoff, per-host limits |
+| the publication *decision* and dossier (`decide_publication`, `build_pr_plan`) and its exact-head / stale-base / integrity / idempotency checks | the official GitHub App credentials and executing the authorized GitHub side effect |
+| lossless event serialization, tenant-scoped registry reads | cursor and delivery storage, per-workspace fan-out, usage counters, dashboard, notifications |
+
+The engine contains no hosted-service code and no credentials; Cloud contains no analysis, diffing, impact,
+migration, verification or eligibility logic.
+
 ## GitHub App boundary
 
 Two GitHub App identities exist in this model, and they are never shared:

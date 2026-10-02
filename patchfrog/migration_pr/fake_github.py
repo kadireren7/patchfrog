@@ -57,6 +57,8 @@ class FakeMigrationGitHubPublisher:
         self.create_ref_calls: list[str] = []
         self.update_ref_calls: list[str] = []
         self.create_pull_request_calls: list[str] = []
+        #: ``draft`` flag of each ``create_pull_request`` call, in order.
+        self.create_pull_request_drafts: list[bool] = []
         self.update_pull_request_calls: list[int] = []
 
     def set_ref(self, *, owner: str, repository: str, ref: str, sha: str) -> None:
@@ -97,9 +99,10 @@ class FakeMigrationGitHubPublisher:
         return commit_sha
 
     async def create_pull_request(
-        self, *, owner: str, repository: str, title: str, body: str, head: str, base: str
+        self, *, owner: str, repository: str, title: str, body: str, head: str, base: str, draft: bool = False
     ) -> PullRequestMetadata:
         self.create_pull_request_calls.append(head)
+        self.create_pull_request_drafts.append(draft)
         head_sha = self._refs.get(f"{owner}/{repository}:heads/{head}", "")
         pr = _FakePullRequest(
             number=self._next_pr_number, title=title, body=body, head_ref=head, base_ref=base, head_sha=head_sha,

@@ -37,43 +37,16 @@ jobs:
       APP_ENV: test
       DATABASE_URL: postgresql+asyncpg://patchfrog:patchfrog@localhost:5432/patchfrog
       REDIS_URL: redis://localhost:6379/0
-      # A GitHub App identity is required for Settings to construct, not
-      # for any real GitHub call CI makes -- every job below runs against
+      # A GitHub App identity is required for Settings to construct, not for
+      # any real GitHub call CI makes -- every job below runs against
       # fixtures/oracle providers only, never live credentials.
-      # GITHUB_PRIVATE_KEY below is a disposable RSA keypair generated
-      # solely for this workflow (`openssl genrsa 2048`) -- never
-      # registered with any real GitHub App, never used outside CI.
+      #
+      # Secret-looking values are deliberately NOT written here: a job-level
+      # `env:` block is printed, resolved, in the header of every step's log.
+      # The disposable App key and webhook secret are generated at run time
+      # by the "Generate disposable credentials" step below, written to a
+      # file / $GITHUB_ENV, and masked. See tests/unit/test_ci_workflow_hygiene.py.
       GITHUB_APP_ID: "0"
-      GITHUB_PRIVATE_KEY: |
-        -----BEGIN PRIVATE KEY-----
-        MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDc1Br1N+2s8fLE
-        2r1+/42VyQRbJ/XColFATS4htUGInCp3vrp2lJD7rfhlQLCCj6+oL8KFOI9wRjFD
-        HQUfUbSyOAiPVjwwLw4wg/fegw/rPIqk0sbtgLX6tNsiDvF+jeZ2ILIiA6O5h/of
-        tAPwHZFbM0F28CNC/FczaAN49ICnGg/5cbkCmWu6ZFRHYLBdKeQK2326zOjLZAAf
-        3U08BjvSwjxGuytSAlETUTLnn9NmwSiAAIzhqfsufIOJ21aS30lmmfUdehmUuDOM
-        Gx3o+C5DTwX0zqHB4Te3aLk1PBzKxVMFzPsxTJDKBzuAWE8RyuvKN3HRGPgluIM9
-        o2WsR8EZAgMBAAECggEAMWTUHtOCuzNnLPcMedKplb5f1g/rHbz21Z4t2mZToT3l
-        FeG4jXuPrmvsaqF8mceP79u289uB4gghTrS4B5hcBZ0Y9Q7B6bkswFdUYxYHwoNJ
-        M7LdwhQPIGPBvC2BgOA2k2ee0JLl1UMABIVceCH0+GRPmU3/ZSVST/JNDIoMGNQG
-        EjuHnM8Hjs4WP2r7ous2CeEcUdDrnhqrVfcFOzIKMEiffoWIaw12oBhRR6D+stP1
-        wB95YJ57326Z/yQyQUZw+iOOpkG0url3zyzJUu5jvpF9mAOVHt1i61N0OxktYNd4
-        b5OuXfOTbYoaLl+jn3mzW/pLQpkfgQa28NBqDDcUMQKBgQD49XsudnZQ0NoeuU8+
-        LTxQ/e6R0pBKjqS/4yv0nxrt5aEY8CKp7nrVGhubX1btRIZNS3xc+UrtWrdivSzM
-        9Y3LAIw67XOa1oYID0hg0C6q5jftpMpqb9C9ZKEIz9bP4V4xpNDM67k48qAujvm2
-        XGZ6AgRT2RSFtr4H+CzongSlZQKBgQDjEvQvsgogK/XfMDJmKA34Y/8q5mGmp4PU
-        8lf7KTwsBg2rgABqU5ZDoDuguBzrch1eE5NxECN1mQyDG2eX201eL3zerCalXXYT
-        p+nDuHHwQBiua+cjAKPOHny+IV4Y2ijij6nXK10Trb4POOdjuMZQU8aBnlE3LTlR
-        AADs6sGbpQKBgAzlkpsGkfx/xTzgNqWu7Df535j4QndKSmiSWR2T/G4kfiLvlawd
-        6YkOkC2NU9B4w0hPx8J9O49uKp/X0vFPKyhAAAOxd1KnGExklkhFoJVD1dPevImk
-        /zhAdUMimSstrpZ9xj9HWtIDZ57h0zfKM5jQb+70COcgX1nEVnc6cF0tAoGAHOEZ
-        O0OqdAMDRzpq/oETncah+kPIoZhmdNvJgsDwzSyL6obiBqPQ1ZL4Ym1oCC3APGnC
-        87s4t0kaxUXj+/VBNrxVZkCAvcFQNhnB6kl3/DU6rlw8zj/TlXBdLxUxUXnVf1ME
-        J8B1Gv6a0HbNPuqOFkNBWNTYwWq4Amw8seT9cJ0CgYEA5ovXV2T4++ws2Qt3cPO5
-        im8J2aCh1fYKE/1ZNnuO0xnUUu3VeH8Rz2iw4mFzELKc64v9BSw2xON7tWSDtY6z
-        0VKkLmokNeUbcCpEs/lLy6/bdP0/pVTBLesXBDsm6qnAw1Stnc/MTnXPsiaTYwke
-        VgAFWZ9YEAZPVROqM6i76BU=
-        -----END PRIVATE KEY-----
-      GITHUB_WEBHOOK_SECRET: ci-placeholder-not-a-real-secret
       # The database-specific suite must fail if the declared CI service is
       # unavailable or unmigrated. Local runs may skip these tests when no
       # compatible Postgres is present.
@@ -83,6 +56,24 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Generate disposable credentials (written to a file, masked, never printed)
+        run: |
+          set +x
+          umask 077
+          key="$RUNNER_TEMP/ci-github-app-key.pem"
+          openssl genrsa -out "$key" 2048 2>/dev/null
+          # Belt and braces: if any later step ever echoed this key, the runner redacts it.
+          while IFS= read -r line; do
+            [ "${#line}" -ge 8 ] && echo "::add-mask::$line"
+          done < "$key"
+          chmod 0644 "$key"  # a disposable test key; the container user must be able to read the mounted file
+          webhook_secret="$(openssl rand -hex 24)"
+          echo "::add-mask::$webhook_secret"
+          {
+            echo "GITHUB_PRIVATE_KEY_PATH=$key"
+            echo "GITHUB_WEBHOOK_SECRET=$webhook_secret"
+          } >> "$GITHUB_ENV"
 
       - uses: actions/setup-python@v5
         with:
@@ -142,8 +133,10 @@ jobs:
         run: |
           docker run --rm \
             -e DATABASE_URL="$DATABASE_URL" -e REDIS_URL="$REDIS_URL" \
-            -e GITHUB_APP_ID="$GITHUB_APP_ID" -e GITHUB_PRIVATE_KEY="$GITHUB_PRIVATE_KEY" \
-            -e GITHUB_WEBHOOK_SECRET="$GITHUB_WEBHOOK_SECRET" \
+            -e GITHUB_APP_ID="$GITHUB_APP_ID" \
+            -v "$GITHUB_PRIVATE_KEY_PATH:/run/ci-github-app-key.pem:ro" \
+            -e GITHUB_PRIVATE_KEY_PATH=/run/ci-github-app-key.pem \
+            -e GITHUB_WEBHOOK_SECRET \
             --network host \
             patchfrog-worker:ci python -c "
           from apps.worker.celery_app import celery_app

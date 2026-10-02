@@ -73,7 +73,7 @@ class MigrationPRPublisher:
 
     async def publish(
         self, *, plan: MigrationPRPlan, patch: GeneratedPatch | None, mode: MigrationPRPublicationMode,
-        base_branch: str = "main",
+        base_branch: str = "main", draft: bool = False,
     ) -> MigrationPullRequest:
         identity_key = plan.linkage.identity_key()
 
@@ -170,7 +170,7 @@ class MigrationPRPublisher:
             else:
                 created = await self._publisher.create_pull_request(
                     owner=owner, repository=repository, title=plan.pr_title, body=plan.pr_body,
-                    head=plan.branch_name, base=base_branch,
+                    head=plan.branch_name, base=base_branch, draft=draft,
                 )
                 result = _result(plan, status=MigrationPRStatus.OPENED, number=created.number, html_url=created.html_url)
 

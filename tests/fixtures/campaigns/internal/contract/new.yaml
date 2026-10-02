@@ -1,0 +1,13 @@
+patchfrog_sdk_surface: 1
+package: acme-shared
+ecosystem: pypi
+version: "2.0.0"
+modules: [acme_shared]
+symbols:
+  Client: {}
+  records.get:
+    params:
+      record_id: {required: true, type: string}
+    returns:
+      fields: {payload: string}
+  health.check: {}

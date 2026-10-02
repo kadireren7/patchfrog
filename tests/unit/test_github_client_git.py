@@ -180,3 +180,35 @@ async def test_malformed_ref_response_raises(http_client: httpx.AsyncClient) -> 
     respx.get(f"{API_BASE}/repos/octo/repo/git/ref/heads/main").mock(return_value=httpx.Response(200, json={}))
     with pytest.raises(GitHubResponseError):
         await _client(http_client).get_ref(installation_id=1, owner="octo", repository="repo", ref="heads/main")
+
+
+@respx.mock
+async def test_create_pull_request_can_open_a_draft(http_client: httpx.AsyncClient) -> None:
+    response = {
+        "number": 43, "title": "t", "body": "b", "user": {"login": "patchfrog[bot]"},
+        "base": {"ref": "main", "sha": "l" * 40}, "head": {"ref": "x", "sha": "m" * 40},
+        "html_url": "https://github.com/octo/repo/pull/43", "state": "open", "merged": False,
+    }
+    route = respx.post(f"{API_BASE}/repos/octo/repo/pulls").mock(return_value=httpx.Response(201, json=response))
+    await _client(http_client).create_pull_request(
+        installation_id=1, owner="octo", repository="repo", title="t", body="b", head="x", base="main", draft=True,
+    )
+    assert json.loads(route.calls.last.request.content)["draft"] is True
+
+
+@respx.mock
+async def test_get_default_branch_returns_name_and_head_together(http_client: httpx.AsyncClient) -> None:
+    respx.get(f"{API_BASE}/repos/octo/repo").mock(return_value=httpx.Response(200, json={"default_branch": "trunk"}))
+    respx.get(f"{API_BASE}/repos/octo/repo/branches/trunk").mock(
+        return_value=httpx.Response(200, json={"commit": {"sha": "c" * 40}})
+    )
+    client = _client(http_client)
+    assert await client.get_default_branch(installation_id=1, owner="octo", repository="repo") == ("trunk", "c" * 40)
+    assert await client.get_default_branch_head_sha(installation_id=1, owner="octo", repository="repo") == "c" * 40
+
+
+@respx.mock
+async def test_get_default_branch_rejects_a_response_without_a_branch(http_client: httpx.AsyncClient) -> None:
+    respx.get(f"{API_BASE}/repos/octo/repo").mock(return_value=httpx.Response(200, json={}))
+    with pytest.raises(GitHubResponseError):
+        await _client(http_client).get_default_branch(installation_id=1, owner="octo", repository="repo")

@@ -195,3 +195,32 @@ def mark_worker_process_dead(pid: int) -> None:
     from prometheus_client import multiprocess
 
     multiprocess.mark_process_dead(pid)  # type: ignore[no-untyped-call]
+
+# M10/M11 watchers, campaigns and migration PRs. Every label is a closed enum
+# value (watcher source kind, outcome/state vocabularies) -- never a
+# repository, workspace, package, URL or PR number.
+watcher_fetch_attempts_total = Counter(
+    "patchfrog_watcher_fetch_attempts_total", "Upstream watcher fetch attempts", ["source_kind"]
+)
+watcher_fetches_total = Counter(
+    "patchfrog_watcher_fetches_total", "Upstream watcher fetches by outcome", ["source_kind", "outcome"]
+)
+watcher_fetch_seconds = Histogram(
+    "patchfrog_watcher_fetch_seconds", "Wall-clock duration of one upstream watcher fetch", ["source_kind"]
+)
+watcher_changes_total = Counter(
+    "patchfrog_watcher_changes_total", "Upstream watcher comparison results", ["source_kind", "result"]
+)
+watcher_backoffs_total = Counter(
+    "patchfrog_watcher_backoffs_total", "Upstream watcher retries scheduled with backoff", ["source_kind", "reason"]
+)
+campaigns_total = Counter("patchfrog_campaigns_total", "Compatibility campaign events", ["event"])
+campaign_repositories_total = Counter(
+    "patchfrog_campaign_repositories_total", "Repository records by final state at the end of a campaign run", ["state"]
+)
+campaign_resolution_seconds = Histogram(
+    "patchfrog_campaign_resolution_seconds", "Time from campaign discovery to RESOLVED",
+    buckets=(60, 600, 3600, 6 * 3600, 24 * 3600, 3 * 24 * 3600, 7 * 24 * 3600, 30 * 24 * 3600),
+)
+migration_prs_total = Counter("patchfrog_migration_prs_total", "Migration PR publication outcomes", ["outcome"])
+
