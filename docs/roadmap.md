@@ -231,6 +231,32 @@ GitHub publication is wired (`GitHubClientMigrationPublisher`) but not
 yet called from the production webhook/worker pipeline -- see
 `docs/migration-pr.md`'s "Known limitations".
 
+**M10 — Cross-repository / organization intelligence.** Implemented: the
+`CompatibilityCampaign` (one upstream change across a workspace's repositories,
+idempotent per workspace + change + engine version), a derived organization
+compatibility graph, an organization blast radius that never rounds uncertainty
+to "safe", deterministic repository and campaign states, freshness (`FRESH`,
+`STALE`, `UNKNOWN`, `ACCESS_LOST`), per-repository isolation, a bounded
+explicit-identity internal-contract model, a machine-readable and renderable
+dossier, and `patchfrog campaigns analyze|demo`. See `docs/campaigns.md`.
+
+**M11 — Continuous upstream watchers and hosted operation.** Implemented:
+the engine-side watcher interface and adapters (PyPI, npm, GitHub Releases,
+OpenAPI URLs, structured changelog feeds, manual snapshots), snapshot
+comparison with cursors and duplicate suppression, the watch registry, the
+campaign launch gate, an SSRF-safe fetcher, lossless event serialization, and
+the single-workspace ingest function (event → campaign → audit trail → policy-
+gated PR). Hosted scheduling, cursor storage, workspace policy, real GitHub
+publication with the official App identity, the dashboard and usage counters
+live in the private PatchFrog Cloud repository. See `docs/watchers.md` and
+`validation/m10_m11/latest-summary.md`.
+
+**PatchFrog v1 is complete for beta.** No further feature milestone is planned.
+What remains is operational: deploy when infrastructure budget allows, onboard
+five to ten real users, observe real provider/API changes, and measure detection
+precision, migration success rate and verification quality. Build only from
+what that feedback shows.
+
 ## Then — Advanced Verification
 
 **AA — Multi-Repository System Intelligence**

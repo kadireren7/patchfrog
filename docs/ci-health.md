@@ -66,3 +66,13 @@ Pydantic forward-reference warning during one governance-tool test, and a rare
 Python asyncio subprocess-transport finalizer warning after a deliberately
 killed analyzer process. Neither changes a test result or represents an ignored
 assertion; they remain visible so dependency/runtime upgrades can remove them.
+
+## CI never prints key material
+
+The workflow generates its disposable GitHub App key and webhook secret at run time (written to a file or
+`$GITHUB_ENV`, and masked) instead of writing them in the job-level `env:` block, which GitHub prints --
+resolved -- in every step header. `tests/unit/test_ci_workflow_hygiene.py` fails if a secret-looking literal
+reappears in any `env:` block, if key or encoded-blob text is embedded in a workflow, or if a workflow prints
+the environment or resolved Docker config. This guards the *configuration going forward*; it does not and
+cannot erase anything already present in historical logs.
+
