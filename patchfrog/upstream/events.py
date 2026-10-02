@@ -126,6 +126,19 @@ def contract_from_registry_snapshot(normalized_json: str, *, fingerprint: str, r
 
     normalized = json.loads(normalized_json)
     fmt = "sdk_surface" if normalized.get("format") == "sdk_surface" else "openapi"
+    if fmt == "sdk_surface":
+        # A stored surface (e.g. a watcher cursor's previous snapshot) carries everything a diff needs; rebuild
+        # the SdkSurface so it can be the old side of ``build_contract_change`` like a freshly parsed document.
+        try:
+            ecosystem = Ecosystem(str(normalized["ecosystem"])) if normalized.get("ecosystem") else None
+        except ValueError as exc:
+            raise ContractLoadError(f"{ref}: stored surface has an unknown ecosystem") from exc
+        package = str(normalized.get("package") or "")
+        surface = SdkSurface(package=package, ecosystem=ecosystem, version=version, normalized=normalized)
+        return LoadedContract(
+            format=fmt, normalized=normalized, fingerprint=fingerprint, version=version, ref=ref, surface=surface,
+            title=package or None,
+        )
     if fmt == "openapi" and "paths" not in normalized:
         raise ContractLoadError(f"{ref}: registry snapshot is not an OpenAPI contract (SDK usage snapshots record "
                                 "consumed surface only and cannot be diffed structurally)")

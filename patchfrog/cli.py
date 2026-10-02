@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.worker.celery_app import celery_app
 from apps.worker.tasks.run_review_pipeline import run_review_pipeline_task
-from patchfrog import cli_changes
+from patchfrog import cli_campaigns, cli_changes
 from patchfrog.analysis.domain import AnalysisRunSummary
 from patchfrog.analysis.service import StaleIndexError, StaticAnalysisService
 from patchfrog.change_risk import classify_change
@@ -2490,6 +2490,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     cli_changes.register(subparsers)
+    cli_campaigns.register(subparsers)
 
     cross_repo_parser = subparsers.add_parser(
         "cross-repo",
@@ -2684,6 +2685,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_dependencies_discover(args)
     if args.command in ("changes", "migrations"):
         return cli_changes.dispatch(args, upsert_repository=_upsert_cli_repository)
+    if args.command == "campaigns":
+        return cli_campaigns.dispatch(args)
     if args.command == "cross-repo":
         return _run_cross_repo(args)
     if args.command == "eval":

@@ -8,6 +8,7 @@ import ast
 import shutil
 from pathlib import Path
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from patchfrog.campaigns.domain import (
@@ -34,6 +35,7 @@ from patchfrog.campaigns.policy import PublicationMode, WatchMode, WorkspacePoli
 from patchfrog.campaigns.store import CampaignStore
 from patchfrog.dependencies.discovery import discover_dependencies
 from patchfrog.dependencies.domain import DependencyInventory, Ecosystem
+from patchfrog.executable_verification.sandbox import is_sandbox_available
 from patchfrog.migration_pr.fake_github import FakeMigrationGitHubPublisher
 from patchfrog.migration_pr.publisher import MigrationPRPublisher
 from patchfrog.upstream.events import build_contract_change, load_contract_file
@@ -51,6 +53,9 @@ from tests.support.campaigns import (
 )
 
 MIGRATE = WorkspacePolicy(watch_mode=WatchMode.MIGRATE)
+#: Hosts without a working bwrap/prlimit sandbox skip the tests whose point is a *VERIFIED* outcome (the
+#: repository's established convention -- see docs/ci-health.md); freshness/state/idempotency tests still run.
+needs_sandbox = pytest.mark.skipif(not is_sandbox_available(), reason="verification sandbox unavailable on this host")
 WS = "workspace-1"
 
 
@@ -79,6 +84,7 @@ def _states(result: CampaignRunResult) -> dict[str, RepoState]:
     return {r.repository.removeprefix("acme/"): r.state for r in result.campaign.records}
 
 
+@needs_sandbox
 async def test_mixed_outcomes_are_never_reported_resolved() -> None:
     result = await _baseline()
     assert _states(result) == {
@@ -95,6 +101,7 @@ async def test_mixed_outcomes_are_never_reported_resolved() -> None:
     assert any("cannot be declared safe" in risk for risk in campaign.unresolved_risks)
 
 
+@needs_sandbox
 async def test_per_repository_evidence_is_independent() -> None:
     result = await _baseline()
     web, worker = (result.campaign.record_for(f"acme/{n}") for n in ("acme-web", "acme-worker"))
@@ -214,6 +221,7 @@ def _publisher(
     return pr_publisher_from(MigrationPRPublisher(session_factory=session_factory, publisher=fake, installation_id=1))
 
 
+@needs_sandbox
 async def test_automatic_publication_opens_exactly_one_pr_and_never_for_human_required(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -235,6 +243,7 @@ async def test_automatic_publication_opens_exactly_one_pr_and_never_for_human_re
     assert again.campaign.version == first.campaign.version
 
 
+@needs_sandbox
 async def test_draft_only_and_manual_approval_modes(session_factory: async_sessionmaker[AsyncSession]) -> None:
     draft_fake = _fake_github()
     draft = WorkspacePolicy(watch_mode=WatchMode.MIGRATE_AND_OPEN_PR, publication=PublicationMode.DRAFT_ONLY)
@@ -255,6 +264,7 @@ async def test_migrate_mode_never_touches_github(session_factory: async_sessionm
     assert fake.create_ref_calls == [] and fake.create_pull_request_calls == []
 
 
+@needs_sandbox
 async def test_stale_base_is_rejected_and_never_published(session_factory: async_sessionmaker[AsyncSession]) -> None:
     fake = _fake_github()
     fake.set_ref(owner="acme", repository="acme-web", ref="heads/main", sha="b" * 40)  # base moved
@@ -384,6 +394,7 @@ async def test_same_change_in_two_workspaces_makes_two_campaigns(
         assert len(await store.list_for_workspace(session, workspace_key="ws-b")) == 1
 
 
+@needs_sandbox
 async def test_dossier_is_machine_readable_and_honest() -> None:
     result = await _baseline()
     dossier = campaign_to_dict(result.campaign)

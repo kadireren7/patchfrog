@@ -13,6 +13,7 @@ analysis. Its job is isolation and honesty:
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -82,6 +83,9 @@ class RepositoryInput:
     extra_workspace_paths: tuple[Path, ...] = ()
     #: The record from an earlier run of this campaign, if any.
     previous: RepositoryRecord | None = None
+    #: The engine ``repositories`` row id, when the caller has one. Only used to
+    #: persist the M7/M8 audit trail (:mod:`patchfrog.campaigns.ingest`).
+    engine_repository_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +102,9 @@ class RepositoryEvaluation:
     bundle: MigrationEvidenceBundle | None = None
     pr_plan: MigrationPRPlan | None = None
     human_actions: tuple[str, ...] = field(default_factory=tuple)
+    #: The checkout the plan/patch were computed against (for the audit trail).
+    root: Path | None = None
+    engine_repository_id: uuid.UUID | None = None
 
 
 def _impact(
@@ -252,7 +259,8 @@ async def _evaluate(
     )
     return RepositoryEvaluation(
         record=record, classification=classification, impact=impact, inventory=inventory, plan=plan, patch=patch,
-        bundle=bundle, pr_plan=pr_plan, human_actions=_human_actions(plan),
+        bundle=bundle, pr_plan=pr_plan, human_actions=_human_actions(plan), root=entry.root,
+        engine_repository_id=entry.engine_repository_id,
     )
 
 
