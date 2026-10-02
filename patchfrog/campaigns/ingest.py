@@ -119,6 +119,7 @@ async def process_change_for_workspace(
     verify: VerifyFn = run_migration_verification,
     publish: PullRequestPublisher | None = None,
     internal_contract: InternalContract | None = None,
+    approved_repositories: frozenset[str] = frozenset(),
 ) -> WorkspaceChangeResult:
     if not policy.analyzes:
         record_campaign_event("not_launched")
@@ -136,7 +137,7 @@ async def process_change_for_workspace(
     run = await run_campaign(
         workspace_key=workspace_key, event=event, entries=entries, now=now, policy=policy,
         freshness_policy=freshness_policy, hints=hints, verify=verify, publish=publish, previous=previous,
-        internal_contract=internal_contract,
+        internal_contract=internal_contract, approved_repositories=approved_repositories,
     )
     async with session_factory() as session:
         await _persist_audit(session, event, run)

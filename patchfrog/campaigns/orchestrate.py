@@ -49,7 +49,11 @@ from patchfrog.campaigns.policy import (
 )
 from patchfrog.campaigns.state import RepoFacts, derive_campaign_state, derive_repo_state
 from patchfrog.migration.domain import GeneratedPatch
-from patchfrog.migration_pr.domain import MigrationPRPlan, MigrationPullRequest
+from patchfrog.migration_pr.domain import (
+    MigrationPREligibility,
+    MigrationPRPlan,
+    MigrationPullRequest,
+)
 from patchfrog.migration_pr.publisher import MigrationPRPublicationMode, MigrationPRPublisher
 from patchfrog.migration_verification.service import run_migration_verification
 from patchfrog.upstream.domain import ExternalChangeEvent
@@ -115,11 +119,24 @@ def _apply_publication(evaluation: RepositoryEvaluation, pr: MigrationPullReques
     )
 
 
+def _approved(decision: PublicationDecision, eligibility: MigrationPREligibility) -> PublicationDecision:
+    """A human approved this repository's pending PR: ``AWAIT_APPROVAL`` becomes a real publication.
+    Approval never lowers the bar -- the evaluation it applies to was just recomputed from scratch, and a
+    partially verified migration is still opened as a draft."""
+
+    if decision.action is not PublicationAction.AWAIT_APPROVAL:
+        return decision
+    if eligibility is MigrationPREligibility.OPEN_WITH_OPERATOR_APPROVAL:
+        return PublicationDecision(PublicationAction.PUBLISH_DRAFT, "approved by a human; partially verified, so a draft")
+    return PublicationDecision(PublicationAction.PUBLISH, "approved by a human")
+
+
 async def _publish_phase(
     evaluations: Sequence[RepositoryEvaluation],
     *,
     policy: WorkspacePolicy,
     publish: PullRequestPublisher | None,
+    approved: frozenset[str] = frozenset(),
 ) -> tuple[list[RepositoryEvaluation], dict[str, PublicationDecision], dict[str, MigrationPullRequest]]:
     decisions: dict[str, PublicationDecision] = {}
     publications: dict[str, MigrationPullRequest] = {}
@@ -131,6 +148,8 @@ async def _publish_phase(
             continue
         name = evaluation.record.repository
         decision = decide_publication(policy, plan.eligibility)
+        if name in approved:
+            decision = _approved(decision, plan.eligibility)
         decisions[name] = decision
         record = replace(
             evaluation.record, reasons=bound_reasons([*evaluation.record.reasons, f"publication policy: {decision.reason}"])
@@ -181,6 +200,7 @@ async def run_campaign(
     publish: PullRequestPublisher | None = None,
     previous: CompatibilityCampaign | None = None,
     internal_contract: InternalContract | None = None,
+    approved_repositories: frozenset[str] = frozenset(),
 ) -> CampaignRunResult:
     policy = policy or WorkspacePolicy()
     identity = campaign_identity_key(workspace_key=workspace_key, change_fingerprint=event.fingerprint)
@@ -212,7 +232,9 @@ async def run_campaign(
     evaluations = await evaluate_all(
         event, scoped, now=now, policy=policy, freshness_policy=freshness_policy, hints=hints, verify=verify
     )
-    published, decisions, publications = await _publish_phase(evaluations, policy=policy, publish=publish)
+    published, decisions, publications = await _publish_phase(
+        evaluations, policy=policy, publish=publish, approved=approved_repositories
+    )
 
     records = tuple(e.record for e in published)
     blast = build_org_blast_radius([e.classification for e in published])

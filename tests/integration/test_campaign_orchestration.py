@@ -601,3 +601,30 @@ async def test_registry_evidence_classifies_affected_but_cannot_generate_a_patch
     web = states["acme/acme-web"]
     assert web.state is RepoState.IMPACTED and web.org_class is OrgClass.AFFECTED
     assert web.patch_fingerprint is None and any("checkout" in r for r in web.reasons)
+
+
+@needs_sandbox
+async def test_a_human_approval_turns_await_into_a_real_publication_after_a_fresh_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    fake = _fake_github()
+    policy = WorkspacePolicy(watch_mode=WatchMode.MIGRATE_AND_OPEN_PR, publication=PublicationMode.MANUAL_APPROVAL)
+    waiting = await _run(policy=policy, publish=_publisher(session_factory, fake))
+    assert fake.create_pull_request_calls == [] and waiting.decisions["acme/acme-web"].action.value == "await_approval"
+
+    approved = await _run(
+        policy=policy, publish=_publisher(session_factory, fake), previous=waiting.campaign,
+        approved_repositories=frozenset({"acme/acme-web"}),
+    )
+    assert len(fake.create_pull_request_calls) == 1 and fake.create_pull_request_drafts == [False]
+    web = approved.campaign.record_for("acme/acme-web")
+    assert web is not None and web.state is RepoState.PR_OPENED
+    # approval is per repository: the human-required repo still has no PR
+    assert approved.campaign.record_for("acme/acme-worker").pr_number is None  # type: ignore[union-attr]
+    # approving a repository whose migration is not eligible changes nothing
+    again = await _run(
+        policy=policy, publish=_publisher(session_factory, fake), previous=approved.campaign,
+        approved_repositories=frozenset({"acme/acme-web", "acme/acme-worker"}),
+    )
+    assert len(fake.create_pull_request_calls) == 1
+    assert again.campaign.record_for("acme/acme-worker").pr_number is None  # type: ignore[union-attr]
