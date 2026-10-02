@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ast
 import shutil
+import uuid
 from pathlib import Path
 
 import pytest
@@ -514,3 +515,89 @@ def test_campaigns_package_has_no_fixture_specific_strings() -> None:
         text = path.read_text().lower()
         for word in ("acme", "chat.create", "responses.create", "stripe", "openai"):
             assert word not in text.replace("an openai", ""), f"{path.name} mentions {word!r}"
+
+
+# -- registry pre-screen (cheap path: no checkout) ---------------------------------------------------
+
+
+async def _registry_rows(
+    session_factory: async_sessionmaker[AsyncSession], names: tuple[str, ...]
+) -> dict[str, tuple[uuid.UUID, str]]:
+    from patchfrog.dependencies.registry import DependencyRegistry
+    from patchfrog.persistence.models.repository import RepositoryModel
+
+    event, _ = acme_event()
+    out: dict[str, tuple[uuid.UUID, str]] = {}
+    async with session_factory() as session:
+        for index, name in enumerate(names, start=1):
+            repository = RepositoryModel(
+                github_repository_id=index, owner="acme", name=name, full_name=f"acme/{name}", installation_id=1
+            )
+            session.add(repository)
+            await session.flush()
+            inventory = discover_dependencies(
+                ACME / "repos" / name, repository=f"acme/{name}", commit_sha=SHA,
+                adapters=adapters_for_target(event.target),
+            )
+            await DependencyRegistry().record_inventory(session, repository_id=repository.id, inventory=inventory)
+            out[name] = (repository.id, f"acme/{name}")
+        await session.commit()
+    return out
+
+
+async def test_registry_read_is_scoped_to_the_given_repositories(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from patchfrog.upstream.store import UpstreamChangeStore
+
+    ids = await _registry_rows(session_factory, ("acme-web", "acme-search"))
+    store = UpstreamChangeStore()
+    async with session_factory() as session:
+        only_web = await store.registry_dependencies_for_repositories(session, [ids["acme-web"][0]])
+        nothing = await store.registry_dependencies_for_repositories(session, [])
+        both = await store.registry_dependencies_for_repositories(session, [i for i, _ in ids.values()])
+    assert {r.repository for r in only_web} == {"acme/acme-web"}
+    assert nothing == []  # an empty scope is never "everything"
+    assert {r.repository for r in both} == {"acme/acme-web", "acme/acme-search"}
+
+
+async def test_fresh_registry_with_no_matching_dependency_is_not_affected_without_a_checkout(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    entry = RepositoryInput(
+        repository=EnrolledRepository("acme/other", last_discovery_at=FRESH_AT), root=None, commit_sha=SHA,
+        use_registry=True,
+    )
+    result = await _run([entry], policy=MIGRATE)
+    record = result.campaign.records[0]
+    assert record.state is RepoState.NOT_AFFECTED and record.org_class is OrgClass.NOT_AFFECTED
+    assert record.impact_status == "unaffected"
+    # ...whereas "the registry was never consulted" stays unknown
+    unconsulted = RepositoryInput(repository=EnrolledRepository("acme/other", last_discovery_at=FRESH_AT), commit_sha=SHA)
+    assert (await _run([unconsulted], policy=MIGRATE)).campaign.records[0].state is RepoState.UNKNOWN
+
+
+async def test_registry_evidence_classifies_affected_but_cannot_generate_a_patch(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from patchfrog.upstream.store import UpstreamChangeStore
+
+    ids = await _registry_rows(session_factory, ("acme-web", "acme-search"))
+    async with session_factory() as session:
+        rows = await UpstreamChangeStore().registry_dependencies_for_repositories(session, [i for i, _ in ids.values()])
+    by_repo: dict[str, list[object]] = {}
+    for row in rows:
+        by_repo.setdefault(row.repository, []).append(row)
+    entries = [
+        RepositoryInput(
+            repository=EnrolledRepository(name, last_discovery_at=FRESH_AT), root=None, commit_sha=SHA,
+            registry_rows=tuple(by_repo.get(name, [])), use_registry=True,  # type: ignore[arg-type]
+        )
+        for name in ("acme/acme-web", "acme/acme-search")
+    ]
+    result = await _run(entries, policy=MIGRATE)
+    states = {r.repository: r for r in result.campaign.records}
+    assert states["acme/acme-search"].state is RepoState.NOT_AFFECTED
+    web = states["acme/acme-web"]
+    assert web.state is RepoState.IMPACTED and web.org_class is OrgClass.AFFECTED
+    assert web.patch_fingerprint is None and any("checkout" in r for r in web.reasons)

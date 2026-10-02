@@ -79,6 +79,9 @@ class RepositoryInput:
     root: Path | None = None
     inventory: DependencyInventory | None = None
     registry_rows: tuple[RegistryDependency, ...] = ()
+    #: The registry was consulted for this repository (``registry_rows`` may legitimately be empty: a
+    #: fresh discovery that found nothing matching). Distinct from "no evidence at all".
+    use_registry: bool = False
     commit_sha: str | None = None
     extra_workspace_paths: tuple[Path, ...] = ()
     #: The record from an earlier run of this campaign, if any.
@@ -118,7 +121,7 @@ def _impact(
         return analyze_repository(entry.root, event, hints=hints, repository=name, commit_sha=sha)
     if entry.inventory is not None:
         return analyze_inventory(entry.inventory, event, hints=hints), entry.inventory
-    if entry.registry_rows:
+    if entry.registry_rows or entry.use_registry:
         workspace = registry_impact(entry.registry_rows, event, hints=hints, repositories=[name])
         return (workspace.repositories[0] if workspace.repositories else None), None
     return None, None
