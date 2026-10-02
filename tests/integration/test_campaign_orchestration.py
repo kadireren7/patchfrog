@@ -653,3 +653,26 @@ async def test_a_repository_whose_evidence_could_not_be_obtained_is_failed_never
         assert "hunter2" not in record.error  # credentials are scrubbed by the engine, not trusted to the caller
         assert record.org_class is OrgClass.UNKNOWN and record.direct_consumers == 0
     assert result.campaign.state is not CampaignState.RESOLVED and not result.campaign.org_blast_radius.safe
+
+
+def test_nothing_in_the_engine_can_merge_a_pull_request() -> None:
+    """"No auto-merge" as a structural fact, not a promise: the GitHub surface PatchFrog can call has no merge,
+    auto-merge or approval operation at all, so no policy setting could ever enable one."""
+
+    from patchfrog.github.client import GitHubClient
+    from patchfrog.migration_pr.github_publisher import (
+        GitHubClientMigrationPublisher,
+        MigrationGitHubPublisher,
+    )
+
+    forbidden = ("merge", "auto_merge", "approve", "enable_auto")
+    for cls in (GitHubClient, GitHubClientMigrationPublisher, MigrationGitHubPublisher):
+        for name in dir(cls):
+            if name.startswith("_"):
+                continue
+            assert not any(word in name for word in forbidden) or name in {"create_pull_request_review"}, (cls, name)
+    package_root = Path(__file__).resolve().parents[2] / "patchfrog"
+    for directory in ("migration_pr", "campaigns", "watchers"):
+        for path in (package_root / directory).rglob("*.py"):
+            text = path.read_text()
+            assert "/merge" not in text and "auto_merge" not in text, path.name
