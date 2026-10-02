@@ -212,16 +212,24 @@ structured value field, same rewriter and safety gates, its own
 `PatchOrigin`, never merged with the deterministic patch); and idempotent
 persistence with a `PatchLinkage` M8/M9 can key on. See `docs/migration.md`.
 
-**M8 — Executable/Runtime Verification of a generated migration.** Next;
-**not started.** Wire a generated M7 patch into (an extension of) the
-existing executable/fix-verification sandbox to confirm the original
-break is actually gone at the candidate fix, not just structurally
-plausible.
+**M8 — Migration Verification Lab.** Implemented: a deterministic
+requirement/targeted-test-selection/execution-plan pipeline that wires a
+generated M7 patch into the existing sandboxed execution boundary,
+bounded baseline-vs-patched comparison, contract-specific verification
+reusing M6's own diff evidence, regression detection distinct from mere
+insufficient evidence, a reproducible evidence bundle with explicit
+evidence strength, and a deterministic (never LLM-decided) outcome
+engine. See `docs/migration-verification.md`.
 
-**M9 — Automated Migration PRs.** Not started; depends on M8. Open an
-evidence-backed pull request from a verified M7 patch, through the
-existing publishing/merge-readiness surface -- never a second PR-opening
-path.
+**M9 — Evidence-Backed Automated Migration PRs.** Implemented: a
+publication-eligibility policy keyed on the M8 outcome (never silently
+relaxed), deterministic branch naming and an evidence-backed Change
+Dossier, idempotent publication through the existing GitHub Check
+infrastructure (never a second publishing system), stale-base and
+evidence/patch integrity protection, and a local `--dry-run` CLI. Real
+GitHub publication is wired (`GitHubClientMigrationPublisher`) but not
+yet called from the production webhook/worker pipeline -- see
+`docs/migration-pr.md`'s "Known limitations".
 
 ## Then — Advanced Verification
 

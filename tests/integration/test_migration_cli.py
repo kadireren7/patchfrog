@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from patchfrog.cli import main
 from patchfrog.config.settings import get_settings
+from patchfrog.executable_verification.sandbox import is_sandbox_available
 from patchfrog.persistence.models.repository import RepositoryModel
 from tests.support.postgres import POSTGRES_TEST_URL, postgres_engine_or_skip
 from tests.support.upstream_cases import CASES_ROOT
@@ -40,6 +41,36 @@ def test_migrations_demo_end_to_end(capsys: pytest.CaptureFixture[str]) -> None:
     assert payload["patch"]["is_candidate"] is True
     assert payload["patch"]["origin"] == "deterministic"
     assert {"app/ai/chat.py", "workers/summary.py", "requirements.txt"} == set(payload["patch"]["modified_files"])
+
+    # M9.12: the default demo also carries the migration through M8
+    # verification and the M9 eligibility decision -- this fixture's one
+    # human-required step means it can never reach more than
+    # HUMAN_REQUIRED / PLAN_ONLY, however cleanly the rest checks out.
+    assert payload["verification"]["outcome"] == "human_required"
+    assert payload["pr_plan"]["eligibility"] == "plan_only"
+    assert payload["pr_plan"]["may_open_code_pr"] is False
+
+
+@pytest.mark.skipif(not is_sandbox_available(), reason="verification sandbox unavailable on this host")
+def test_migrations_demo_verified_end_to_end(capsys: pytest.CaptureFixture[str]) -> None:
+    """M9.12's full product demo: upstream change -> affected code ->
+    patch -> verification -> evidence-backed PR dossier, all the way to
+    VERIFIED and an AUTO_OPEN-eligible dry-run dossier."""
+
+    assert main(["migrations", "demo", "--verified"]) == 0
+    text = capsys.readouterr().out
+    assert "Verification outcome: VERIFIED" in text
+    assert "Eligibility: AUTO_OPEN" in text
+    assert "Would open a code PR: yes" in text
+    assert "## Evidence identity" in text
+
+    assert main(["migrations", "demo", "--verified", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["verification"]["outcome"] == "verified"
+    assert payload["verification"]["evidence_strength"] == "strong"
+    assert payload["pr_plan"]["eligibility"] == "auto_open"
+    assert payload["pr_plan"]["may_open_code_pr"] is True
+    assert payload["pr_plan"]["branch_name"].startswith("patchfrog/migrate/acme-ai/")
 
 
 def test_migrations_plan_text_and_json(capsys: pytest.CaptureFixture[str]) -> None:

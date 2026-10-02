@@ -28,6 +28,7 @@ from patchfrog.domain.github_feedback import (
     GitHubReviewComment,
     GitHubReviewThreadStatus,
 )
+from patchfrog.domain.github_git import GitTreeEntry
 from patchfrog.domain.github_review import (
     GitHubReviewCommentInput,
     GitHubReviewEvent,
@@ -112,6 +113,160 @@ class GitHubClient:
         if not isinstance(sha, str) or not sha:
             raise GitHubResponseError(f"GitHub did not report a head commit for {owner}/{repository}@{default_branch}")
         return sha
+
+    async def get_ref(self, *, installation_id: int, owner: str, repository: str, ref: str) -> str | None:
+        """The commit SHA a ref (e.g. ``heads/main`` or
+        ``heads/patchfrog/migrate/acme-ai/abc123``) currently points at,
+        or ``None`` if it does not exist -- never raises on a missing
+        ref, since "does this migration branch already exist" is a
+        routine, expected question (M9.2/M9.6 idempotency), not an
+        error."""
+
+        try:
+            data = await self._get_json(installation_id=installation_id, path=f"/repos/{owner}/{repository}/git/ref/{ref}")
+        except GitHubNotFoundError:
+            return None
+        try:
+            sha = data["object"]["sha"]
+        except (KeyError, TypeError) as exc:
+            raise GitHubResponseError("Malformed git ref response from GitHub") from exc
+        if not isinstance(sha, str):
+            raise GitHubResponseError("Malformed git ref response from GitHub")
+        return sha
+
+    async def create_ref(self, *, installation_id: int, owner: str, repository: str, ref: str, sha: str) -> None:
+        """Create a new ref (``ref`` fully qualified, e.g.
+        ``refs/heads/patchfrog/migrate/acme-ai/abc123``) pointing at
+        ``sha``. Raises :class:`patchfrog.github.errors.GitHubUnprocessableError`
+        if the ref already exists -- callers that expect a possible
+        collision (re-running against an already-created branch) must
+        catch this and fall back to :meth:`update_ref` themselves; this
+        method never silently overwrites."""
+
+        await self._post_json(
+            installation_id=installation_id, path=f"/repos/{owner}/{repository}/git/refs",
+            json_body={"ref": ref, "sha": sha},
+        )
+
+    async def update_ref(
+        self, *, installation_id: int, owner: str, repository: str, ref: str, sha: str, force: bool = False
+    ) -> None:
+        """Move an existing ref (``ref`` without the ``refs/`` prefix,
+        e.g. ``heads/patchfrog/migrate/acme-ai/abc123``) to ``sha``.
+        ``force=False`` (the default) only ever performs a fast-forward;
+        GitHub rejects a non-fast-forward move with 422 unless
+        ``force=True`` is explicitly passed -- a migration branch is only
+        ever force-moved when PatchFrog itself owns every commit on it
+        (see :mod:`patchfrog.migration_pr.publisher`), never a branch a
+        human may have pushed additional commits to."""
+
+        await self._patch_json(
+            installation_id=installation_id, path=f"/repos/{owner}/{repository}/git/refs/{ref}",
+            json_body={"sha": sha, "force": force},
+        )
+
+    async def get_commit_tree_sha(self, *, installation_id: int, owner: str, repository: str, commit_sha: str) -> str:
+        data = await self._get_json(
+            installation_id=installation_id, path=f"/repos/{owner}/{repository}/git/commits/{commit_sha}"
+        )
+        try:
+            sha = data["tree"]["sha"]
+        except (KeyError, TypeError) as exc:
+            raise GitHubResponseError("Malformed git commit response from GitHub") from exc
+        if not isinstance(sha, str):
+            raise GitHubResponseError("Malformed git commit response from GitHub")
+        return sha
+
+    async def create_tree(
+        self, *, installation_id: int, owner: str, repository: str, base_tree_sha: str, entries: list[GitTreeEntry]
+    ) -> str:
+        """Create a new tree layering ``entries`` (full file content, not
+        a diff) on top of ``base_tree_sha``. GitHub creates the backing
+        blobs server-side from ``content`` -- no separate blob-creation
+        call. Returns the new tree's SHA."""
+
+        payload = {
+            "base_tree": base_tree_sha,
+            "tree": [{"path": e.path, "mode": e.mode, "type": "blob", "content": e.content} for e in entries],
+        }
+        data = await self._post_json(
+            installation_id=installation_id, path=f"/repos/{owner}/{repository}/git/trees", json_body=payload,
+        )
+        try:
+            sha = data["sha"]
+        except (KeyError, TypeError) as exc:
+            raise GitHubResponseError("Malformed git tree response from GitHub") from exc
+        if not isinstance(sha, str):
+            raise GitHubResponseError("Malformed git tree response from GitHub")
+        return sha
+
+    async def create_commit(
+        self, *, installation_id: int, owner: str, repository: str, message: str, tree_sha: str, parent_sha: str
+    ) -> str:
+        payload = {"message": message, "tree": tree_sha, "parents": [parent_sha]}
+        data = await self._post_json(
+            installation_id=installation_id, path=f"/repos/{owner}/{repository}/git/commits", json_body=payload,
+        )
+        try:
+            sha = data["sha"]
+        except (KeyError, TypeError) as exc:
+            raise GitHubResponseError("Malformed git commit-creation response from GitHub") from exc
+        if not isinstance(sha, str):
+            raise GitHubResponseError("Malformed git commit-creation response from GitHub")
+        return sha
+
+    async def create_pull_request(
+        self, *, installation_id: int, owner: str, repository: str, title: str, body: str, head: str, base: str
+    ) -> PullRequestMetadata:
+        payload = {"title": title, "body": body, "head": head, "base": base}
+        data = await self._post_json(
+            installation_id=installation_id, path=f"/repos/{owner}/{repository}/pulls", json_body=payload,
+        )
+        return _parse_pull_request(data)
+
+    async def list_pull_requests(
+        self, *, installation_id: int, owner: str, repository: str, head: str | None = None, state: str = "all"
+    ) -> list[PullRequestMetadata]:
+        """``head``, when given, must be ``"<owner>:<branch>"`` (GitHub's
+        own required format) -- used to find any existing PR from
+        PatchFrog's own migration branch (M9.6 idempotency), never a
+        substring/heuristic match."""
+
+        params: dict[str, Any] = {"state": state, "per_page": _FILES_PER_PAGE}
+        if head is not None:
+            params["head"] = head
+        pull_requests: list[PullRequestMetadata] = []
+        for page in range(1, _MAX_FILES_PAGES + 1):
+            data = await self._get_json(
+                installation_id=installation_id, path=f"/repos/{owner}/{repository}/pulls",
+                params={**params, "page": page},
+            )
+            if not isinstance(data, list):
+                raise GitHubResponseError(f"Expected a list of pull requests, got {type(data).__name__}")
+            pull_requests.extend(_parse_pull_request(item) for item in data)
+            if len(data) < _FILES_PER_PAGE:
+                break
+        return pull_requests
+
+    async def update_pull_request(
+        self,
+        *,
+        installation_id: int,
+        owner: str,
+        repository: str,
+        number: int,
+        title: str | None = None,
+        body: str | None = None,
+    ) -> PullRequestMetadata:
+        payload: dict[str, Any] = {}
+        if title is not None:
+            payload["title"] = title
+        if body is not None:
+            payload["body"] = body
+        data = await self._patch_json(
+            installation_id=installation_id, path=f"/repos/{owner}/{repository}/pulls/{number}", json_body=payload,
+        )
+        return _parse_pull_request(data)
 
     async def list_pull_request_files(
         self, *, installation_id: int, ref: PullRequestRef
@@ -218,13 +373,13 @@ class GitHubClient:
         return _parse_submitted_review(data)
 
     async def list_check_runs(
-        self, *, installation_id: int, ref: PullRequestRef, head_sha: str
+        self, *, installation_id: int, ref: PullRequestRef, head_sha: str, check_name: str = "PatchFrog review"
     ) -> list[GitHubCheckRun]:
         path = f"/repos/{ref.owner}/{ref.repository}/commits/{head_sha}/check-runs"
         data = await self._get_json(
             installation_id=installation_id,
             path=path,
-            params={"check_name": "PatchFrog review", "filter": "all", "per_page": 100},
+            params={"check_name": check_name, "filter": "all", "per_page": 100},
         )
         if not isinstance(data, dict) or not isinstance(data.get("check_runs"), list):
             raise GitHubResponseError("Malformed check-runs response from GitHub")

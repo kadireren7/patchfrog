@@ -38,6 +38,13 @@ from patchfrog.migration.report import (
     render_plan_text,
 )
 from patchfrog.migration.store import MigrationStore, build_linkage
+from patchfrog.migration_pr.domain import MigrationPRPolicy
+from patchfrog.migration_pr.planner import build_pr_plan
+from patchfrog.migration_pr.report import pr_plan_to_dict, render_pr_plan_text
+from patchfrog.migration_verification.domain import MigrationEvidenceBundle
+from patchfrog.migration_verification.report import bundle_to_dict, render_bundle_text
+from patchfrog.migration_verification.service import run_migration_verification
+from patchfrog.migration_verification.store import MigrationVerificationStore
 from patchfrog.persistence.database import create_engine, create_session_factory
 from patchfrog.persistence.models.repository import RepositoryModel
 from patchfrog.repository.git import GitError, run_git
@@ -481,6 +488,139 @@ def run_migrations_generate(args: argparse.Namespace, upsert_repository: UpsertR
     return 0
 
 
+async def _persist_verification(
+    *,
+    event: ExternalChangeEvent,
+    plan: MigrationPlan,
+    patch: GeneratedPatch | None,
+    bundle: MigrationEvidenceBundle | None,
+    root: Path,
+    repository_name: str,
+    upsert_repository: UpsertRepository,
+) -> dict[str, Any]:
+    result = await _persist_plan_and_patch(
+        event=event, plan=plan, patch=patch, root=root, repository_name=repository_name,
+        upsert_repository=upsert_repository,
+    )
+    if patch is None or bundle is None or "patch_id" not in result:
+        return result
+
+    settings = get_settings()
+    engine = create_engine(settings.database_url)
+    session_factory: async_sessionmaker[AsyncSession] = create_session_factory(engine)
+    verification_store = MigrationVerificationStore()
+    try:
+        async with session_factory() as session:
+            run_row, run_created = await verification_store.record_run(
+                session, patch_id=uuid.UUID(result["patch_id"]), bundle=bundle
+            )
+            await session.commit()
+        result["verification_run_id"] = str(run_row.id)
+        result["verification_run_created"] = run_created
+        return result
+    finally:
+        await engine.dispose()
+
+
+def run_migrations_verify(args: argparse.Namespace, upsert_repository: UpsertRepository) -> int:
+    if not args.repo:
+        raise CommandError("give at least one --repo PATH (or NAME=PATH)")
+    analysis = analyze_local(args, [_repo_arg(r) for r in args.repo])
+    plans: dict[str, MigrationPlan] = {}
+    patches: dict[str, GeneratedPatch | None] = {}
+    bundles: dict[str, MigrationEvidenceBundle] = {}
+    for impact in analysis.workspace.repositories:
+        inventory = analysis.inventories[impact.repository]
+        plan = plan_migration(analysis.event, impact, inventory, hints=analysis.hints)
+        patch = generate_patch(plan, analysis.roots[impact.repository]) if plan.automatic_steps else None
+        plans[impact.repository] = plan
+        patches[impact.repository] = patch
+        bundles[impact.repository] = asyncio.run(
+            run_migration_verification(
+                plan=plan, patch=patch, blast_radii=impact.blast_radii, root=analysis.roots[impact.repository],
+                commit_sha=impact.commit_sha or "",
+            )
+        )
+
+    persisted: dict[str, Any] = {}
+    if args.persist:
+        for name, plan in plans.items():
+            persisted[name] = asyncio.run(
+                _persist_verification(
+                    event=analysis.event, plan=plan, patch=patches[name], bundle=bundles[name],
+                    root=analysis.roots[name], repository_name=name, upsert_repository=upsert_repository,
+                )
+            )
+
+    payload: dict[str, Any] = {
+        "event": event_to_dict(analysis.event),
+        "verification": {name: bundle_to_dict(bundle) for name, bundle in bundles.items()},
+    }
+    if persisted:
+        payload["persisted"] = persisted
+    if args.output:
+        Path(args.output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(render_event_text(analysis.event), end="")
+        for name, bundle in bundles.items():
+            print(f"Migration verification for {name}:")
+            print(render_bundle_text(bundle), end="")
+        if persisted:
+            print(f"persisted: {persisted}")
+    return 0
+
+
+def run_migrations_publish(args: argparse.Namespace) -> int:
+    """M9.10: local dry-run of migration PR publication. Builds the exact
+    :class:`~patchfrog.migration_pr.domain.MigrationPRPlan` a real publish
+    would use (M9.1--M9.8) and renders it -- proposed branch, commit
+    title, PR title/body, check outcome, and whether policy allows
+    publication -- without ever touching GitHub. Real publication (a
+    GitHub write) is out of scope for this CLI in this milestone; see
+    ``docs/migration-pr.md``."""
+
+    if not args.dry_run:
+        raise CommandError(
+            "only --dry-run is supported by this CLI in this milestone -- real publication "
+            "requires a GitHub App installation and is not available offline (see docs/migration-pr.md)"
+        )
+    if not args.repo:
+        raise CommandError("give exactly one --repo NAME=PATH -- a migration PR targets one repository")
+    if len(args.repo) > 1:
+        raise CommandError("give exactly one --repo -- a migration PR targets one repository, not a fleet")
+    if not args.repository:
+        raise CommandError("--repository OWNER/REPO is required (the GitHub identity to publish against)")
+
+    analysis = analyze_local(args, [_repo_arg(r) for r in args.repo])
+    impact = analysis.workspace.repositories[0]
+    inventory = analysis.inventories[impact.repository]
+    root = analysis.roots[impact.repository]
+    plan = plan_migration(analysis.event, impact, inventory, hints=analysis.hints)
+    patch = generate_patch(plan, root) if plan.automatic_steps else None
+    base_commit_sha = impact.commit_sha or ""
+    bundle = asyncio.run(
+        run_migration_verification(
+            plan=plan, patch=patch, blast_radii=impact.blast_radii, root=root, commit_sha=base_commit_sha,
+        )
+    )
+    policy = MigrationPRPolicy(allow_partially_verified=args.allow_partially_verified)
+    pr_plan = build_pr_plan(
+        event=analysis.event, plan=plan, patch=patch, bundle=bundle, blast_radii=impact.blast_radii,
+        repository=args.repository, base_commit_sha=base_commit_sha, policy=policy,
+    )
+
+    payload = pr_plan_to_dict(pr_plan)
+    if args.output:
+        Path(args.output).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(render_pr_plan_text(pr_plan), end="")
+    return 0
+
+
 #: The M7.10 demo: a deterministic, fictional SDK
 #: (``client.chat.create(prompt=...)`` -> ``client.responses.create(input=...)``)
 #: bundled with the repository -- offline, no live provider call, never
@@ -490,8 +630,64 @@ def run_migrations_generate(args: argparse.Namespace, upsert_repository: UpsertR
 #: uses for `eval run`.
 DEMO_ROOT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "upstream_changes" / "demo"
 
+#: M9.12: the same fictional ``acme-ai`` SDK, but with a single,
+#: fully-automatic consumer and a bundled 2.0-shaped SDK stub -- the
+#: "everything checks out" counterpart to ``DEMO_ROOT``'s one
+#: human-required step. See ``tests/fixtures/upstream_changes/demo_verified``.
+DEMO_VERIFIED_ROOT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "upstream_changes" / "demo_verified"
+
+#: A stable, fictional repository head for the bundled demo only -- never
+#: a real commit. Keeps M8 evidence (``repository_head_sha``) and M9
+#: linkage (``base_commit_sha``) trivially consistent for M9.8's own
+#: integrity check without needing a real git checkout.
+DEMO_COMMIT_SHA = "d3adb33f" * 5
+DEMO_REPOSITORY = "patchfrog-demo/acme-ai-consumer"
+
+
+def _demo_verified_pipeline() -> tuple[
+    ExternalChangeEvent, MigrationPlan, GeneratedPatch, MigrationEvidenceBundle, tuple[Any, ...]
+]:
+    if not DEMO_VERIFIED_ROOT.is_dir():
+        raise CommandError(f"demo assets not found at {DEMO_VERIFIED_ROOT} (expected a full repository checkout)")
+    hints = load_hints((DEMO_VERIFIED_ROOT / "hints.yaml").read_text())
+    event = build_contract_change(
+        load_contract_file(DEMO_VERIFIED_ROOT / "old.yaml"), load_contract_file(DEMO_VERIFIED_ROOT / "new.yaml"),
+        hints=hints,
+    )
+    root = DEMO_VERIFIED_ROOT / "repo"
+    inventory = discover_dependencies(root, repository="demo", adapters=adapters_for_target(event.target))
+    impact = analyze_inventory(inventory, event, hints=hints, root=root)
+    plan = plan_migration(event, impact, inventory, hints=hints)
+    patch = generate_patch(plan, root)
+    bundle = asyncio.run(
+        run_migration_verification(
+            plan=plan, patch=patch, blast_radii=impact.blast_radii, root=root, commit_sha=DEMO_COMMIT_SHA,
+            extra_workspace_paths=(DEMO_VERIFIED_ROOT / "sdk_stub",),
+        )
+    )
+    return event, plan, patch, bundle, impact.blast_radii
+
 
 def run_migrations_demo(args: argparse.Namespace) -> int:
+    if getattr(args, "verified", False):
+        event, plan, patch, bundle, blast_radii = _demo_verified_pipeline()
+        pr_plan = build_pr_plan(
+            event=event, plan=plan, patch=patch, bundle=bundle, blast_radii=blast_radii,
+            repository=DEMO_REPOSITORY, base_commit_sha=DEMO_COMMIT_SHA,
+        )
+        if args.json:
+            print(json.dumps({
+                "event": event_to_dict(event), "plan": plan_to_dict(plan), "patch": patch_to_dict(patch),
+                "verification": bundle_to_dict(bundle), "pr_plan": pr_plan_to_dict(pr_plan),
+            }, indent=2, sort_keys=True))
+            return 0
+        print(render_event_text(event), end="")
+        print(render_plan_text(plan), end="")
+        print(render_patch_text(patch), end="")
+        print(render_bundle_text(bundle), end="")
+        print(render_pr_plan_text(pr_plan), end="")
+        return 0
+
     if not DEMO_ROOT.is_dir():
         raise CommandError(f"demo assets not found at {DEMO_ROOT} (expected a full repository checkout)")
     hints = load_hints((DEMO_ROOT / "hints.yaml").read_text())
@@ -503,13 +699,32 @@ def run_migrations_demo(args: argparse.Namespace) -> int:
     plan = plan_migration(event, impact, inventory, hints=hints)
     patch = generate_patch(plan, root)
 
+    # M9.12: also demonstrate the non-verified path -- this fixture's one
+    # `human_required remove_argument` step means M8/M9 can never reach
+    # more than HUMAN_REQUIRED / PLAN_ONLY here, however cleanly the rest
+    # checks out (see docs/migration-pr.md).
+    bundle = asyncio.run(
+        run_migration_verification(
+            plan=plan, patch=patch, blast_radii=impact.blast_radii, root=root, commit_sha=DEMO_COMMIT_SHA,
+            extra_workspace_paths=(DEMO_ROOT / "sdk_stub",),
+        )
+    )
+    pr_plan = build_pr_plan(
+        event=event, plan=plan, patch=patch, bundle=bundle, blast_radii=impact.blast_radii,
+        repository=DEMO_REPOSITORY, base_commit_sha=DEMO_COMMIT_SHA,
+    )
+
     if args.json:
-        print(json.dumps({"event": event_to_dict(event), "plan": plan_to_dict(plan),
-                          "patch": patch_to_dict(patch)}, indent=2, sort_keys=True))
+        print(json.dumps({
+            "event": event_to_dict(event), "plan": plan_to_dict(plan), "patch": patch_to_dict(patch),
+            "verification": bundle_to_dict(bundle), "pr_plan": pr_plan_to_dict(pr_plan),
+        }, indent=2, sort_keys=True))
         return 0
     print(render_event_text(event), end="")
     print(render_plan_text(plan), end="")
     print(render_patch_text(patch), end="")
+    print(render_bundle_text(bundle), end="")
+    print(render_pr_plan_text(pr_plan), end="")
     return 0
 
 
@@ -572,10 +787,40 @@ def register(subparsers: Any) -> None:
     generate.add_argument("--json", action="store_true")
     generate.add_argument("--output", default=None)
 
+    verify = migrations_sub.add_parser(
+        "verify",
+        help="M8: bounded, sandboxed executable verification of a generated migration patch (offline)",
+    )
+    add_change_inputs(verify)
+    verify.add_argument("--repo", action="append", default=[],
+                        help="Local repository checkout (repeatable; NAME=PATH to name it)")
+    verify.add_argument("--persist", action="store_true",
+                        help="Record the event, plan, patch and verification run (requires DATABASE_URL)")
+    verify.add_argument("--json", action="store_true")
+    verify.add_argument("--output", default=None)
+
+    publish = migrations_sub.add_parser(
+        "publish",
+        help="M9.10: local dry-run of migration PR publication -- branch/commit/PR/check plan, no GitHub write",
+    )
+    add_change_inputs(publish)
+    publish.add_argument("--repo", action="append", default=[],
+                         help="Local repository checkout (NAME=PATH) -- exactly one, a migration PR targets one repository")
+    publish.add_argument("--repository", help="GitHub repository identity to publish against (owner/repo)")
+    publish.add_argument("--dry-run", action="store_true",
+                         help="Required in this milestone -- real publication is not available from this CLI")
+    publish.add_argument("--allow-partially-verified", action="store_true",
+                         help="Operator policy: allow a PARTIALLY_VERIFIED migration to open a visibly-marked PR")
+    publish.add_argument("--json", action="store_true")
+    publish.add_argument("--output", default=None)
+
     demo = migrations_sub.add_parser(
-        "demo", help="M7.10: the bundled deterministic demo, end to end (offline, no live provider call)"
+        "demo", help="M7.10/M9.12: the bundled deterministic demo, end to end (offline, no live provider call)"
     )
     demo.add_argument("--json", action="store_true")
+    demo.add_argument("--verified", action="store_true",
+                      help="Run the fully-automatic demo_verified scenario (VERIFIED) instead of the default "
+                           "human-required scenario, and extend it through M8 verification and the M9 dry-run PR dossier")
 
 
 def dispatch(args: argparse.Namespace, *, upsert_repository: UpsertRepository) -> int:
@@ -590,6 +835,10 @@ def dispatch(args: argparse.Namespace, *, upsert_repository: UpsertRepository) -
                 return run_migrations_plan(args, upsert_repository)
             if args.migrations_command == "generate":
                 return run_migrations_generate(args, upsert_repository)
+            if args.migrations_command == "verify":
+                return run_migrations_verify(args, upsert_repository)
+            if args.migrations_command == "publish":
+                return run_migrations_publish(args)
             if args.migrations_command == "demo":
                 return run_migrations_demo(args)
     except (CommandError, ContractLoadError, SurfaceError, HintError) as exc:

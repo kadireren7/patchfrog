@@ -6,8 +6,9 @@ change and consumer impact, **what exactly must each affected call site
 do, can it be fixed automatically, and if so, what is the literal patch?**
 `MIGRATION_ENGINE_VERSION = 1`. "Verification" here means deterministic
 structural/contract validation only (the safety gates below) --
-executable/runtime verification is M8 and automated migration PRs are
-M9; neither is implemented in this milestone.
+executable/runtime verification is M8 (`docs/migration-verification.md`)
+and automated migration PRs are M9 (`docs/migration-pr.md`), both now
+implemented as the two stages after this one.
 
 ```bash
 # Plan only (one repository, or several with --repo NAME=PATH, repeatable)
@@ -121,7 +122,8 @@ check key on.
 
 ## Deliberately out of scope
 
-Executable/runtime verification that a generated patch actually fixes
-the break (M8); opening a PR with the generated patch (M9); any
-migration strategy without a deterministic or hint/model-sourced value
-(left `HUMAN_REQUIRED`, never guessed).
+Any migration strategy without a deterministic or hint/model-sourced
+value (left `HUMAN_REQUIRED`, never guessed). Executable/runtime
+verification that a generated patch actually fixes the break, and
+opening a PR with the generated patch, are the next two stages --
+see `docs/migration-verification.md` (M8) and `docs/migration-pr.md` (M9).

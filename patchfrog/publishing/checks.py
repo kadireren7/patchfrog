@@ -45,7 +45,9 @@ class ReviewCheckUpdate:
 
 
 class CheckRunClient(Protocol):
-    async def list_check_runs(self, *, installation_id: int, ref: PullRequestRef, head_sha: str) -> list[GitHubCheckRun]: ...
+    async def list_check_runs(
+        self, *, installation_id: int, ref: PullRequestRef, head_sha: str, check_name: str = "PatchFrog review"
+    ) -> list[GitHubCheckRun]: ...
 
     async def create_check_run(
         self, *, installation_id: int, ref: PullRequestRef, check: GitHubCheckRunInput
