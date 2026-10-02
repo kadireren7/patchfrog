@@ -124,3 +124,71 @@ No candidate, no provider call. Every M10/M11 step is deterministic; the
 campaign/watcher packages must never import a model provider (structural test,
 same pattern as `test_*_never_imports_a_provider`). A watcher change that does
 not reach a consumer produces `NOT_AFFECTED`, never a finding.
+
+---
+
+# Results (written after implementation)
+
+Branch `feat/m10-m11-org-campaigns-watchers`, PR #68. Cloud counterpart: `patchfrog-cloud` PR #3, which pins
+this branch's engine head `dc679d8`.
+
+## What was built, against the plan above
+
+| Plan item | Outcome |
+|---|---|
+| `patchfrog/campaigns/` (domain, freshness, graph, blast, internal, state, policy, evaluate, orchestrate, dossier, store, ingest, observe, demo) | built; one module per concern; no provider import (structurally tested) |
+| `patchfrog/watchers/` (domain, fetch, net, adapters x6, diff, registry, gate, pipeline) | built; no persistence/Cloud/Celery import (structurally tested) |
+| Alembic `0038` | single head; fresh upgrade and downgrade/upgrade verified on PostgreSQL 16 |
+| CLI | `patchfrog campaigns analyze|demo` |
+| CI log hygiene | key + secrets generated at run time, masked; regression test fails on the old workflow |
+| `CAMPAIGN_ENGINE_VERSION = 1`, `WATCHER_ENGINE_VERSION = 1` | added; no other version constant changed |
+
+Deviations from the plan, and why: the engine gained `event_to_json/event_from_json`, a tenant-scoped registry
+read, `evidence_error`, `approved_repositories`, `parse_contract_text`, `GitHubClient.get_default_branch` and draft
+PR support. None was in the plan's file list; each was forced by the hosted pipeline or by a defect found while
+building it (below).
+
+## Defects found by building it (all fixed, all covered by a test)
+
+1. **A failed checkout fell back to registry evidence, which reads "not affected"** for an SDK with no built-in
+   discovery adapter (package declaration only, no call sites). Now `FAILED` via `RepositoryInput.evidence_error`.
+   The registry pre-screen was changed to only ever *exclude* repositories that do not declare the dependency.
+2. An SDK surface restored from a stored snapshot had no `SdkSurface`, so diffing asserted.
+3. A human-closed PR (M9 `no_op_unchanged`) was counted as "in flight"; it is now a human decision.
+4. An opened-then-updated PR bumped the campaign version on an identical re-run (campaign spam); normalized.
+5. (Cloud) two pollers recording one change raise `IntegrityError` at flush, not only at commit.
+6. Test-harness lessons recorded for operators: a venv under `/tmp` hides the interpreter from the sandbox; the stock
+   Docker profile reports the sandbox unavailable.
+
+## Regression status (M4-M9)
+
+| Area | Evidence |
+|---|---|
+| M4 cost | `eval cost-benchmark --json` output identical to `evaluation_baselines/m4_cost_benchmark.json` (timing keys ignored) |
+| M5 discovery | `tests/integration/test_dependency_*` unchanged and green |
+| M6 diff / blast radius | upstream corpus green; one *additive* change in `contract_from_registry_snapshot` (rebuilds `SdkSurface` for stored surfaces) that only the new watcher path reaches |
+| M7 planning/generation | migration corpus green |
+| M8 outcome precedence | `REGRESSION_DETECTED > FAILED > HUMAN_REQUIRED > verified/partial > UNVERIFIED` unchanged (`test_migration_verification_decision`) |
+| M9 | publisher tests green; the `draft` parameter is backward-compatible (default `False`); PR identity, stale-base and integrity unchanged |
+
+## Local results
+
+* `ruff check .`, `mypy . --strict` (826 files): clean.
+* Full `pytest` with PostgreSQL 16 + Redis up and `PATCHFROG_REQUIRE_POSTGRES=1`: **3092 passed, 6 skipped, 0 failed**.
+  (Without Redis the 5 pre-existing `test_ops_doctor` tests fail locally; they fail identically on `main`.)
+* Alembic: one head (`0038_compatibility_campaigns`); from-scratch upgrade OK; downgrade/upgrade round trip OK.
+* Docker: `api` and `worker` targets build; the worker image registers all 9 engine Celery tasks (key mounted as a
+  file, as the new CI does).
+* Secret scan of the added lines against `main`: no matches for key headers/token shapes. Pre-existing tracked files
+  that mention a PEM header contain placeholders only. This proves tracked-file and diff contents, not that nothing
+  was ever exposed locally or in historical logs.
+
+CI on the exact PR head is the authority for "green"; see the PR.
+
+## Not done / not proven
+
+* Nothing was run against live GitHub, PyPI, npm or production. Real PR publication with the official App is
+  unproven live.
+* Migration verification is sandbox-dependent; where `bwrap` is unavailable nothing is `VERIFIED`.
+* No retention job for the engine's older tables; production Postgres is frozen (see Cloud
+  `docs/production-restore.md`).
