@@ -277,6 +277,7 @@ async def test_stale_base_is_rejected_and_never_published(session_factory: async
     assert any("regenerate" in r for r in web.reasons)
 
 
+@needs_sandbox
 async def test_publication_error_is_isolated_to_its_repository(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
