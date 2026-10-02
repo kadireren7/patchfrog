@@ -119,6 +119,22 @@ def load_contract_file(path: Path) -> LoadedContract:
     return parse_contract_document(data, ref=path.name)
 
 
+def parse_contract_text(text: str, *, ref: str) -> LoadedContract:
+    """The same loader as :func:`load_contract_file`, for a document that arrives as text (e.g. a contract
+    snapshot submitted through a hosted form). Bounded and ``safe_load`` only."""
+
+    if len(text.encode("utf-8", errors="replace")) > MAX_OPENAPI_FILE_BYTES:
+        raise ContractLoadError(f"{ref}: larger than {MAX_OPENAPI_FILE_BYTES} bytes")
+    spec = load_spec(text)
+    if spec is not None:
+        return parse_contract_document(spec, ref=ref)
+    try:
+        data = json.loads(text) if text.lstrip().startswith("{") else yaml.safe_load(text)
+    except (json.JSONDecodeError, yaml.YAMLError) as exc:
+        raise ContractLoadError(f"{ref}: not valid YAML/JSON") from exc
+    return parse_contract_document(data, ref=ref)
+
+
 def contract_from_registry_snapshot(normalized_json: str, *, fingerprint: str, ref: str,
                                     version: str | None) -> LoadedContract:
     """The old side of a registry-backed diff: an M5 contract snapshot's
@@ -362,5 +378,6 @@ __all__ = [
     "event_fingerprint",
     "load_contract_file",
     "parse_contract_document",
+    "parse_contract_text",
     "release_from_metadata",
 ]

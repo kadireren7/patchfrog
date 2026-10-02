@@ -82,3 +82,17 @@ def test_a_restored_event_yields_the_same_campaign_inputs() -> None:
         a, _ = analyze_repository(ACME / "repos" / name, event, hints=hints, repository=name)
         b, _ = analyze_repository(ACME / "repos" / name, restored, hints=hints, repository=name)
         assert (a.status, a.direct_count, a.potential_count) == (b.status, b.direct_count, b.potential_count)
+
+
+def test_parse_contract_text_matches_loading_the_same_file() -> None:
+    from patchfrog.upstream.events import ContractLoadError, parse_contract_text
+
+    path = ACME / "contract" / "new.yaml"
+    from_file = load_contract_file(path)
+    from_text = parse_contract_text(path.read_text(), ref="new")
+    assert from_text.fingerprint == from_file.fingerprint and from_text.format == "sdk_surface"
+    for bad in ("not: [a contract", "just text", "{}"):
+        with pytest.raises(ContractLoadError):
+            parse_contract_text(bad, ref="x")
+    with pytest.raises(ContractLoadError, match="larger"):
+        parse_contract_text("a" * 6_000_000, ref="x")
