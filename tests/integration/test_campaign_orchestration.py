@@ -511,7 +511,10 @@ def test_campaigns_package_never_imports_a_provider() -> None:
 
 
 def test_campaigns_package_has_no_fixture_specific_strings() -> None:
+    # demo.py is the one deliberate exception: it *is* the bundled fixture scenario.
     for path in _CAMPAIGNS.glob("*.py"):
+        if path.name == "demo.py":
+            continue
         text = path.read_text().lower()
         for word in ("acme", "chat.create", "responses.create", "stripe", "openai"):
             assert word not in text.replace("an openai", ""), f"{path.name} mentions {word!r}"
@@ -628,3 +631,25 @@ async def test_a_human_approval_turns_await_into_a_real_publication_after_a_fres
     )
     assert len(fake.create_pull_request_calls) == 1
     assert again.campaign.record_for("acme/acme-worker").pr_number is None  # type: ignore[union-attr]
+
+
+async def test_a_repository_whose_evidence_could_not_be_obtained_is_failed_never_unaffected() -> None:
+    # acme-web would classify as affected; acme-search as unaffected. A failed checkout must not let either
+    # fall back to weaker evidence (which for a repository using an SDK without a discovery adapter could
+    # read as "not affected").
+    broken = [
+        RepositoryInput(
+            repository=EnrolledRepository(f"acme/{name}", last_discovery_at=FRESH_AT), commit_sha=SHA,
+            evidence_error="checkout failed: boom https://user:hunter2@example.com/x",
+        )
+        for name in ("acme-web", "acme-search")
+    ]
+    result = await _run([*broken, acme_input("acme-legacy", discovered_at=STALE_AT, root=None)], policy=MIGRATE)
+    states = _states(result)
+    assert states["acme-web"] is RepoState.FAILED and states["acme-search"] is RepoState.FAILED
+    for name in ("acme/acme-web", "acme/acme-search"):
+        record = result.campaign.record_for(name)
+        assert record is not None and record.error is not None and "boom" in record.error
+        assert "hunter2" not in record.error  # credentials are scrubbed by the engine, not trusted to the caller
+        assert record.org_class is OrgClass.UNKNOWN and record.direct_consumers == 0
+    assert result.campaign.state is not CampaignState.RESOLVED and not result.campaign.org_blast_radius.safe

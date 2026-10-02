@@ -57,13 +57,17 @@ _CREDENTIAL_URL = re.compile(r"(https?://)[^/\s:@]+:[^/\s@]+@")
 _TOKEN_SHAPES = re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_\-]{16,}|AIza[0-9A-Za-z_\-]{20,})\b")
 
 
+def scrub(text: str) -> str:
+    """One bounded line with URL credentials and well-known token shapes removed."""
+
+    text = _CREDENTIAL_URL.sub(r"\1***@", text.replace("\n", " "))
+    return _TOKEN_SHAPES.sub("***", text)[:MAX_ERROR_CHARS]
+
+
 def safe_error(exc: BaseException) -> str:
     """A bounded, credential-scrubbed one-line description of an exception."""
 
-    text = f"{type(exc).__name__}: {exc}".replace("\n", " ")
-    text = _CREDENTIAL_URL.sub(r"\1***@", text)
-    text = _TOKEN_SHAPES.sub("***", text)
-    return text[:MAX_ERROR_CHARS]
+    return scrub(f"{type(exc).__name__}: {exc}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +93,10 @@ class RepositoryInput:
     #: The engine ``repositories`` row id, when the caller has one. Only used to
     #: persist the M7/M8 audit trail (:mod:`patchfrog.campaigns.ingest`).
     engine_repository_id: uuid.UUID | None = None
+    #: The caller *tried* to obtain evidence (e.g. check the repository out) and could not. The repository is
+    #: then ``FAILED`` -- never classified from whatever weaker evidence happens to be at hand, which could
+    #: read as a false "not affected".
+    evidence_error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +174,16 @@ async def evaluate_repository(
 ) -> RepositoryEvaluation:
     policy = policy or WorkspacePolicy()
     freshness = assess_freshness(entry.repository, now=now, policy=freshness_policy)
+    if entry.evidence_error is not None and freshness is Freshness.FRESH:
+        classification = RepositoryClassification(
+            entry.repository.full_name, OrgClass.UNKNOWN, None, "evidence could not be obtained", False
+        )
+        record = _replace(
+            _base_record(entry, freshness=freshness, classification=classification, now=now),
+            state=RepoState.FAILED, error=scrub(entry.evidence_error),
+            reasons=bound_reasons(["evidence could not be obtained; this repository is unresolved, not unaffected"]),
+        )
+        return RepositoryEvaluation(record=record, classification=classification)
     try:
         return await _evaluate(event, entry, freshness=freshness, now=now, policy=policy, hints=hints, verify=verify)
     except Exception as exc:
@@ -293,4 +311,5 @@ __all__ = [
     "evaluate_all",
     "evaluate_repository",
     "safe_error",
+    "scrub",
 ]
