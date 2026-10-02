@@ -9,6 +9,10 @@ from patchfrog.persistence.models.analysis import (
     FindingStatus,
 )
 from patchfrog.persistence.models.base import Base
+from patchfrog.persistence.models.campaign import (
+    CampaignRepositoryRecordModel,
+    CompatibilityCampaignModel,
+)
 from patchfrog.persistence.models.code_index import (
     CallReferenceModel,
     FileIndexStatus,
@@ -83,6 +87,8 @@ __all__ = [
     "Base",
     "BetaState",
     "CallReferenceModel",
+    "CampaignRepositoryRecordModel",
+    "CompatibilityCampaignModel",
     "ContextBundleModel",
     "ContextBundleStatus",
     "ContextItemModel",

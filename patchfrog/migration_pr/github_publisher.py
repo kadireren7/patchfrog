@@ -37,7 +37,7 @@ class MigrationGitHubPublisher(Protocol):
     ) -> str: ...
 
     async def create_pull_request(
-        self, *, owner: str, repository: str, title: str, body: str, head: str, base: str
+        self, *, owner: str, repository: str, title: str, body: str, head: str, base: str, draft: bool = False
     ) -> PullRequestMetadata: ...
 
     async def list_pull_requests(
@@ -99,11 +99,11 @@ class GitHubClientMigrationPublisher:
         )
 
     async def create_pull_request(
-        self, *, owner: str, repository: str, title: str, body: str, head: str, base: str
+        self, *, owner: str, repository: str, title: str, body: str, head: str, base: str, draft: bool = False
     ) -> PullRequestMetadata:
         return await self._client.create_pull_request(
             installation_id=self._installation_id, owner=owner, repository=repository, title=title, body=body,
-            head=head, base=base,
+            head=head, base=base, draft=draft,
         )
 
     async def list_pull_requests(

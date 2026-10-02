@@ -216,9 +216,12 @@ class GitHubClient:
         return sha
 
     async def create_pull_request(
-        self, *, installation_id: int, owner: str, repository: str, title: str, body: str, head: str, base: str
+        self, *, installation_id: int, owner: str, repository: str, title: str, body: str, head: str, base: str,
+        draft: bool = False,
     ) -> PullRequestMetadata:
-        payload = {"title": title, "body": body, "head": head, "base": base}
+        payload: dict[str, object] = {"title": title, "body": body, "head": head, "base": base}
+        if draft:
+            payload["draft"] = True
         data = await self._post_json(
             installation_id=installation_id, path=f"/repos/{owner}/{repository}/pulls", json_body=payload,
         )
