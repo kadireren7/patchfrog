@@ -90,16 +90,12 @@ class GitHubClient:
         data = await self._get_json(installation_id=installation_id, path=path)
         return _parse_pull_request(data)
 
-    async def get_default_branch_head_sha(
+    async def get_default_branch(
         self, *, installation_id: int, owner: str, repository: str
-    ) -> str:
-        """The exact commit SHA at the tip of the repository's default
-        branch, right now -- used by ``patchfrog ops preflight`` (external
-        beta readiness) to resolve ``.patchfrog.yml`` for a repository
-        that has no open PR yet. Never used by the real review/publish
-        pipeline itself (that always works from a webhook-supplied
-        ``head_sha``, never a freshly-queried default branch -- see the
-        module docstring of :mod:`patchfrog.publishing.config_resolution`)."""
+    ) -> tuple[str, str]:
+        """``(default branch name, its head commit SHA)`` right now. The pair is read together so a
+        caller that publishes against the branch (the migration PR publisher) and a caller that
+        checks it out agree on both."""
 
         repo_data = await self._get_json(installation_id=installation_id, path=f"/repos/{owner}/{repository}")
         default_branch = repo_data.get("default_branch")
@@ -112,6 +108,20 @@ class GitHubClient:
         sha = branch_data.get("commit", {}).get("sha")
         if not isinstance(sha, str) or not sha:
             raise GitHubResponseError(f"GitHub did not report a head commit for {owner}/{repository}@{default_branch}")
+        return default_branch, sha
+
+    async def get_default_branch_head_sha(
+        self, *, installation_id: int, owner: str, repository: str
+    ) -> str:
+        """The exact commit SHA at the tip of the repository's default
+        branch, right now -- used by ``patchfrog ops preflight`` (external
+        beta readiness) to resolve ``.patchfrog.yml`` for a repository
+        that has no open PR yet. Never used by the real review/publish
+        pipeline itself (that always works from a webhook-supplied
+        ``head_sha``, never a freshly-queried default branch -- see the
+        module docstring of :mod:`patchfrog.publishing.config_resolution`)."""
+
+        _, sha = await self.get_default_branch(installation_id=installation_id, owner=owner, repository=repository)
         return sha
 
     async def get_ref(self, *, installation_id: int, owner: str, repository: str, ref: str) -> str | None:
