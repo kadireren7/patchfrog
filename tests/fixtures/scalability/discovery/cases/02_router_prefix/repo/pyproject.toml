@@ -1,0 +1,4 @@
+[project]
+name = "svc"
+version = "0.1.0"
+dependencies = ["fastapi>=0.100,<1.0", "sqlalchemy>=2.0"]

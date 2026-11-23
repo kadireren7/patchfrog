@@ -1,0 +1,70 @@
+{
+  "complete": false,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "Dynamic and unresolvable registrations next to one resolvable route: loop includes, external and missing routers, f-string path, router passed as a parameter, non-literal methods and prefix. None may become a guessed route.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [],
+      "resolved_version": null,
+      "status": "import_only"
+    }
+  },
+  "limitations": [],
+  "patterns": [
+    "loop include",
+    "missing module",
+    "f-string path",
+    "parameter receiver",
+    "non-literal methods",
+    "non-literal prefix"
+  ],
+  "routes": [
+    {
+      "app": "app:main:app",
+      "endpoint": "main:known",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/known"
+    }
+  ],
+  "unresolved": [
+    {
+      "kind": "include_target",
+      "line": 12,
+      "path": "main.py"
+    },
+    {
+      "kind": "include_target",
+      "line": 14,
+      "path": "main.py"
+    },
+    {
+      "kind": "include_target",
+      "line": 15,
+      "path": "main.py"
+    },
+    {
+      "kind": "route_path",
+      "line": 18,
+      "path": "main.py"
+    },
+    {
+      "kind": "router_receiver",
+      "line": 29,
+      "path": "main.py"
+    },
+    {
+      "kind": "methods",
+      "line": 35,
+      "path": "main.py"
+    },
+    {
+      "kind": "prefix",
+      "line": 36,
+      "path": "main.py"
+    }
+  ]
+}

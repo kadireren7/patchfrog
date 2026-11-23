@@ -1,0 +1,17 @@
+{
+  "bases": [],
+  "columns": [],
+  "complete": true,
+  "description": "Negative control: pydantic models with Field, a dataclass with a relationship attribute, a local class named Session, requests.Session() in a with block. Nothing is database structure.",
+  "models": [],
+  "objects": [],
+  "options": [],
+  "patterns": [
+    "negative control",
+    "look-alike names"
+  ],
+  "providers": [],
+  "relationships": [],
+  "route_sessions": [],
+  "unresolved": []
+}

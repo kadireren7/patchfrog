@@ -1,0 +1,68 @@
+{
+  "complete": false,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "Recognised but unsupported constructs: APIRouter subclass, routes= argument, Starlette add_route, mounts (sub-app routes are reported under the sub-app, not composed), and a file with a syntax error.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [],
+      "importing_files": 2,
+      "resolved_version": null,
+      "status": "import_only"
+    }
+  },
+  "limitations": [
+    {
+      "code": "mount_not_traversed",
+      "path": "main.py"
+    },
+    {
+      "code": "mount_not_traversed",
+      "path": "main.py"
+    },
+    {
+      "code": "parse_error",
+      "path": "broken.py"
+    }
+  ],
+  "patterns": [
+    "router subclass",
+    "routes=",
+    "add_route",
+    "mount",
+    "syntax error"
+  ],
+  "routes": [
+    {
+      "app": "app:main:sub",
+      "endpoint": "main:inner",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/inner"
+    }
+  ],
+  "unresolved": [
+    {
+      "kind": "unsupported",
+      "line": 13,
+      "path": "main.py"
+    },
+    {
+      "kind": "router_receiver",
+      "line": 16,
+      "path": "main.py"
+    },
+    {
+      "kind": "unsupported",
+      "line": 28,
+      "path": "main.py"
+    },
+    {
+      "kind": "include_target",
+      "line": 29,
+      "path": "main.py"
+    }
+  ]
+}

@@ -1,0 +1,123 @@
+{
+  "bases": [],
+  "columns": [],
+  "complete": true,
+  "description": "Async engine and async_sessionmaker, legacy sessionmaker(class_=AsyncSession), a dynamic URL, scoped_session, an async-with provider, a provider known only from its AsyncIterator[AsyncSession] annotation, a connection provider (not a session), and router-level dependencies.",
+  "models": [],
+  "objects": [
+    [
+      "async_engine:db:engine",
+      "async_engine",
+      null,
+      "literal",
+      "postgresql+asyncpg"
+    ],
+    [
+      "async_engine:db:other_engine",
+      "async_engine",
+      null,
+      "dynamic",
+      null
+    ],
+    [
+      "async_sessionmaker:db:async_session",
+      "async_sessionmaker",
+      "async_engine:db:engine",
+      "absent",
+      null
+    ],
+    [
+      "async_sessionmaker:db:legacy_factory",
+      "async_sessionmaker",
+      "async_engine:db:engine",
+      "absent",
+      null
+    ],
+    [
+      "scoped_session:db:registry_sessions",
+      "scoped_session",
+      null,
+      "absent",
+      null
+    ]
+  ],
+  "options": [
+    [
+      "async_engine:db:engine",
+      "pool_pre_ping",
+      "True"
+    ],
+    [
+      "async_sessionmaker:db:async_session",
+      "expire_on_commit",
+      "False"
+    ],
+    [
+      "async_sessionmaker:db:legacy_factory",
+      "class_",
+      "sqlalchemy.ext.asyncio.AsyncSession"
+    ]
+  ],
+  "patterns": [
+    "create_async_engine",
+    "async_sessionmaker",
+    "class_=AsyncSession",
+    "dynamic URL",
+    "scoped_session",
+    "async with",
+    "annotation-only provider",
+    "connection",
+    "router dependency"
+  ],
+  "providers": [
+    [
+      "db:get_legacy",
+      "generator",
+      "async",
+      "inferred",
+      null
+    ],
+    [
+      "db:get_scoped",
+      "function",
+      "sync",
+      "explicit",
+      "scoped_session:db:registry_sessions"
+    ],
+    [
+      "db:get_session",
+      "generator",
+      "async",
+      "explicit",
+      "async_sessionmaker:db:async_session"
+    ]
+  ],
+  "relationships": [],
+  "route_sessions": [
+    [
+      "GET /v1/a",
+      "db:get_session",
+      null,
+      [
+        "db:get_session"
+      ]
+    ],
+    [
+      "GET /v1/b",
+      "db:get_session",
+      null,
+      [
+        "db:get_session"
+      ]
+    ],
+    [
+      "GET /v1/b",
+      "db:get_legacy",
+      "s",
+      [
+        "db:get_legacy"
+      ]
+    ]
+  ],
+  "unresolved": []
+}

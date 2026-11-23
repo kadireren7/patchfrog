@@ -1,0 +1,58 @@
+{
+  "complete": true,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "Three levels of include_router across packages: package __init__ routers, from . import module, relative aliases; Poetry + poetry.lock.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [
+        "^0.110"
+      ],
+      "resolved_version": "0.110.3",
+      "status": "resolved"
+    },
+    "pydantic": {
+      "declared_specs": [],
+      "importing_files": 0,
+      "resolved_version": "2.7.1",
+      "status": "resolved"
+    }
+  },
+  "limitations": [],
+  "patterns": [
+    "nested include_router",
+    "from . import users",
+    "from .items import router as x",
+    "Poetry"
+  ],
+  "routes": [
+    {
+      "app": "app:app.main:app",
+      "endpoint": "app.api.v1.users:list_users",
+      "kind": "async",
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/users/"
+    },
+    {
+      "app": "app:app.main:app",
+      "endpoint": "app.api.v1.users:me",
+      "kind": "async",
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/users/me"
+    },
+    {
+      "app": "app:app.main:app",
+      "endpoint": "app.api.v1.items:read_item",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/items/{item_id}"
+    }
+  ],
+  "unresolved": []
+}

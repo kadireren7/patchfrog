@@ -1,0 +1,133 @@
+{
+  "bases": [
+    [
+      "base:models:Base",
+      "declarative_base_class"
+    ]
+  ],
+  "columns": [
+    [
+      "model:models:Employee",
+      "created_by",
+      null,
+      "mapped_column",
+      "explicit",
+      false,
+      [],
+      "models:AuditMixin"
+    ],
+    [
+      "model:models:Employee",
+      "id",
+      null,
+      "mapped_column",
+      "explicit",
+      true,
+      [],
+      "models:Identified"
+    ],
+    [
+      "model:models:Employee",
+      "kind",
+      null,
+      "mapped_annotation",
+      "inferred",
+      false,
+      [],
+      "models:Employee"
+    ],
+    [
+      "model:models:Manager",
+      "id",
+      null,
+      "mapped_column",
+      "explicit",
+      true,
+      [
+        "employees.id"
+      ],
+      "models:Manager"
+    ],
+    [
+      "model:models:Manager",
+      "budget",
+      null,
+      "mapped_annotation",
+      "inferred",
+      false,
+      [],
+      "models:Manager"
+    ],
+    [
+      "model:models:Engineer",
+      "language",
+      null,
+      "mapped_column",
+      "explicit",
+      false,
+      [],
+      "models:Engineer"
+    ]
+  ],
+  "complete": true,
+  "description": "A plain mixin, an __abstract__ base with the primary key, joined-table inheritance (own table) and single-table inheritance (no table).",
+  "models": [
+    {
+      "base_id": "base:models:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:models:Employee",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "employees",
+      "table_name_provenance": "explicit"
+    },
+    {
+      "base_id": "base:models:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "single",
+      "model_id": "model:models:Engineer",
+      "parents": [
+        "model:models:Employee"
+      ],
+      "primary_key": [],
+      "primary_key_provenance": "inherited",
+      "table_name": null,
+      "table_name_provenance": "inherited"
+    },
+    {
+      "base_id": "base:models:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "joined",
+      "model_id": "model:models:Manager",
+      "parents": [
+        "model:models:Employee"
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "managers",
+      "table_name_provenance": "explicit"
+    }
+  ],
+  "objects": [],
+  "options": [],
+  "patterns": [
+    "mixin",
+    "__abstract__",
+    "joined inheritance",
+    "single-table inheritance",
+    "inherited primary key"
+  ],
+  "providers": [],
+  "relationships": [],
+  "route_sessions": [],
+  "unresolved": []
+}

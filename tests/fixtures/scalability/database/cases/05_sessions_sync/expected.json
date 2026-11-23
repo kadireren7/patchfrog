@@ -1,0 +1,121 @@
+{
+  "bases": [],
+  "columns": [],
+  "complete": true,
+  "description": "Sync engine (literal URL: only the scheme is kept), sessionmaker bound to it, three session providers (SessionLocal(), with Session(engine), with SessionLocal.begin()), linked to routes through parameters, an Annotated alias, a sub-dependency and a decorator dependency.",
+  "models": [],
+  "objects": [
+    [
+      "engine:app.database:engine",
+      "engine",
+      null,
+      "literal",
+      "postgresql"
+    ],
+    [
+      "sessionmaker:app.database:SessionLocal",
+      "sessionmaker",
+      "engine:app.database:engine",
+      "absent",
+      null
+    ]
+  ],
+  "options": [
+    [
+      "engine:app.database:engine",
+      "echo",
+      "False"
+    ],
+    [
+      "engine:app.database:engine",
+      "max_overflow",
+      "10"
+    ],
+    [
+      "engine:app.database:engine",
+      "pool_size",
+      "5"
+    ],
+    [
+      "sessionmaker:app.database:SessionLocal",
+      "autoflush",
+      "False"
+    ],
+    [
+      "sessionmaker:app.database:SessionLocal",
+      "expire_on_commit",
+      "False"
+    ]
+  ],
+  "patterns": [
+    "create_engine",
+    "sessionmaker",
+    "yield provider",
+    "with Session(engine)",
+    "sessionmaker.begin()",
+    "Annotated alias",
+    "sub-dependency",
+    "decorator dependency",
+    "literal URL scheme only"
+  ],
+  "providers": [
+    [
+      "app.database:get_db",
+      "generator",
+      "sync",
+      "explicit",
+      "sessionmaker:app.database:SessionLocal"
+    ],
+    [
+      "app.database:get_session",
+      "generator",
+      "sync",
+      "explicit",
+      "engine:app.database:engine"
+    ],
+    [
+      "app.database:get_tx",
+      "generator",
+      "sync",
+      "explicit",
+      "sessionmaker:app.database:SessionLocal"
+    ]
+  ],
+  "relationships": [],
+  "route_sessions": [
+    [
+      "GET /items",
+      "app.database:get_db",
+      "db",
+      [
+        "app.database:get_db"
+      ]
+    ],
+    [
+      "GET /orders",
+      "app.database:get_session",
+      "session",
+      [
+        "app.database:get_session"
+      ]
+    ],
+    [
+      "GET /repo",
+      "app.database:get_db",
+      "repo",
+      [
+        "app.main:get_repo",
+        "app.database:get_db"
+      ]
+    ],
+    [
+      "POST /tx",
+      "app.database:get_tx",
+      null,
+      [
+        "app.database:get_tx"
+      ]
+    ]
+  ],
+  "unresolved": []
+}

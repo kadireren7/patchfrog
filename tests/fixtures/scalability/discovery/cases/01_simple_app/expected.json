@@ -1,0 +1,89 @@
+{
+  "complete": true,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "One FastAPI app, every HTTP-method decorator, sync and async handlers; exact pin without a lockfile.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [
+        "==0.110.0"
+      ],
+      "importing_files": 1,
+      "resolved_version": null,
+      "status": "declared_unresolved"
+    }
+  },
+  "limitations": [],
+  "patterns": [
+    "FastAPI()",
+    "@app.<method>",
+    "sync/async",
+    "declared exact pin is not an installed version"
+  ],
+  "routes": [
+    {
+      "app": "app:main:app",
+      "endpoint": "main:root",
+      "kind": "async",
+      "methods": [
+        "GET"
+      ],
+      "path": "/"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:create_item",
+      "kind": "sync",
+      "methods": [
+        "POST"
+      ],
+      "path": "/items"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:replace_item",
+      "kind": "async",
+      "methods": [
+        "PUT"
+      ],
+      "path": "/items/{item_id}"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:update_item",
+      "kind": "sync",
+      "methods": [
+        "PATCH"
+      ],
+      "path": "/items/{item_id}"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:delete_item",
+      "kind": "async",
+      "methods": [
+        "DELETE"
+      ],
+      "path": "/items/{item_id}"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:head_items",
+      "kind": "sync",
+      "methods": [
+        "HEAD"
+      ],
+      "path": "/items"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:options_items",
+      "kind": "sync",
+      "methods": [
+        "OPTIONS"
+      ],
+      "path": "/items"
+    }
+  ],
+  "unresolved": []
+}

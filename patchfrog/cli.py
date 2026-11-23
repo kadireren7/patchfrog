@@ -37,7 +37,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from patchfrog import cli_campaigns, cli_changes
+from patchfrog import cli_campaigns, cli_changes, cli_scale
 from patchfrog.analysis.domain import AnalysisRunSummary
 from patchfrog.analysis.service import StaleIndexError, StaticAnalysisService
 from patchfrog.change_risk import classify_change
@@ -2498,6 +2498,7 @@ def main(argv: list[str] | None = None) -> int:
 
     cli_changes.register(subparsers)
     cli_campaigns.register(subparsers)
+    cli_scale.register(subparsers)
 
     cross_repo_parser = subparsers.add_parser(
         "cross-repo",
@@ -2694,6 +2695,8 @@ def main(argv: list[str] | None = None) -> int:
         return cli_changes.dispatch(args, upsert_repository=_upsert_cli_repository)
     if args.command == "campaigns":
         return cli_campaigns.dispatch(args)
+    if args.command == "scale":
+        return cli_scale.dispatch(args)
     if args.command == "cross-repo":
         return _run_cross_repo(args)
     if args.command == "eval":

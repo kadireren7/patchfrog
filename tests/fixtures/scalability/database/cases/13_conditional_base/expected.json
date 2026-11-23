@@ -1,0 +1,32 @@
+{
+  "bases": [
+    [
+      "base:models:Base@7",
+      "declarative_base_function"
+    ],
+    [
+      "base:models:Base@9",
+      "declarative_base_function"
+    ]
+  ],
+  "columns": [],
+  "complete": false,
+  "description": "Ambiguity: the declarative base is bound conditionally to two declarative_base() calls, so its subclass can't be attributed to one registry.",
+  "models": [],
+  "objects": [],
+  "options": [],
+  "patterns": [
+    "conditional base",
+    "ambiguous base"
+  ],
+  "providers": [],
+  "relationships": [],
+  "route_sessions": [],
+  "unresolved": [
+    [
+      "model_base",
+      "models.py",
+      12
+    ]
+  ]
+}

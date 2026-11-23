@@ -1,0 +1,142 @@
+{
+  "bases": [],
+  "columns": [
+    [
+      "model:models:Hero",
+      "id",
+      null,
+      "sqlmodel_field",
+      "explicit",
+      true,
+      [],
+      "models:Hero"
+    ],
+    [
+      "model:models:Hero",
+      "name",
+      null,
+      "sqlmodel_annotation",
+      "inferred",
+      false,
+      [],
+      "models:Hero"
+    ],
+    [
+      "model:models:Hero",
+      "age",
+      null,
+      "sqlmodel_annotation",
+      "inferred",
+      false,
+      [],
+      "models:Hero"
+    ],
+    [
+      "model:models:Hero",
+      "team_id",
+      null,
+      "sqlmodel_field",
+      "explicit",
+      false,
+      [
+        "team.id"
+      ],
+      "models:Hero"
+    ],
+    [
+      "model:models:Team",
+      "name",
+      null,
+      "sqlmodel_field",
+      "explicit",
+      false,
+      [],
+      "models:TeamBase"
+    ],
+    [
+      "model:models:Team",
+      "id",
+      null,
+      "sqlmodel_field",
+      "explicit",
+      true,
+      [],
+      "models:Team"
+    ]
+  ],
+  "complete": true,
+  "description": "SQLModel table models: Field columns, annotation-only fields, inferred table name, a non-table SQLModel parent contributing fields, ClassVar excluded, Relationship with sa_relationship_kwargs lazy; a non-table SQLModel is not a model.",
+  "models": [
+    {
+      "base_id": null,
+      "complete": true,
+      "flavor": "sqlmodel",
+      "inheritance": "none",
+      "model_id": "model:models:Hero",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "heroes",
+      "table_name_provenance": "explicit"
+    },
+    {
+      "base_id": null,
+      "complete": true,
+      "flavor": "sqlmodel",
+      "inheritance": "none",
+      "model_id": "model:models:Team",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "team",
+      "table_name_provenance": "inferred"
+    }
+  ],
+  "objects": [],
+  "options": [],
+  "patterns": [
+    "SQLModel(table=True)",
+    "Field",
+    "annotation field",
+    "inferred table name",
+    "SQLModel inheritance",
+    "ClassVar",
+    "Relationship",
+    "sa_relationship_kwargs"
+  ],
+  "providers": [],
+  "relationships": [
+    [
+      "model:models:Team",
+      "heroes",
+      "model:models:Hero",
+      "resolved",
+      "select",
+      "default",
+      true,
+      null,
+      "team",
+      null,
+      null
+    ],
+    [
+      "model:models:Hero",
+      "team",
+      "model:models:Team",
+      "resolved",
+      "selectin",
+      "explicit",
+      false,
+      null,
+      "heroes",
+      null,
+      null
+    ]
+  ],
+  "route_sessions": [],
+  "unresolved": []
+}
