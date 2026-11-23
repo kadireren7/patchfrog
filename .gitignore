@@ -48,3 +48,10 @@ secrets/
 # own output is a reproducible-on-demand artifact, not something to
 # track in git history.
 evaluation_baselines/latest_run.json
+
+# Private-repository material that must never enter this public repository
+# (owner decision 2026-11-22): the PatchFrog Cloud import manifest and its
+# handoff notes live only in a local, untracked private/ directory until
+# they are moved into the private Cloud repository.
+/private/
+tests/architecture/cloud_import_contract.json

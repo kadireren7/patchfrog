@@ -1,0 +1,34 @@
+{
+  "bases": [],
+  "columns": [],
+  "complete": false,
+  "description": "Unsupported mapping styles are reported: registry().generate_base() (its subclasses can't be classified), map_imperatively, @as_declarative.",
+  "models": [],
+  "objects": [],
+  "options": [],
+  "patterns": [
+    "registry.generate_base",
+    "map_imperatively",
+    "as_declarative"
+  ],
+  "providers": [],
+  "relationships": [],
+  "route_sessions": [],
+  "unresolved": [
+    [
+      "unsupported",
+      "models.py",
+      15
+    ],
+    [
+      "unsupported",
+      "models.py",
+      18
+    ],
+    [
+      "model_base",
+      "models.py",
+      23
+    ]
+  ]
+}

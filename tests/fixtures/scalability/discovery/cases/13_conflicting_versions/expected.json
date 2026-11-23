@@ -1,0 +1,34 @@
+{
+  "complete": true,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "Two lockfiles that disagree on the FastAPI version: no version is claimed. -r includes are not followed.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [
+        ">=0.100,<1"
+      ],
+      "resolved_version": null,
+      "status": "conflicting"
+    }
+  },
+  "limitations": [],
+  "patterns": [
+    "conflicting lockfiles",
+    "Pipfile.lock",
+    "poetry.lock",
+    "requirements -r"
+  ],
+  "routes": [
+    {
+      "app": "app:api:app",
+      "endpoint": "api:ok",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/ok"
+    }
+  ],
+  "unresolved": []
+}

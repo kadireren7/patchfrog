@@ -1,0 +1,211 @@
+{
+  "complete": true,
+  "dependencies": [
+    [
+      "app:app.main:app",
+      "GET /plain",
+      "app",
+      "local_function",
+      "app.deps:verify_key",
+      null
+    ],
+    [
+      "app:app.main:app",
+      "GET /plain",
+      "parameter",
+      "local_class",
+      "app.deps:Pagination",
+      "page"
+    ],
+    [
+      "app:app.main:app",
+      "GET /v1/r/me",
+      "app",
+      "local_function",
+      "app.deps:verify_key",
+      null
+    ],
+    [
+      "app:app.main:app",
+      "GET /v1/r/me",
+      "include",
+      "local_function",
+      "app.deps:get_db",
+      null
+    ],
+    [
+      "app:app.main:app",
+      "GET /v1/r/me",
+      "router",
+      "local_function",
+      "app.deps:get_db",
+      null
+    ],
+    [
+      "app:app.main:app",
+      "GET /v1/r/me",
+      "parameter",
+      "local_function",
+      "app.deps:get_current_user",
+      "user"
+    ],
+    [
+      "app:app.main:app",
+      "GET /v1/r/items",
+      "app",
+      "local_function",
+      "app.deps:verify_key",
+      null
+    ],
+    [
+      "app:app.main:app",
+      "GET /v1/r/items",
+      "include",
+      "local_function",
+      "app.deps:get_db",
+      null
+    ],
+    [
+      "app:app.main:app",
+      "GET /v1/r/items",
+      "router",
+      "local_function",
+      "app.deps:get_db",
+      null
+    ],
+    [
+      "app:app.main:app",
+      "GET /v1/r/items",
+      "decorator",
+      "local_function",
+      "app.deps:require_scope",
+      null
+    ],
+    [
+      "app:app.main:app",
+      "GET /v1/r/items",
+      "parameter",
+      "local_class",
+      "app.deps:Pagination",
+      "page"
+    ],
+    [
+      "app:app.main:app",
+      "GET /v1/r/items",
+      "parameter",
+      "external",
+      "external_auth.get_api_client",
+      "client"
+    ]
+  ],
+  "dependency_functions": [
+    {
+      "is_generator": false,
+      "kind": "async",
+      "symbol": "app.deps:get_current_user",
+      "uses": [
+        [
+          "parameter",
+          "local_function",
+          "app.deps:get_token",
+          "token"
+        ],
+        [
+          "parameter",
+          "local_function",
+          "app.deps:get_db",
+          "db"
+        ]
+      ]
+    },
+    {
+      "is_generator": true,
+      "kind": "sync",
+      "symbol": "app.deps:get_db",
+      "uses": []
+    },
+    {
+      "is_generator": false,
+      "kind": "async",
+      "symbol": "app.deps:get_token",
+      "uses": [
+        [
+          "parameter",
+          "external",
+          "fastapi.security.OAuth2PasswordBearer()",
+          "token"
+        ]
+      ]
+    },
+    {
+      "is_generator": false,
+      "kind": "sync",
+      "symbol": "app.deps:require_scope",
+      "uses": [
+        [
+          "parameter",
+          "local_function",
+          "app.deps:get_current_user",
+          "user"
+        ]
+      ]
+    },
+    {
+      "is_generator": false,
+      "kind": "sync",
+      "symbol": "app.deps:verify_key",
+      "uses": []
+    }
+  ],
+  "description": "Depends at app, include, router, decorator and parameter level; Annotated and Annotated aliases; Depends() on a class; Security; sub-dependencies; yield dependency; external dependency.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [
+        null
+      ],
+      "resolved_version": null,
+      "status": "declared_unresolved"
+    }
+  },
+  "limitations": [],
+  "patterns": [
+    "Depends",
+    "Security",
+    "Annotated[T, Depends(f)]",
+    "type alias",
+    "Depends()",
+    "sub-dependencies",
+    "generator dependency",
+    "external dependency"
+  ],
+  "routes": [
+    {
+      "app": "app:app.main:app",
+      "endpoint": "app.main:plain",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/plain"
+    },
+    {
+      "app": "app:app.main:app",
+      "endpoint": "app.main:me",
+      "kind": "async",
+      "methods": [
+        "GET"
+      ],
+      "path": "/v1/r/me"
+    },
+    {
+      "app": "app:app.main:app",
+      "endpoint": "app.main:items",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/v1/r/items"
+    }
+  ],
+  "unresolved": []
+}

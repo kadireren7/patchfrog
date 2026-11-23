@@ -1,0 +1,105 @@
+{
+  "bases": [
+    [
+      "base:models:Base",
+      "declarative_base_class"
+    ]
+  ],
+  "columns": [
+    [
+      "model:models:Account",
+      "id",
+      null,
+      "mapped_column",
+      "explicit",
+      true,
+      [],
+      "models:Account"
+    ],
+    [
+      "model:models:Account",
+      "balance",
+      null,
+      "mapped_annotation",
+      "inferred",
+      false,
+      [],
+      "models:Account"
+    ]
+  ],
+  "complete": false,
+  "description": "Dynamic constructs are reported, not modelled: a declared_attr __tablename__ on the base, column_property, hybrid_property, a type(...) model, registry.mapped, and a reflected Table.",
+  "models": [
+    {
+      "base_id": "base:models:Base",
+      "complete": false,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:models:Account",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": null,
+      "table_name_provenance": "unknown"
+    },
+    {
+      "base_id": "base:models:Base",
+      "complete": false,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:models:Reflected",
+      "parents": [],
+      "primary_key": [],
+      "primary_key_provenance": "unknown",
+      "table_name": "reflected",
+      "table_name_provenance": "explicit"
+    }
+  ],
+  "objects": [],
+  "options": [],
+  "patterns": [
+    "declared_attr __tablename__",
+    "column_property",
+    "hybrid_property",
+    "type() model",
+    "registry.mapped",
+    "autoload_with"
+  ],
+  "providers": [],
+  "relationships": [],
+  "route_sessions": [],
+  "unresolved": [
+    [
+      "table_name",
+      "models.py",
+      10
+    ],
+    [
+      "dynamic_attribute",
+      "models.py",
+      17
+    ],
+    [
+      "dynamic_attribute",
+      "models.py",
+      20
+    ],
+    [
+      "dynamic_model",
+      "models.py",
+      24
+    ],
+    [
+      "unsupported",
+      "models.py",
+      29
+    ],
+    [
+      "unsupported",
+      "models.py",
+      36
+    ]
+  ]
+}

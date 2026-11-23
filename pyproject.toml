@@ -17,6 +17,9 @@ dependencies = [
     "asyncpg>=0.30,<1.0",
     "alembic>=1.13,<2.0",
     "celery[redis]>=5.4,<6.0",
+    # kombu 5.7 requires redis-py >= 6.1 at runtime (VersionMismatch on worker start), but
+    # redis is capped below 6.0 here and by celery 5.4's redis extra; 5.6.x accepts redis 5.x.
+    "kombu>=5.3.4,<5.7",
     "redis>=5.1,<6.0",
     "httpx>=0.27,<1.0",
     "pyjwt[crypto]>=2.9,<3.0",
@@ -98,12 +101,12 @@ include = ["patchfrog*", "apps*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-ra --ignore=tests/fixtures/repos --ignore=tests/fixtures/evaluation/cases --ignore=tests/fixtures/cost_benchmark --ignore=tests/fixtures/dependencies --ignore=tests/fixtures/upstream_changes --ignore=tests/fixtures/campaigns"
+addopts = "-ra --ignore=tests/fixtures/repos --ignore=tests/fixtures/evaluation/cases --ignore=tests/fixtures/cost_benchmark --ignore=tests/fixtures/dependencies --ignore=tests/fixtures/upstream_changes --ignore=tests/fixtures/campaigns --ignore=tests/fixtures/scalability"
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["tests/fixtures/repos", "tests/fixtures/evaluation/cases", "tests/fixtures/cost_benchmark", "tests/fixtures/dependencies", "tests/fixtures/upstream_changes", "tests/fixtures/campaigns"]
+extend-exclude = ["tests/fixtures/repos", "tests/fixtures/evaluation/cases", "tests/fixtures/cost_benchmark", "tests/fixtures/dependencies", "tests/fixtures/upstream_changes", "tests/fixtures/campaigns", "tests/fixtures/scalability"]
 
 [tool.ruff.lint]
 select = [
@@ -121,7 +124,7 @@ strict = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
-exclude = ["migrations/", "\\.venv/", "tests/fixtures/repos/", "tests/fixtures/evaluation/cases/", "tests/fixtures/cost_benchmark/", "tests/fixtures/dependencies/", "tests/fixtures/upstream_changes/", "tests/fixtures/campaigns/"]
+exclude = ["migrations/", "\\.venv/", "tests/fixtures/repos/", "tests/fixtures/evaluation/cases/", "tests/fixtures/cost_benchmark/", "tests/fixtures/dependencies/", "tests/fixtures/upstream_changes/", "tests/fixtures/campaigns/", "tests/fixtures/scalability/"]
 
 [[tool.mypy.overrides]]
 module = "celery.*"

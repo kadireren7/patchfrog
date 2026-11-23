@@ -1,0 +1,14 @@
+{
+  "complete": true,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "Negative control: a Flask app with @app.get/@app.route decorators. No FastAPI evidence, no routes, nothing unresolved.",
+  "frameworks": {},
+  "limitations": [],
+  "patterns": [
+    "negative control",
+    "other framework"
+  ],
+  "routes": [],
+  "unresolved": []
+}

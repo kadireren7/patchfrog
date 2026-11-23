@@ -1,0 +1,177 @@
+{
+  "bases": [
+    [
+      "base:base:AuditBase",
+      "declarative_base_class"
+    ],
+    [
+      "base:base:Base",
+      "declarative_base_class"
+    ]
+  ],
+  "columns": [
+    [
+      "model:billing.models:AuditEntry",
+      "id",
+      null,
+      "mapped_column",
+      "explicit",
+      true,
+      [],
+      "billing.models:AuditEntry"
+    ],
+    [
+      "model:billing.models:Invoice",
+      "id",
+      null,
+      "mapped_column",
+      "explicit",
+      true,
+      [],
+      "billing.models:Invoice"
+    ],
+    [
+      "model:billing.models:User",
+      "id",
+      null,
+      "mapped_column",
+      "explicit",
+      true,
+      [],
+      "billing.models:User"
+    ],
+    [
+      "model:crm.models:User",
+      "id",
+      null,
+      "mapped_column",
+      "explicit",
+      true,
+      [],
+      "crm.models:User"
+    ]
+  ],
+  "complete": false,
+  "description": "Two models named User in one registry: a bare string target is ambiguous, a qualified one resolves; a target that lives only in another registry is unresolved.",
+  "models": [
+    {
+      "base_id": "base:base:AuditBase",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:billing.models:AuditEntry",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "audit",
+      "table_name_provenance": "explicit"
+    },
+    {
+      "base_id": "base:base:Base",
+      "complete": false,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:billing.models:Invoice",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "invoices",
+      "table_name_provenance": "explicit"
+    },
+    {
+      "base_id": "base:base:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:billing.models:User",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "billing_users",
+      "table_name_provenance": "explicit"
+    },
+    {
+      "base_id": "base:base:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:crm.models:User",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "crm_users",
+      "table_name_provenance": "explicit"
+    }
+  ],
+  "objects": [],
+  "options": [],
+  "patterns": [
+    "duplicate model names",
+    "ambiguous target",
+    "qualified target",
+    "separate registries"
+  ],
+  "providers": [],
+  "relationships": [
+    [
+      "model:billing.models:Invoice",
+      "owner",
+      null,
+      "ambiguous",
+      "select",
+      "default",
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      "model:billing.models:Invoice",
+      "crm_owner",
+      "model:crm.models:User",
+      "resolved",
+      "select",
+      "default",
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      "model:billing.models:Invoice",
+      "audit",
+      null,
+      "unresolved",
+      "select",
+      "default",
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  ],
+  "route_sessions": [],
+  "unresolved": [
+    [
+      "relationship_target",
+      "billing/models.py",
+      14
+    ],
+    [
+      "relationship_target",
+      "billing/models.py",
+      16
+    ]
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "complete": true,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "App factory: the app is created, included into and decorated inside create_app(); module-level app = create_app() is the same object.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [
+        null
+      ],
+      "resolved_version": null,
+      "status": "declared_unresolved"
+    }
+  },
+  "limitations": [],
+  "patterns": [
+    "app factory",
+    "function-scope app",
+    "nested endpoint",
+    "call result resolution"
+  ],
+  "routes": [
+    {
+      "app": "app:service.app:create_app.<locals>.application",
+      "endpoint": "service.api:ping",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/ping"
+    },
+    {
+      "app": "app:service.app:create_app.<locals>.application",
+      "endpoint": "service.app:create_app.<locals>.index",
+      "kind": "async",
+      "methods": [
+        "GET"
+      ],
+      "path": "/"
+    }
+  ],
+  "unresolved": []
+}

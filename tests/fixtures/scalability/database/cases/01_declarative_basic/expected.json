@@ -1,0 +1,137 @@
+{
+  "bases": [
+    [
+      "base:shop.models:Base",
+      "declarative_base_class"
+    ]
+  ],
+  "columns": [
+    [
+      "model:shop.models:Address",
+      "id",
+      null,
+      "mapped_column",
+      "explicit",
+      true,
+      [],
+      "shop.models:Address"
+    ],
+    [
+      "model:shop.models:Address",
+      "user_id",
+      null,
+      "mapped_column",
+      "explicit",
+      false,
+      [
+        "users.id"
+      ],
+      "shop.models:Address"
+    ],
+    [
+      "model:shop.models:User",
+      "id",
+      null,
+      "mapped_column",
+      "explicit",
+      true,
+      [],
+      "shop.models:User"
+    ],
+    [
+      "model:shop.models:User",
+      "name",
+      null,
+      "mapped_column",
+      "explicit",
+      false,
+      [],
+      "shop.models:User"
+    ],
+    [
+      "model:shop.models:User",
+      "nickname",
+      null,
+      "mapped_annotation",
+      "inferred",
+      false,
+      [],
+      "shop.models:User"
+    ]
+  ],
+  "complete": true,
+  "description": "SQLAlchemy 2.0 DeclarativeBase with Mapped/mapped_column, a Mapped annotation-only column, ForeignKey, and a bidirectional relationship with an explicit and a default lazy strategy.",
+  "models": [
+    {
+      "base_id": "base:shop.models:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:shop.models:Address",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "addresses",
+      "table_name_provenance": "explicit"
+    },
+    {
+      "base_id": "base:shop.models:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:shop.models:User",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "users",
+      "table_name_provenance": "explicit"
+    }
+  ],
+  "objects": [],
+  "options": [],
+  "patterns": [
+    "DeclarativeBase",
+    "Mapped[]",
+    "mapped_column",
+    "annotation-only column",
+    "ForeignKey",
+    "relationship",
+    "lazy explicit/default",
+    "string target"
+  ],
+  "providers": [],
+  "relationships": [
+    [
+      "model:shop.models:User",
+      "addresses",
+      "model:shop.models:Address",
+      "resolved",
+      "selectin",
+      "explicit",
+      true,
+      null,
+      "user",
+      null,
+      null
+    ],
+    [
+      "model:shop.models:Address",
+      "user",
+      "model:shop.models:User",
+      "resolved",
+      "select",
+      "default",
+      false,
+      null,
+      "addresses",
+      null,
+      null
+    ]
+  ],
+  "route_sessions": [],
+  "unresolved": []
+}

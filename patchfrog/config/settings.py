@@ -1,6 +1,12 @@
-"""Typed, environment-driven application configuration.
+"""Typed, environment-driven application configuration -- server mode.
 
-All runtime configuration flows through a single :class:`Settings` instance.
+:class:`Settings` (alias :data:`ServerSettings`) is the configuration of the
+self-hosted server stack (API, worker, the PR-review/compatibility CLI
+commands, the PR-review MCP tools). It requires a database, Redis, and a
+GitHub App identity. It extends :class:`patchfrog.config.core.CoreSettings`,
+the local-mode configuration with no required fields (ADR-011): local
+entry points use ``CoreSettings`` and never construct this class.
+
 Nothing else in the codebase should read from ``os.environ`` directly.
 """
 
@@ -10,23 +16,26 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field, ValidationInfo, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
 
+from patchfrog.config.core import CoreSettings
 from patchfrog.review.cost_policy import ReviewStrategy, parse_tier_budgets
 from patchfrog.review.critic_policy import CriticFailurePolicy
 
 
-class Settings(BaseSettings):
-    """Application settings loaded from environment variables / .env file."""
+class Settings(CoreSettings):
+    """Server-mode settings loaded from environment variables / .env file.
+
+    ``app_env``/``log_level`` are inherited unchanged from
+    :class:`~patchfrog.config.core.CoreSettings` (same aliases, same
+    defaults, same position as the first two fields).
+    """
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
-
-    app_env: str = Field(default="development", alias="APP_ENV")
-    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     database_url: str = Field(alias="DATABASE_URL")
     redis_url: str = Field(alias="REDIS_URL")
@@ -367,6 +376,12 @@ class Settings(BaseSettings):
         )
 
     __str__ = __repr__
+
+
+#: Explicit name for the server-mode configuration (ADR-011). ``Settings``
+#: stays the canonical, backward-compatible name -- existing imports
+#: (including the private Cloud integration) are unaffected.
+ServerSettings = Settings
 
 
 @lru_cache(maxsize=1)

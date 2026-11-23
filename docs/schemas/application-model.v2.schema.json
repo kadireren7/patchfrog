@@ -1,0 +1,1279 @@
+{
+  "$defs": {
+    "BaseKind": {
+      "enum": [
+        "declarative_base_class",
+        "declarative_base_function"
+      ],
+      "type": "string"
+    },
+    "ColumnDeclaration": {
+      "enum": [
+        "mapped_column",
+        "column",
+        "mapped_annotation",
+        "sqlmodel_field",
+        "sqlmodel_annotation"
+      ],
+      "type": "string"
+    },
+    "Coverage": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "incomplete_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "limit_reached": {
+          "type": "boolean"
+        },
+        "parsed_files": {
+          "type": "integer"
+        },
+        "python_files": {
+          "type": "integer"
+        },
+        "scanned_files": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "python_files",
+        "scanned_files",
+        "parsed_files",
+        "complete",
+        "incomplete_reasons",
+        "limit_reached"
+      ],
+      "type": "object"
+    },
+    "DatabaseModel": {
+      "additionalProperties": false,
+      "properties": {
+        "bases": {
+          "items": {
+            "$ref": "#/$defs/DeclarativeBaseInfo"
+          },
+          "type": "array"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/OrmModel"
+          },
+          "type": "array"
+        },
+        "objects": {
+          "items": {
+            "$ref": "#/$defs/DbObject"
+          },
+          "type": "array"
+        },
+        "route_sessions": {
+          "items": {
+            "$ref": "#/$defs/RouteSession"
+          },
+          "type": "array"
+        },
+        "schema_version": {
+          "type": "integer"
+        },
+        "session_providers": {
+          "items": {
+            "$ref": "#/$defs/SessionProvider"
+          },
+          "type": "array"
+        },
+        "unresolved": {
+          "items": {
+            "$ref": "#/$defs/DbUnresolved"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "bases",
+        "models",
+        "objects",
+        "session_providers",
+        "route_sessions",
+        "unresolved"
+      ],
+      "type": "object"
+    },
+    "DbLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "line": {
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "line"
+      ],
+      "type": "object"
+    },
+    "DbObject": {
+      "additionalProperties": false,
+      "properties": {
+        "bound_to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/DbObjectKind"
+        },
+        "location": {
+          "$ref": "#/$defs/DbLocation"
+        },
+        "object_id": {
+          "type": "string"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/DbOption"
+          },
+          "type": "array"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "url_scheme": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "url_source": {
+          "$ref": "#/$defs/ValueSource"
+        }
+      },
+      "required": [
+        "object_id",
+        "kind",
+        "symbol",
+        "location",
+        "bound_to",
+        "url_source",
+        "url_scheme",
+        "options"
+      ],
+      "type": "object"
+    },
+    "DbObjectKind": {
+      "enum": [
+        "engine",
+        "async_engine",
+        "sessionmaker",
+        "async_sessionmaker",
+        "scoped_session",
+        "session",
+        "async_session",
+        "connection",
+        "async_connection"
+      ],
+      "type": "string"
+    },
+    "DbOption": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "type": "object"
+    },
+    "DbUnresolved": {
+      "additionalProperties": false,
+      "properties": {
+        "expression": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/DbUnresolvedKind"
+        },
+        "location": {
+          "$ref": "#/$defs/DbLocation"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "location",
+        "expression",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "DbUnresolvedKind": {
+      "enum": [
+        "model_base",
+        "table_name",
+        "relationship_target",
+        "dynamic_attribute",
+        "dynamic_model",
+        "unsupported"
+      ],
+      "type": "string"
+    },
+    "Declaration": {
+      "additionalProperties": false,
+      "properties": {
+        "line": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manifest_path": {
+          "type": "string"
+        },
+        "spec": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "manifest_path",
+        "line",
+        "spec"
+      ],
+      "type": "object"
+    },
+    "DeclarativeBaseInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "base_id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/BaseKind"
+        },
+        "location": {
+          "$ref": "#/$defs/DbLocation"
+        },
+        "symbol": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_id",
+        "kind",
+        "symbol",
+        "location"
+      ],
+      "type": "object"
+    },
+    "DependencyFunction": {
+      "additionalProperties": false,
+      "properties": {
+        "is_generator": {
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/EndpointKind"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "uses": {
+          "items": {
+            "$ref": "#/$defs/DependencyUse"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "symbol",
+        "location",
+        "kind",
+        "is_generator",
+        "uses"
+      ],
+      "type": "object"
+    },
+    "DependencyResolution": {
+      "enum": [
+        "local_function",
+        "local_class",
+        "external",
+        "unresolved"
+      ],
+      "type": "string"
+    },
+    "DependencySource": {
+      "enum": [
+        "app",
+        "include",
+        "router",
+        "decorator",
+        "parameter"
+      ],
+      "type": "string"
+    },
+    "DependencyUse": {
+      "additionalProperties": false,
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "parameter": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolution": {
+          "$ref": "#/$defs/DependencyResolution"
+        },
+        "source": {
+          "$ref": "#/$defs/DependencySource"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "source",
+        "resolution",
+        "target",
+        "parameter",
+        "location"
+      ],
+      "type": "object"
+    },
+    "Endpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EndpointKind"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Location"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "symbol": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "symbol",
+        "kind",
+        "location"
+      ],
+      "type": "object"
+    },
+    "EndpointKind": {
+      "enum": [
+        "async",
+        "sync",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "FrameworkEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "declarations": {
+          "items": {
+            "$ref": "#/$defs/Declaration"
+          },
+          "type": "array"
+        },
+        "importing_files": {
+          "type": "integer"
+        },
+        "package": {
+          "type": "string"
+        },
+        "resolutions": {
+          "items": {
+            "$ref": "#/$defs/Resolution"
+          },
+          "type": "array"
+        },
+        "resolved_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version_status": {
+          "$ref": "#/$defs/VersionStatus"
+        }
+      },
+      "required": [
+        "package",
+        "declarations",
+        "resolutions",
+        "importing_files",
+        "version_status",
+        "resolved_version"
+      ],
+      "type": "object"
+    },
+    "IncludeEdge": {
+      "additionalProperties": false,
+      "properties": {
+        "child_id": {
+          "type": "string"
+        },
+        "dependencies": {
+          "items": {
+            "$ref": "#/$defs/DependencyUse"
+          },
+          "type": "array"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "prefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "parent_id",
+        "child_id",
+        "prefix",
+        "location",
+        "dependencies"
+      ],
+      "type": "object"
+    },
+    "InheritanceKind": {
+      "enum": [
+        "none",
+        "joined",
+        "single",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "Limitation": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/LimitationCode"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Location"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "location",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "LimitationCode": {
+      "enum": [
+        "parse_error",
+        "file_skipped",
+        "mount_not_traversed",
+        "include_cycle",
+        "limit_reached"
+      ],
+      "type": "string"
+    },
+    "Location": {
+      "additionalProperties": false,
+      "properties": {
+        "line": {
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "line"
+      ],
+      "type": "object"
+    },
+    "ModelColumn": {
+      "additionalProperties": false,
+      "properties": {
+        "column_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "declaration": {
+          "$ref": "#/$defs/ColumnDeclaration"
+        },
+        "declared_in": {
+          "type": "string"
+        },
+        "foreign_keys": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "location": {
+          "$ref": "#/$defs/DbLocation"
+        },
+        "name": {
+          "type": "string"
+        },
+        "nullable": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "primary_key": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "type_expression": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "column_name",
+        "declaration",
+        "provenance",
+        "declared_in",
+        "primary_key",
+        "nullable",
+        "foreign_keys",
+        "type_expression",
+        "location"
+      ],
+      "type": "object"
+    },
+    "ModelRelationship": {
+      "additionalProperties": false,
+      "properties": {
+        "back_populates": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "backref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collection": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "declared_in": {
+          "type": "string"
+        },
+        "lazy": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lazy_provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "location": {
+          "$ref": "#/$defs/DbLocation"
+        },
+        "name": {
+          "type": "string"
+        },
+        "resolution": {
+          "$ref": "#/$defs/TargetResolution"
+        },
+        "secondary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target_expression": {
+          "type": "string"
+        },
+        "target_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "uselist": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "target_model",
+        "target_expression",
+        "resolution",
+        "declared_in",
+        "lazy",
+        "lazy_provenance",
+        "collection",
+        "uselist",
+        "back_populates",
+        "backref",
+        "secondary",
+        "location"
+      ],
+      "type": "object"
+    },
+    "OrmFlavor": {
+      "enum": [
+        "sqlalchemy_declarative",
+        "sqlmodel"
+      ],
+      "type": "string"
+    },
+    "OrmModel": {
+      "additionalProperties": false,
+      "properties": {
+        "base_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/ModelColumn"
+          },
+          "type": "array"
+        },
+        "complete": {
+          "type": "boolean"
+        },
+        "flavor": {
+          "$ref": "#/$defs/OrmFlavor"
+        },
+        "inheritance": {
+          "$ref": "#/$defs/InheritanceKind"
+        },
+        "location": {
+          "$ref": "#/$defs/DbLocation"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parents": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "primary_key": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "primary_key_provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "relationships": {
+          "items": {
+            "$ref": "#/$defs/ModelRelationship"
+          },
+          "type": "array"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "table_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table_name_provenance": {
+          "$ref": "#/$defs/Provenance"
+        }
+      },
+      "required": [
+        "model_id",
+        "name",
+        "symbol",
+        "flavor",
+        "base_id",
+        "location",
+        "table_name",
+        "table_name_provenance",
+        "parents",
+        "inheritance",
+        "columns",
+        "relationships",
+        "primary_key",
+        "primary_key_provenance",
+        "complete"
+      ],
+      "type": "object"
+    },
+    "Provenance": {
+      "enum": [
+        "explicit",
+        "inferred",
+        "inherited",
+        "default",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "ProviderShape": {
+      "enum": [
+        "generator",
+        "function"
+      ],
+      "type": "string"
+    },
+    "Resolution": {
+      "additionalProperties": false,
+      "properties": {
+        "lockfile_path": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "lockfile_path",
+        "version"
+      ],
+      "type": "object"
+    },
+    "Route": {
+      "additionalProperties": false,
+      "properties": {
+        "app_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dependencies": {
+          "items": {
+            "$ref": "#/$defs/DependencyUse"
+          },
+          "type": "array"
+        },
+        "endpoint": {
+          "$ref": "#/$defs/Endpoint"
+        },
+        "include_chain": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/RouteKind"
+        },
+        "methods": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path": {
+          "type": "string"
+        },
+        "registration": {
+          "$ref": "#/$defs/Location"
+        },
+        "route_id": {
+          "type": "string"
+        },
+        "router_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "route_id",
+        "app_id",
+        "router_id",
+        "kind",
+        "methods",
+        "path",
+        "endpoint",
+        "registration",
+        "include_chain",
+        "dependencies"
+      ],
+      "type": "object"
+    },
+    "RouteKind": {
+      "enum": [
+        "http",
+        "websocket"
+      ],
+      "type": "string"
+    },
+    "RouteSession": {
+      "additionalProperties": false,
+      "properties": {
+        "chain": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "parameter": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider": {
+          "type": "string"
+        },
+        "route_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "route_id",
+        "provider",
+        "parameter",
+        "chain"
+      ],
+      "type": "object"
+    },
+    "Router": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "type": "string"
+        },
+        "dependencies": {
+          "items": {
+            "$ref": "#/$defs/DependencyUse"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/RouterKind"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "module": {
+          "type": "string"
+        },
+        "prefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "router_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "router_id",
+        "kind",
+        "module",
+        "binding",
+        "location",
+        "prefix",
+        "dependencies"
+      ],
+      "type": "object"
+    },
+    "RouterKind": {
+      "enum": [
+        "app",
+        "router"
+      ],
+      "type": "string"
+    },
+    "SessionKind": {
+      "enum": [
+        "sync",
+        "async",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "SessionProvider": {
+      "additionalProperties": false,
+      "properties": {
+        "location": {
+          "$ref": "#/$defs/DbLocation"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "session_kind": {
+          "$ref": "#/$defs/SessionKind"
+        },
+        "shape": {
+          "$ref": "#/$defs/ProviderShape"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "symbol": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "location",
+        "shape",
+        "session_kind",
+        "provenance",
+        "source"
+      ],
+      "type": "object"
+    },
+    "TargetResolution": {
+      "enum": [
+        "resolved",
+        "unresolved",
+        "ambiguous"
+      ],
+      "type": "string"
+    },
+    "Unresolved": {
+      "additionalProperties": false,
+      "properties": {
+        "expression": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/UnresolvedKind"
+        },
+        "location": {
+          "$ref": "#/$defs/Location"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "location",
+        "expression",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "UnresolvedKind": {
+      "enum": [
+        "router_receiver",
+        "include_target",
+        "route_path",
+        "prefix",
+        "methods",
+        "endpoint",
+        "dependency",
+        "import",
+        "unsupported"
+      ],
+      "type": "string"
+    },
+    "ValueSource": {
+      "enum": [
+        "literal",
+        "dynamic",
+        "absent"
+      ],
+      "type": "string"
+    },
+    "VersionStatus": {
+      "enum": [
+        "resolved",
+        "conflicting",
+        "declared_unresolved",
+        "import_only"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:patchfrog:schema:application-model:2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Static application discovery result (discovery.json). Generated from patchfrog.scalability.project.domain; see docs/architecture/DISCOVERY.md.",
+  "else": {
+    "required": [
+      "database"
+    ]
+  },
+  "if": {
+    "properties": {
+      "schema_version": {
+        "const": 1
+      }
+    }
+  },
+  "properties": {
+    "coverage": {
+      "$ref": "#/$defs/Coverage"
+    },
+    "database": {
+      "$ref": "#/$defs/DatabaseModel"
+    },
+    "dependency_functions": {
+      "items": {
+        "$ref": "#/$defs/DependencyFunction"
+      },
+      "type": "array"
+    },
+    "frameworks": {
+      "items": {
+        "$ref": "#/$defs/FrameworkEvidence"
+      },
+      "type": "array"
+    },
+    "includes": {
+      "items": {
+        "$ref": "#/$defs/IncludeEdge"
+      },
+      "type": "array"
+    },
+    "limitations": {
+      "items": {
+        "$ref": "#/$defs/Limitation"
+      },
+      "type": "array"
+    },
+    "revision_id": {
+      "type": "string"
+    },
+    "routers": {
+      "items": {
+        "$ref": "#/$defs/Router"
+      },
+      "type": "array"
+    },
+    "routes": {
+      "items": {
+        "$ref": "#/$defs/Route"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "enum": [
+        1,
+        2
+      ],
+      "type": "integer"
+    },
+    "unresolved": {
+      "items": {
+        "$ref": "#/$defs/Unresolved"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "revision_id",
+    "frameworks",
+    "routers",
+    "includes",
+    "routes",
+    "dependency_functions",
+    "unresolved",
+    "limitations",
+    "coverage"
+  ],
+  "then": {
+    "not": {
+      "required": [
+        "database"
+      ]
+    }
+  },
+  "title": "PatchFrog ApplicationModel",
+  "type": "object"
+}

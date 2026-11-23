@@ -233,4 +233,4 @@ The following newer engine components extend this same split:
   the audit log, and the policy UI -- never a second policy evaluation
   engine.
 
-See `docs/roadmap.md` for how these milestones are sequenced and why.
+See `docs/history/roadmap-2026-review-and-compatibility.md` for how these milestones were sequenced and why (superseded as the forward plan by `docs/ROADMAP.md`).

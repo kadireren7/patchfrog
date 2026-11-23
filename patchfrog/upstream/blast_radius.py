@@ -26,9 +26,9 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
 
+from patchfrog.codegraph import EMPTY_GRAPH, LocalCodeGraph, SymbolRef
 from patchfrog.dependencies.domain import DetectionConfidence
 from patchfrog.indexing.inventory import is_test_path
-from patchfrog.upstream.code_graph import EMPTY_GRAPH, LocalCodeGraph, SymbolRef
 from patchfrog.upstream.consumers import AffectedConsumer, ConsumerImpact, ImpactKind
 
 HIGH = DetectionConfidence.HIGH

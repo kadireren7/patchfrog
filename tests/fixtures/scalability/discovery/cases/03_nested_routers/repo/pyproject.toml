@@ -1,0 +1,7 @@
+[tool.poetry]
+name = "nested"
+version = "0.1.0"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "^0.110"

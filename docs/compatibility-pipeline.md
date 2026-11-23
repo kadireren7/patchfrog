@@ -1,3 +1,7 @@
+> Component documentation for the API/SDK compatibility pipeline (M5-M11). Formerly
+> `docs/architecture.md`. The target system architecture now lives in
+> [`docs/architecture/OVERVIEW.md`](architecture/OVERVIEW.md).
+
 # PatchFrog Product Architecture
 
 > PatchFrog keeps software compatible with the APIs and SDKs it depends

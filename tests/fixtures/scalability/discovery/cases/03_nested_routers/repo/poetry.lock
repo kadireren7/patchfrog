@@ -1,0 +1,7 @@
+[[package]]
+name = "fastapi"
+version = "0.110.3"
+
+[[package]]
+name = "pydantic"
+version = "2.7.1"

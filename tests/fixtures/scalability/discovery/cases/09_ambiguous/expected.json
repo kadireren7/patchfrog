@@ -1,0 +1,61 @@
+{
+  "complete": false,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "A router bound conditionally to two different objects, and an absolute import that matches two repository modules (top level and monorepo service root). Routers that no app provably includes are reported as unattached.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [],
+      "resolved_version": null,
+      "status": "import_only"
+    }
+  },
+  "limitations": [],
+  "patterns": [
+    "conditional rebinding",
+    "ambiguous import",
+    "unattached routers"
+  ],
+  "routes": [
+    {
+      "app": null,
+      "endpoint": "app.core:top",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/top"
+    },
+    {
+      "app": null,
+      "endpoint": "services.api.app.core:svc",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/svc"
+    }
+  ],
+  "unresolved": [
+    {
+      "kind": "router_receiver",
+      "line": 13,
+      "path": "main.py"
+    },
+    {
+      "kind": "include_target",
+      "line": 23,
+      "path": "main.py"
+    },
+    {
+      "kind": "import",
+      "line": 3,
+      "path": "services/api/app/main.py"
+    },
+    {
+      "kind": "include_target",
+      "line": 6,
+      "path": "services/api/app/main.py"
+    }
+  ]
+}

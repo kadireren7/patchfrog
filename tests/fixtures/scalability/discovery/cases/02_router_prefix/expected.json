@@ -1,0 +1,65 @@
+{
+  "complete": true,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "APIRouter(prefix=) included with a prefix built from module constants; PEP 621 + uv.lock.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [
+        ">=0.100,<1.0"
+      ],
+      "resolved_version": "0.111.0",
+      "status": "resolved"
+    },
+    "sqlalchemy": {
+      "declared_specs": [
+        ">=2.0"
+      ],
+      "resolved_version": "2.0.30",
+      "status": "resolved"
+    },
+    "starlette": {
+      "declared_specs": [],
+      "importing_files": 0,
+      "resolved_version": "0.37.2",
+      "status": "resolved"
+    }
+  },
+  "limitations": [],
+  "patterns": [
+    "APIRouter(prefix=)",
+    "include_router(prefix=)",
+    "constant + constant",
+    "lockfile resolution"
+  ],
+  "routes": [
+    {
+      "app": "app:app:app",
+      "endpoint": "app:list_items",
+      "kind": "async",
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/items"
+    },
+    {
+      "app": "app:app:app",
+      "endpoint": "app:get_item",
+      "kind": "async",
+      "methods": [
+        "GET"
+      ],
+      "path": "/api/v1/items/{item_id}"
+    },
+    {
+      "app": "app:app:app",
+      "endpoint": "app:create_item",
+      "kind": "sync",
+      "methods": [
+        "POST"
+      ],
+      "path": "/api/v1/items/"
+    }
+  ],
+  "unresolved": []
+}

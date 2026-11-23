@@ -1,0 +1,101 @@
+{
+  "complete": true,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "api_route with and without methods, add_api_route, app.router.add_api_route, websockets, call-form registration, path from constant concatenation.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [],
+      "importing_files": 1,
+      "resolved_version": null,
+      "status": "import_only"
+    }
+  },
+  "limitations": [],
+  "patterns": [
+    "api_route",
+    "add_api_route",
+    "app.router",
+    "websocket",
+    "add_api_websocket_route",
+    "router.get(path)(fn)",
+    "default GET"
+  ],
+  "routes": [
+    {
+      "app": "app:main:app",
+      "endpoint": "main:multi",
+      "kind": "async",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "path": "/r/multi"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:default_get",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/r/default"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:health",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/r/health"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:health",
+      "kind": "sync",
+      "methods": [
+        "GET",
+        "HEAD"
+      ],
+      "path": "/r/status"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:health",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/files/list"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:stream",
+      "kind": "async",
+      "methods": [
+        "WEBSOCKET"
+      ],
+      "path": "/ws"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:live",
+      "kind": "async",
+      "methods": [
+        "WEBSOCKET"
+      ],
+      "path": "/live"
+    },
+    {
+      "app": "app:main:app",
+      "endpoint": "main:health",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/callform"
+    }
+  ],
+  "unresolved": []
+}

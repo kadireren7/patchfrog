@@ -49,6 +49,9 @@ find out. See [`docs/external-beta.md`](docs/external-beta.md) first for
 exactly what you're setting up (self-hosted only -- PatchFrog Cloud is
 planned, not available today) and its current limitations.
 
+Local application discovery (the new scalability engine, no services needed):
+`python -m patchfrog scale analyze path/to/app`. See [`docs/scale-cli.md`](docs/scale-cli.md).
+
 ## Local development
 
 ```bash

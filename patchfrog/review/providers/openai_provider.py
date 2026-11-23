@@ -85,6 +85,34 @@ _SDK_MAX_RETRIES = 0
 _UNSAFE_SCHEMA_NAME_CHARS = re.compile(r"[^A-Za-z0-9_-]")
 
 
+#: OpenAI's structured error code for permanent credit/billing exhaustion,
+#: sent with HTTP 429 alongside ordinary rate limiting
+#: (``rate_limit_exceeded``). Only this exact code is permanent.
+_INSUFFICIENT_QUOTA_CODE = "insufficient_quota"
+
+
+def _has_insufficient_quota_code(exc: openai.APIError) -> bool:
+    """Whether the SDK's *structured* error fields mark ``exc`` as
+    insufficient quota, the authoritative signal (backlog S1).
+
+    Message matching alone (:func:`indicates_insufficient_quota`) broke
+    with ``openai`` 3.57, whose ``str(exc)`` is ``"Error code: 429 - You
+    exceeded your current quota"`` and no longer contains the code. The
+    SDK keeps it structured instead: ``exc.code``/``exc.type`` and
+    ``exc.body`` (the unwrapped ``error`` object; a still-wrapped
+    ``{"error": {...}}`` body is accepted too). Exact match only, so
+    ``rate_limit_exceeded`` and friends stay transient.
+    """
+
+    candidates: list[object] = [getattr(exc, "code", None), getattr(exc, "type", None)]
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        inner = body.get("error")
+        for source in (body, inner if isinstance(inner, dict) else {}):
+            candidates.extend((source.get("code"), source.get("type")))
+    return any(isinstance(c, str) and c.lower() == _INSUFFICIENT_QUOTA_CODE for c in candidates)
+
+
 def _sanitize_schema_name(schema_name: str) -> str:
     return _UNSAFE_SCHEMA_NAME_CHARS.sub("_", schema_name)
 
@@ -147,7 +175,7 @@ class OpenAILLMProvider:
                 },
             )
         except openai.RateLimitError as exc:
-            if indicates_insufficient_quota(exc):
+            if _has_insufficient_quota_code(exc) or indicates_insufficient_quota(exc):
                 raise ProviderInsufficientQuotaError(f"quota exhausted: {exc}") from exc
             raise ProviderRateLimitError(
                 f"rate limited: {exc}", retry_after_seconds=retry_after_seconds_from_http_response(exc)

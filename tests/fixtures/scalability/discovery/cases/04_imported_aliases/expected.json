@@ -1,0 +1,54 @@
+{
+  "complete": true,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "src/ layout; import fastapi as fa; APIRouter as Router; module and name aliases; re-export through __init__; variable alias of app and router.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [
+        ">=0.100"
+      ],
+      "resolved_version": null,
+      "status": "declared_unresolved"
+    }
+  },
+  "limitations": [],
+  "patterns": [
+    "src layout",
+    "import x as y",
+    "from x import y as z",
+    "alias = router",
+    "re-export",
+    "fastapi.routing.APIRouter"
+  ],
+  "routes": [
+    {
+      "app": "app:src.svc.main:app",
+      "endpoint": "src.svc.routes.users:get_user",
+      "kind": "async",
+      "methods": [
+        "GET"
+      ],
+      "path": "/users/{user_id}"
+    },
+    {
+      "app": "app:src.svc.main:app",
+      "endpoint": "src.svc.routes.orders:place_order",
+      "kind": "sync",
+      "methods": [
+        "POST"
+      ],
+      "path": "/orders"
+    },
+    {
+      "app": "app:src.svc.main:app",
+      "endpoint": "src.svc.routes.admin:clear_cache",
+      "kind": "async",
+      "methods": [
+        "DELETE"
+      ],
+      "path": "/admin/cache"
+    }
+  ],
+  "unresolved": []
+}

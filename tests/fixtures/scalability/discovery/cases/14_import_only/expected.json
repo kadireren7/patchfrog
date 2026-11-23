@@ -1,0 +1,32 @@
+{
+  "complete": true,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "No manifest that discovery reads (setup.py is never executed or interpreted): FastAPI is import-only with an unknown version.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [],
+      "importing_files": 1,
+      "resolved_version": null,
+      "status": "import_only"
+    }
+  },
+  "limitations": [],
+  "patterns": [
+    "import fastapi; fastapi.FastAPI()",
+    "setup.py ignored",
+    "unknown version"
+  ],
+  "routes": [
+    {
+      "app": "app:service:api",
+      "endpoint": "service:status",
+      "kind": "async",
+      "methods": [
+        "GET"
+      ],
+      "path": "/status"
+    }
+  ],
+  "unresolved": []
+}

@@ -28,10 +28,13 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from patchfrog.config.core import CoreSettings
 from patchfrog.config.settings import Settings
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
+# Each settings class owns its own model_config dict, so both are disabled.
+CoreSettings.model_config["env_file"] = None
 Settings.model_config["env_file"] = None
 
 

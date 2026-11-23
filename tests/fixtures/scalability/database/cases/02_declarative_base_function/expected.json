@@ -1,0 +1,150 @@
+{
+  "bases": [
+    [
+      "base:models:Base",
+      "declarative_base_function"
+    ]
+  ],
+  "columns": [
+    [
+      "model:models:Post",
+      "id",
+      null,
+      "column",
+      "explicit",
+      true,
+      [],
+      "models:Post"
+    ],
+    [
+      "model:models:Post",
+      "title",
+      "post_title",
+      "column",
+      "explicit",
+      false,
+      [],
+      "models:Post"
+    ],
+    [
+      "model:models:Tag",
+      "id",
+      null,
+      "column",
+      "explicit",
+      true,
+      [],
+      "models:Tag"
+    ],
+    [
+      "model:models:PostMeta",
+      "id",
+      null,
+      "column",
+      "explicit",
+      true,
+      [],
+      "models:PostMeta"
+    ],
+    [
+      "model:models:PostMeta",
+      "post_id",
+      null,
+      "column",
+      "explicit",
+      false,
+      [
+        "posts.id"
+      ],
+      "models:PostMeta"
+    ]
+  ],
+  "complete": true,
+  "description": "Legacy declarative_base() with Column(), a database column name override, an association Table (not a model), secondary, uselist=False and backref.",
+  "models": [
+    {
+      "base_id": "base:models:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:models:Post",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "posts",
+      "table_name_provenance": "explicit"
+    },
+    {
+      "base_id": "base:models:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:models:PostMeta",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "post_meta",
+      "table_name_provenance": "explicit"
+    },
+    {
+      "base_id": "base:models:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:models:Tag",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "tags",
+      "table_name_provenance": "explicit"
+    }
+  ],
+  "objects": [],
+  "options": [],
+  "patterns": [
+    "declarative_base()",
+    "Column",
+    "Column name override",
+    "association table",
+    "secondary",
+    "uselist",
+    "backref"
+  ],
+  "providers": [],
+  "relationships": [
+    [
+      "model:models:Post",
+      "tags",
+      "model:models:Tag",
+      "resolved",
+      "joined",
+      "explicit",
+      null,
+      null,
+      null,
+      null,
+      "post_tags"
+    ],
+    [
+      "model:models:Post",
+      "meta",
+      "model:models:PostMeta",
+      "resolved",
+      "select",
+      "default",
+      null,
+      false,
+      null,
+      "post",
+      null
+    ]
+  ],
+  "route_sessions": [],
+  "unresolved": []
+}

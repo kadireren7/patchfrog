@@ -1,0 +1,34 @@
+{
+  "complete": true,
+  "dependencies": [],
+  "dependency_functions": null,
+  "description": "Negative control inside a FastAPI project: a repository class with .get decorator, mock.patch, httpx.get, TestClient.get, dict.get, a docstring mentioning @app.get. Only the one real route.",
+  "frameworks": {
+    "fastapi": {
+      "declared_specs": [
+        null
+      ],
+      "importing_files": 1,
+      "resolved_version": null,
+      "status": "declared_unresolved"
+    }
+  },
+  "limitations": [],
+  "patterns": [
+    "negative control",
+    "decorator look-alikes",
+    "client calls"
+  ],
+  "routes": [
+    {
+      "app": "app:main:app",
+      "endpoint": "main:real",
+      "kind": "sync",
+      "methods": [
+        "GET"
+      ],
+      "path": "/real"
+    }
+  ],
+  "unresolved": []
+}

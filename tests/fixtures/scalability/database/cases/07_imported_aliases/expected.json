@@ -1,0 +1,126 @@
+{
+  "bases": [
+    [
+      "base:pkg.base:Base",
+      "declarative_base_class"
+    ]
+  ],
+  "columns": [
+    [
+      "model:pkg.models.customer:Customer",
+      "id",
+      null,
+      "mapped_column",
+      "explicit",
+      true,
+      [],
+      "pkg.models.customer:Customer"
+    ],
+    [
+      "model:pkg.models.customer:Customer",
+      "email",
+      null,
+      "column",
+      "explicit",
+      false,
+      [],
+      "pkg.models.customer:Customer"
+    ],
+    [
+      "model:pkg.models.order:Order",
+      "id",
+      null,
+      "mapped_column",
+      "explicit",
+      true,
+      [],
+      "pkg.models.order:Order"
+    ],
+    [
+      "model:pkg.models.order:Order",
+      "customer_id",
+      null,
+      "column",
+      "explicit",
+      false,
+      [
+        "customers.id"
+      ],
+      "pkg.models.order:Order"
+    ]
+  ],
+  "complete": true,
+  "description": "import sqlalchemy as sa, from sqlalchemy import orm, an aliased base import, models in a package with a re-export, a fully qualified string target and a class-object target.",
+  "models": [
+    {
+      "base_id": "base:pkg.base:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:pkg.models.customer:Customer",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "customers",
+      "table_name_provenance": "explicit"
+    },
+    {
+      "base_id": "base:pkg.base:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:pkg.models.order:Order",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "orders",
+      "table_name_provenance": "explicit"
+    }
+  ],
+  "objects": [],
+  "options": [],
+  "patterns": [
+    "import sqlalchemy as sa",
+    "orm.DeclarativeBase",
+    "Base as ModelBase",
+    "package re-export",
+    "qualified string target",
+    "class target",
+    "lazy=dynamic"
+  ],
+  "providers": [],
+  "relationships": [
+    [
+      "model:pkg.models.customer:Customer",
+      "orders",
+      "model:pkg.models.order:Order",
+      "resolved",
+      "dynamic",
+      "explicit",
+      null,
+      null,
+      "customer",
+      null,
+      null
+    ],
+    [
+      "model:pkg.models.order:Order",
+      "customer",
+      "model:pkg.models.customer:Customer",
+      "resolved",
+      "select",
+      "default",
+      null,
+      null,
+      "orders",
+      null,
+      null
+    ]
+  ],
+  "route_sessions": [],
+  "unresolved": []
+}

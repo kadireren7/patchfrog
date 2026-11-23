@@ -1,0 +1,118 @@
+{
+  "bases": [
+    [
+      "base:models:Base",
+      "declarative_base_class"
+    ]
+  ],
+  "columns": [
+    [
+      "model:models:Widget",
+      "id",
+      null,
+      "mapped_column",
+      "explicit",
+      true,
+      [],
+      "models:Widget"
+    ],
+    [
+      "model:models:Sprocket",
+      "id",
+      null,
+      "column",
+      "explicit",
+      null,
+      [
+        "widgets.id"
+      ],
+      "models:Sprocket"
+    ]
+  ],
+  "complete": false,
+  "description": "Unresolvable references: a relationship to a class that doesn't exist, a lambda target, a model-like class whose base is an external package, and a route depending on an external session provider (no provider is invented). A primary_key= flag that isn't a literal leaves the primary key unknown (never guessed).",
+  "models": [
+    {
+      "base_id": "base:models:Base",
+      "complete": false,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:models:Widget",
+      "parents": [],
+      "primary_key": [
+        "id"
+      ],
+      "primary_key_provenance": "explicit",
+      "table_name": "widgets",
+      "table_name_provenance": "explicit"
+    },
+    {
+      "base_id": "base:models:Base",
+      "complete": true,
+      "flavor": "sqlalchemy_declarative",
+      "inheritance": "none",
+      "model_id": "model:models:Sprocket",
+      "parents": [],
+      "primary_key": [],
+      "primary_key_provenance": "unknown",
+      "table_name": "sprockets",
+      "table_name_provenance": "explicit"
+    }
+  ],
+  "objects": [],
+  "options": [],
+  "patterns": [
+    "missing target",
+    "lambda target",
+    "external base",
+    "external provider",
+    "non-literal primary_key"
+  ],
+  "providers": [],
+  "relationships": [
+    [
+      "model:models:Widget",
+      "owner",
+      null,
+      "unresolved",
+      "select",
+      "default",
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    [
+      "model:models:Widget",
+      "parts",
+      null,
+      "unresolved",
+      "select",
+      "default",
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  ],
+  "route_sessions": [],
+  "unresolved": [
+    [
+      "relationship_target",
+      "models.py",
+      17
+    ],
+    [
+      "relationship_target",
+      "models.py",
+      18
+    ],
+    [
+      "model_base",
+      "models.py",
+      26
+    ]
+  ]
+}
