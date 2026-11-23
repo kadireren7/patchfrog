@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from patchfrog.codegraph import EMPTY_GRAPH, LocalCodeGraph, build_local_code_graph
 from patchfrog.dependencies.adapters import (
     KNOWN_PROVIDER_SPECS,
     DependencyProviderAdapter,
@@ -42,7 +43,6 @@ from patchfrog.dependencies.domain import (
     Ecosystem,
 )
 from patchfrog.upstream.blast_radius import BlastRadius, compute_blast_radius
-from patchfrog.upstream.code_graph import EMPTY_GRAPH, LocalCodeGraph, build_local_code_graph
 from patchfrog.upstream.consumers import (
     ConsumerImpact,
     DependencyIdentity,
