@@ -1,3 +1,9 @@
+> **Historical document (superseded 2026-11-22).** This was the authoritative roadmap for the
+> GitHub-review (Phases 1-9, Milestones J-Z) and API/SDK-compatibility (M4-M11) product lines.
+> The forward plan is now [`docs/ROADMAP.md`](../ROADMAP.md); current status is
+> [`docs/PROGRESS.md`](../PROGRESS.md). Kept unchanged below for traceability. Statements here
+> such as "this file wins" or "under development on branch X" describe the state at the time.
+
 # PatchFrog Roadmap
 
 This is the authoritative roadmap. If another document appears to describe a
@@ -165,7 +171,7 @@ PatchFrog's product direction is now: **keep software compatible with the
 APIs and SDKs it depends on** -- detect upstream changes, map their
 impact, generate migrations, verify them, open evidence-backed PRs.
 Invariant: change -> impact -> evidence -> verification -> decision. Full
-picture: `docs/architecture.md`. Generic PR review becomes a secondary
+picture: `docs/compatibility-pipeline.md`. Generic PR review becomes a secondary
 safety/verification capability (kept, not removed).
 
 M4+M5 merged to `main`. M6+M7 under development on

@@ -1,7 +1,7 @@
 # Cost-Aware Review (M4 — Ultra-Low-Cost Review Engine)
 
 PatchFrog's product direction is dependency/API compatibility
-(see `docs/architecture.md`). Generic PR review is now a **secondary
+(see `docs/compatibility-pipeline.md`). Generic PR review is now a **secondary
 safety/verification capability** — it has to be cheap enough to run
 inside future dependency-migration workflows. M4 makes it so without
 suppressing findings.
