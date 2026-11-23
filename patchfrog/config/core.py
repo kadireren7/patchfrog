@@ -14,8 +14,8 @@ keeps the same name, environment alias, and default in both, and a
 
 Deliberately dependency-free within PatchFrog (no import of any feature
 package such as ``patchfrog.review``): importing this module must never
-pull in the server stack. ``tests/unit/test_architecture_boundaries.py``
-enforces that.
+pull in the server stack. ``tests/architecture/test_architecture_boundaries.py``
+enforces that (rule R1, ``CORE_ROOTS`` in ``tests/architecture/rules.py``).
 
 Adding a field here is a contract change for both modes: it must have a
 safe default (local mode must keep working with an empty environment).

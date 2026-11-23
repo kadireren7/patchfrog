@@ -1,7 +1,8 @@
 > **Historical document (superseded 2026-11-22).** This was the authoritative roadmap for the
 > GitHub-review (Phases 1-9, Milestones J-Z) and API/SDK-compatibility (M4-M11) product lines.
 > The forward plan is now [`docs/ROADMAP.md`](../ROADMAP.md); current status is
-> [`docs/PROGRESS.md`](../PROGRESS.md). Kept unchanged below for traceability. Statements here
+> [`docs/PROGRESS.md`](../PROGRESS.md). The content below is kept for traceability; the only edit to it is
+> that its one reference to the renamed `docs/architecture.md` now points to `docs/compatibility-pipeline.md`. Statements here
 > such as "this file wins" or "under development on branch X" describe the state at the time.
 
 # PatchFrog Roadmap
