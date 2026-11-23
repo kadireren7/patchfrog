@@ -37,8 +37,6 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from apps.worker.celery_app import celery_app
-from apps.worker.tasks.run_review_pipeline import run_review_pipeline_task
 from patchfrog import cli_campaigns, cli_changes
 from patchfrog.analysis.domain import AnalysisRunSummary
 from patchfrog.analysis.service import StaleIndexError, StaticAnalysisService
@@ -1343,6 +1341,12 @@ async def _ops_retry_async(*, review_run_id: uuid.UUID) -> str:
     finally:
         await engine.dispose()
 
+    # Imported here, not at module load: ``apps.worker.celery_app`` builds
+    # server ``Settings`` at import time, which would make every CLI
+    # command (even ``--help``) require a database/Redis/GitHub App
+    # environment (ADR-011, tests/unit/test_cli_local_startup.py).
+    from apps.worker.tasks.run_review_pipeline import run_review_pipeline_task
+
     run_review_pipeline_task.delay(
         github_repository_id=repository.github_repository_id,
         owner=repository.owner,
@@ -2205,11 +2209,14 @@ async def _mcp_serve(settings: Settings) -> None:
     # in (settings.verifier_enabled, default False); this process never
     # imports apps.verifier's own task module either way, so it never
     # needs any of the verifier's own credentials.
-    verifier_dispatcher = (
-        VerifierDispatcher(celery_app=celery_app, wait_timeout_seconds=settings.verifier_wait_timeout_seconds)
-        if settings.verifier_enabled
-        else None
-    )
+    verifier_dispatcher: VerifierDispatcher | None = None
+    if settings.verifier_enabled:
+        # Lazy for the same reason as in ``_ops_retry_async`` (ADR-011).
+        from apps.worker.celery_app import celery_app
+
+        verifier_dispatcher = VerifierDispatcher(
+            celery_app=celery_app, wait_timeout_seconds=settings.verifier_wait_timeout_seconds
+        )
 
     # Reuses the exact same operator-configured critic provider/model as
     # normal review (Part AA: no new provider config surface for fix
