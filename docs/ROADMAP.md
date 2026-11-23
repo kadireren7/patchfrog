@@ -41,7 +41,7 @@ Every phase must leave the standard gates green (`TEST_STRATEGY.md` §4): ruff, 
     contract (`architecture/PUBLIC_API.md`, 36 names) replacing the private-consumer manifest
     (ADR-017). Full suite: 3,154 collected = 3,095 passed + 54 skipped + 5 failed (environmental S2),
     0 not executed.
-  - **Phase 1 status:** complete locally. It needs a first CI run (real Postgres and Redis) on push.
+  - **Phase 1 status:** ✅ complete; verified in CI with real Postgres and Redis (run 45092267919, 2026-11-23).
 - **Scope / modules:** `config/core.py` (new), `cli.py` (lazy imports), `codegraph/` (new, with
   re-export from `upstream/code_graph.py`), `tests/architecture/`.
 - **Tasks:** MIGRATION_PLAN M1–M4.
@@ -171,7 +171,8 @@ Every phase must leave the standard gates green (`TEST_STRATEGY.md` §4): ruff, 
     detected; real-world spot check: 45 of 45 models in this repository's persistence layer. That
     is fixture agreement only, not real-world accuracy. Ruff, `mypy --strict`, architecture and
     244 targeted tests are green. The **full regression was not executed** (host memory below the
-    guard threshold in two attempts) and is tracked as B-2.4-REG.
+    guard threshold in two attempts) and was tracked as B-2.4-REG. **Update (2026-11-23): verified in
+    CI** (run 45092267919: 3,371 passed, 6 by-design skips, 0 failed) and B-2.4-REG is closed.
   - **2.5** Public CLI and discovery schema: `python -m patchfrog scale analyze|show|schema`
     (`patchfrog/cli_scale.py`, a thin adapter over `run_discovery`), and a versioned JSON Schema
     of `ApplicationModel` generated from the typed model (`docs/schemas/`). User docs:
@@ -192,12 +193,12 @@ Every phase must leave the standard gates green (`TEST_STRATEGY.md` §4): ruff, 
     (6) gates green and docs updated;
     (7) full regression: a CI responsibility.
     **Status (2026-11-23): implementation complete, criteria 1–6 met; criterion 7 not executed**
-    (B-2.5-REG, to be closed by the first CI run). 10 e2e + 38 schema tests; startup 0.15 s (fast
+    (B-2.5-REG). **Update (2026-11-23): verified in CI** (run 45092267919) and B-2.5-REG is closed. 10 e2e + 38 schema tests; startup 0.15 s (fast
     path) versus 3.5 s (full CLI); this repository analysed in 3.3 s, reused in 0.34 s. Details:
     `PROGRESS.md`.
-  - **Phase 2 status:** every planned deliverable is implemented. Route discovery precision and
-    recall on the fixture set: 100%. The ~300-file fixture: 0.32 s. Needs no DB, network or
-    environment variable. Full-suite verification of 2.4–2.5 is pending the first CI run.
+  - **Phase 2 status: ✅ complete and verified in CI** (2026-11-23, draft PR #69, not merged).
+    Every planned deliverable is implemented. Route discovery precision and recall on the fixture
+    set: 100%. The ~300-file fixture: 0.32 s. Needs no DB, network or environment variable.
 - **Dependencies:** Phase 1.
 - **Risks:** over-designing the job model. Mitigation: in-process only, one implementation, no
   plugin system.

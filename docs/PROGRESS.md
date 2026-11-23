@@ -1,19 +1,19 @@
 # Progress
 
-_Last updated: 2026-11-23 (Phase 2, Milestone 2.5 session). Update at the end of
+_Last updated: 2026-11-23 (Phase 1–2 integration and CI validation). Update at the end of
 every implementation session (see `CLAUDE.md` → Session workflow)._
 
 ## Current phase
 
 | Phase / milestone | Status |
 |---|---|
-| Phase 1 (1.1–1.3) | ✅ complete locally; first CI run pending the owner's push |
+| Phase 1 (1.1–1.3) | ✅ complete; **verified in CI** (run 45092267919, real Postgres and Redis) |
 | Phase 2, Milestone 2.1 | ✅ **verified**. It was CONDITIONALLY ACCEPTED (D7) while its full regression was deferred; the deferred coverage then ran in the 2.2 full regression (3,247 collected, 0 not executed, only S2), so B-2.1-REG is closed |
 | Phase 2, Milestone 2.2 | ✅ **complete**: JobRunner implemented; gates, targeted tests and the full regression green (only S2) |
 | Phase 2, Milestone 2.3 | ✅ **complete and verified**: criteria 1–8 met; the full regression finished on resume (3,292 collected = 3,233 passed + 54 skipped + 5 S2, 0 not executed); B-2.3-REG closed |
-| Phase 2, Milestone 2.4 | **implementation complete; acceptance criteria 1–7 met; full regression NOT executed** (host memory never reached the guard threshold in two attempts). Blocker B-2.4-REG |
-| Phase 2, Milestone 2.5 | **implementation complete; acceptance criteria 1–6 met; full regression NOT executed** (not attempted, by owner instruction; CI responsibility). Blocker B-2.5-REG |
-| Phase 2 overall | all planned deliverables implemented (2.1–2.5); full-suite verification of 2.4–2.5 pending (first CI run) |
+| Phase 2, Milestone 2.4 | ✅ **complete and verified**: the full suite passed in CI (B-2.4-REG closed) |
+| Phase 2, Milestone 2.5 | ✅ **complete and verified**: the full suite passed in CI (B-2.5-REG closed) |
+| Phase 2 overall | ✅ all deliverables implemented and verified in CI; draft PR #69 awaits owner review (not merged) |
 
 ## Owner decisions
 
@@ -26,6 +26,111 @@ every implementation session (see `CLAUDE.md` → Session workflow)._
 | D5 | Check downstream (Cloud) impact before changing extras, interfaces, imports, dependencies or persistence | ADR-015 |
 | D6 (2026-11-22) | The private consumer import manifest must not live in the public repo. Public tests verify documented engine interfaces only; the private consumer verifies its own usage in its own CI | ADR-017 |
 | D7 (2026-11-22) | One-time conditional full-regression exception for Milestone 2.1 only (host memory). Missing coverage stays blocker B-2.1-REG before public release/Cloud deployment; not carried into later milestones | this file, `ROADMAP.md` 2.1 |
+
+## Phase 1–2 integration and CI validation (2026-11-23)
+
+**Branch:** `feat/scalability-foundation` (from `main` at `9b9de85`; no history rewritten, no
+force-push).
+**Draft PR:** https://github.com/kadireren7/patchfrog/pull/69. Not merged and nothing deployed.
+
+### Commits
+| SHA | Scope |
+|---|---|
+| `b67b735` | docs: `CLAUDE.md`, `docs/PROGRESS.md`, `docs/ROADMAP.md`, `docs/architecture/*`, `docs/history/`, `docs/legal/`, `docs/compatibility-pipeline.md` (rename), `docs/{ci-health,cost-aware-review,product-boundary}.md`, `.gitignore` (`/private/`) |
+| `be9baa6` | fix(openai), S1: `openai_provider.py` + its contract test |
+| `9672f64` | feat(config), Phase 1.1: `config/core.py`, `config/settings.py`, `tests/conftest.py`, `cli.py` (lazy worker imports only; staged as a blob without the later `scale` lines), CLI startup tests, `scripts/safe_pytest.py` |
+| `1dbab46` | refactor(codegraph), 1.3: `patchfrog/codegraph/`, `upstream/{code_graph,workspace,blast_radius}.py`, `test_codegraph_local.py` |
+| `eff9149` | feat(scalability), 1.2–2.5: `tests/architecture/`, `patchfrog/app/`, `patchfrog/scalability/`, `cli_scale.py`, `__main__.py`, `cli.py` (`scale` registration), `pyproject.toml` (fixture excludes), README pointer, `docs/scale-cli.md`, `docs/schemas/`, benchmark scripts, tests, 102 corpus fixture files |
+| `3f00299` | fix(deps), S8: `kombu>=5.3.4,<5.7` in `pyproject.toml`, ROADMAP S8 |
+
+Staging used an explicit path allowlist for every commit. The staged list was reviewed and
+`git diff --cached --check` was run each time; it found trailing blank lines in 5 files, which
+were fixed before committing. Only the final tree was verified with tests. The intermediate
+commits are organized for review and were not tested individually.
+
+### Security and hygiene checks (before staging)
+- **`private/`:** `/private/` (including `private/cloud-handoff/`) is ignored, as `git check-ignore`
+  confirms. Nothing under it, no manifest, no handoff file and no `.env`/`.pem`/key file was
+  staged.
+- **Private consumer data:** no private-consumer commit references or engine pins. The SHAs in
+  docs are this repository's own `9b9de85` and example run ids. The private repository slug
+  already appears in committed docs.
+- **Secrets:** no token, key or private-key patterns. Credential-shaped strings are deliberately
+  fake test values (`app:s3cret@db.internal`, `admin:hunter2@db.example.invalid`, `u:p@...`) and
+  the CI's own `patchfrog:patchfrog@localhost`.
+- **Files:** no generated artifacts (`__pycache__`, stores, logs) and no binaries. The new files
+  total ~0.9 MB.
+
+### Dependency validation
+- `jsonschema` (used only by the schema tests) is installed through the base dependency `mcp`
+  (`jsonschema>=4.20.0`), so `pyproject.toml` was not touched for it. The test now **imports it
+  directly** instead of `importorskip`, so a missing validator fails instead of silently
+  skipping the schema contract.
+- Git-based tests need only the `git` binary (present on CI runners) and pass identity/config
+  with `-c`.
+
+### CI
+**Run 1:** `45090246711`, commit `eff9149`, job `test`. ruff, mypy, migrations: success. **pytest:
+failure**: 3,353 passed, 6 skipped, 18 errors, 0 failed.
+- **Errors:** all 18 are `verifier worker subprocess did not become ready in time` in
+  `test_fix_verification_corpus.py` and `test_production_execution_corpus.py`.
+- **Root cause (reproduced locally):** the worker crashed at start with
+  `VersionMismatch('Redis transport requires redis-py versions 6.1.0 or later. You have 5.3.1')`.
+  `kombu` 5.7.0, released after the last green `main` CI (2026-10-02), demands redis-py ≥ 6.1,
+  while redis is capped `<6.0` here and by `celery[redis]` 5.4. `pip` installs that pair without
+  complaint.
+- **Not caused by this branch:** it reproduces identically with `main`'s own code (`9b9de85`, via
+  a temporary worktree), and `apps/` is unchanged on the branch.
+- **Fix (minimal, S8):** `kombu>=5.3.4,<5.7`. Version 5.6.2 has no such check and accepts
+  redis `>=4.5.2,<6.5`. No assertion was relaxed.
+
+**Run 2:** `45092267919`, commit `3f00299`, job `test`. **Conclusion: success.**
+
+| Step | Result |
+|---|---|
+| Install dependencies (`pip install -e ".[dev]"`) | success: kombu 5.6.2, redis 5.3.1, celery 5.6.3, jsonschema 4.25.1 |
+| ruff | success |
+| Verify required static analyzers | success |
+| mypy --strict | success |
+| Run migrations; Verify migration head matches alembic_version | success (`0038_compatibility_campaigns` = `0038_compatibility_campaigns`) |
+| **pytest** (`pytest -q`, Postgres 16 + Redis 7 services, `PATCHFROG_REQUIRE_POSTGRES=1`) | **success: 3,371 passed, 6 skipped, 0 failed, 0 errors** (16 min 31 s) |
+| Benchmark sanity (oracle provider) | success |
+| Build Docker images (api, worker) | success |
+| Verify Celery task registration | success (9 tasks) |
+
+**What this run proves:**
+- **Every collected test ran:** the local collection of the same tree is 3,377 tests, and 3,371 +
+  6 = 3,377.
+- **The 6 skips are by design and not infrastructure gaps:** 5 `test_migration_corpus.py` cases
+  ("nothing to materialize for this case") and 1 opt-in real-GitHub end-to-end test that is never
+  enabled in CI.
+- **PostgreSQL-backed tests ran:** `PATCHFROG_REQUIRE_POSTGRES=1` makes them fail rather than
+  skip when the service is missing, and no Postgres skip appears.
+- **Redis-backed tests ran and passed:** the 72 tests in `test_ops_doctor.py` (S2 locally) and
+  the two verifier-worker corpora.
+- **New tests ran and passed:** the 253 discovery, schema, CLI end-to-end, JobRunner, store,
+  revision and architecture tests are part of the 3,377 and passed (no failures and no skips
+  among them).
+- **No test-name listing is claimed:** `-q` prints no test names, so per-test evidence beyond
+  "all collected tests passed except the 6 skips listed by reason" is not claimed.
+
+### ADR-015 impact assessment (dependency declaration change, S8)
+1. **Is the component consumed downstream?** Yes: the Celery worker/verifier runtime entry points
+   (`PUBLIC_API.md`, stable).
+2. **Is there a pinned contract test?** Yes: the verifier-worker integration corpora and the CI
+   Celery task-count check, both green on run 2.
+3. **Impact:** the constraint narrows resolution back to the kombu family that main used when its
+   CI was last green. A downstream consumer that installs this engine and starts a Redis-backed
+   worker would hit the same `VersionMismatch` with kombu 5.7, so the constraint helps it rather
+   than breaks it. Cloud code was not inspected or modified.
+4. **Additive?** Yes: no new dependency and no API change.
+
+### Regression blockers
+- **B-2.4-REG: closed** by CI run 2 (the full suite on the final tree, 0 failures, 0 errors).
+- **B-2.5-REG: closed** by the same run.
+- B-2.1-REG and B-2.3-REG were already closed. The 2.1 exception (D7) was not used as evidence.
+- **Phase 1** also got its first CI run with real Postgres and Redis (the Phase 1 "pending first
+  CI run" condition).
 
 ## Milestone 2.5 — public CLI and discovery schema
 
@@ -559,27 +664,23 @@ modified).
   `validation/` is a historical record. Cleaning it up is an owner decision.
 
 ## Next actions
-1. **Owner: controlled commit and first CI run** (see "Git commit-readiness" in Milestone 2.5):
-   - a feature branch with the Phase 1–2.5 changes, `/private/` excluded (already ignored);
-   - open a PR so `ci.yml` runs the full suite with real Postgres and Redis;
-   - record the result here. A green run closes **B-2.4-REG** and **B-2.5-REG**.
+1. **Owner:** review draft PR #69 (https://github.com/kadireren7/patchfrog/pull/69) and decide on
+   merging it. Nothing is merged or deployed.
 2. **Owner:** move `private/cloud-handoff/` into the private repository (ADR-017); decide ADR-018
-   (console script; recommended for Phase 6).
+   (console script; recommended for Phase 6); consider a deliberate redis-py 6 upgrade to lift
+   the S8 constraint later.
 3. **Exact next implementation task (needs approval): Phase 3a, shared detection prerequisites**:
    - request-path reachability: a bounded BFS from each route's endpoint and dependencies over
      `LocalCodeGraph`, joined to the discovery model;
    - DB-access *call sites* on identified sessions (DETECTION_RULES "Shared prerequisites" 3–4),
      with a corpus;
-   - still no rules (PF-SCALE-*) and no MCP.
-   The detection-rule corpus and the rules themselves follow in 3b.
+   - still no rules and no MCP.
 
 ## Blockers
-- **B-2.4-REG (open; blocks public release and Cloud deployment):** the 2.4 full regression was not
-  executed (host memory; two guarded attempts). To be closed by the first CI run.
-- **B-2.5-REG (open; blocks public release and Cloud deployment):** the 2.5 full regression was not
-  executed (not attempted, by owner instruction). To be closed by the same CI run.
-- B-2.1-REG and B-2.3-REG: closed.
+- None open. B-2.1-REG, B-2.3-REG, B-2.4-REG and B-2.5-REG are closed (the last two by CI run
+  45092267919).
 - Environmental only: local full runs need ≥ 1.5 GB free memory (`scripts/safe_pytest.py`).
+  The full suite is verified in CI.
 
 ## Open questions / recorded assumptions
 
