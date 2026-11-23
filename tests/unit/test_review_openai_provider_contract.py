@@ -168,6 +168,89 @@ async def test_insufficient_quota_is_permanent() -> None:
         await provider.generate_structured(_REQUEST)
 
 
+# --- Backlog S1 regression (openai 3.57: ``str(exc)`` no longer carries the
+# error code; the structured ``code``/``type``/``body`` fields are the
+# authoritative signal). Every case below goes through the real SDK's own
+# response-to-exception mapping via MockTransport -- no hand-built mocks.
+
+
+async def test_insufficient_quota_detected_from_structured_code_not_message() -> None:
+    # The message deliberately contains none of the shared helper's
+    # message markers, so only the structured code can classify it.
+    provider = _provider(
+        handler=_handler_returning(429, {"error": {"message": "Please check your plan.", "code": "insufficient_quota"}})
+    )
+    with pytest.raises(ProviderInsufficientQuotaError):
+        await provider.generate_structured(_REQUEST)
+
+
+async def test_insufficient_quota_detected_from_structured_type() -> None:
+    provider = _provider(
+        handler=_handler_returning(
+            429, {"error": {"message": "Please check your plan.", "type": "insufficient_quota", "code": None}}
+        )
+    )
+    with pytest.raises(ProviderInsufficientQuotaError):
+        await provider.generate_structured(_REQUEST)
+
+
+async def test_rate_limit_exceeded_code_stays_transient_and_keeps_retry_after() -> None:
+    provider = _provider(
+        handler=_handler_returning(
+            429,
+            {
+                "error": {
+                    "message": "Rate limit reached for requests per min. Please try again in 3s.",
+                    "type": "requests",
+                    "code": "rate_limit_exceeded",
+                }
+            },
+            headers={"retry-after": "3"},
+        )
+    )
+    with pytest.raises(ProviderRateLimitError) as excinfo:
+        await provider.generate_structured(_REQUEST)
+    assert not isinstance(excinfo.value, ProviderInsufficientQuotaError)
+    assert excinfo.value.retry_after_seconds == 3.0
+
+
+async def test_rate_limit_without_any_error_body_stays_transient() -> None:
+    provider = _provider(handler=lambda _request: httpx2.Response(429, text="Too Many Requests"))
+    with pytest.raises(ProviderRateLimitError) as excinfo:
+        await provider.generate_structured(_REQUEST)
+    assert not isinstance(excinfo.value, ProviderInsufficientQuotaError)
+
+
+async def test_insufficient_quota_code_on_non_429_is_not_reclassified() -> None:
+    # The quota check is scoped to RateLimitError only; other status
+    # classifications must stay exactly as before.
+    provider = _provider(
+        handler=_handler_returning(400, {"error": {"message": "bad request", "code": "insufficient_quota"}})
+    )
+    with pytest.raises(ProviderFatalError) as excinfo:
+        await provider.generate_structured(_REQUEST)
+    assert not isinstance(excinfo.value, ProviderInsufficientQuotaError)
+
+
+def test_structured_quota_check_accepts_a_still_wrapped_error_body() -> None:
+    from patchfrog.review.providers.openai_provider import _has_insufficient_quota_code
+
+    request = httpx2.Request("POST", "https://api.openai.example/v1/responses")
+    wrapped = openai.RateLimitError(
+        "Error code: 429",
+        response=httpx2.Response(429, request=request),
+        body={"error": {"code": "insufficient_quota"}},
+    )
+    unrelated = openai.RateLimitError(
+        "Error code: 429",
+        response=httpx2.Response(429, request=request),
+        body={"error": {"code": "rate_limit_exceeded"}},
+    )
+
+    assert _has_insufficient_quota_code(wrapped) is True
+    assert _has_insufficient_quota_code(unrelated) is False
+
+
 async def test_server_error_is_transient() -> None:
     provider = _provider(
         handler=_handler_returning(500, {"error": {"message": "server error", "type": "server_error"}})
